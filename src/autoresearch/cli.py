@@ -27,6 +27,7 @@ from . import rank as rank_mod
 from . import render
 from . import runs as runs_mod
 from . import skills as skills_mod
+from . import upstream as upstream_mod
 from .claims import Claims
 from .config import DomainConfig, discover
 from .entries import Entry, Event, Result, Store
@@ -292,6 +293,61 @@ def cmd_harness_export(args):
     # Refused entries are named above; a bundle that left them behind must not
     # read as a clean pass, or the incomplete defect never gets completed.
     return 1 if refused else 0
+
+
+def cmd_harness_check(args):
+    """What core is installed, what upstream has, and what changed between.
+
+    Read-only, and safe to run on a schedule: exit 0 means up to date, 1 means
+    an update is available, and anything else failed loudly rather than
+    reporting a clean comparison it did not make.
+    """
+    config = _load(args)
+    plan = upstream_mod.plan_update(config, ref=args.ref)
+    print(plan.summary())
+    if not plan.behind:
+        print("up to date")
+        return 0
+    print("update available")
+    if plan.changelog:
+        print("\nwhat changed:")
+        print(plan.changelog)
+    else:
+        print("\n(what changed could not be fetched; the update is still there)")
+    print("\ntake it with: ar harness update")
+    return 1
+
+
+def cmd_harness_update(args):
+    """Pull the latest core, re-render, validate -- and undo itself if the
+    upgrade made validation worse.
+
+    Lands on the resolved head SHA, never a moving ref name. A memo recording
+    the move lands in inbox/, so the record knows its own core moved. Existing
+    validation problems do not block an upgrade and are not caused by it; only
+    new ones roll it back.
+    """
+    config = _load(args)
+    plan = upstream_mod.plan_update(config, ref=args.ref)
+    print(plan.summary())
+    if not plan.behind:
+        print("up to date; nothing to do")
+        return 0
+    if plan.changelog:
+        print("\nwhat changed:")
+        print(plan.changelog)
+    if args.dry_run:
+        print(f"\nwould run: {' '.join(upstream_mod.pip_command(plan.url, plan.head))}")
+        print("nothing was written (--dry-run)")
+        return 0
+    result = upstream_mod.apply_update(config, plan)
+    for line in result.detail:
+        print(line)
+    if result.ok:
+        print("\nnext: commit the memo, and keep going:")
+        print("  git add inbox/ && git commit -m 'Core: pulled upstream update'")
+        print("  ar loop")
+    return 0 if result.ok else 1
 
 
 def cmd_entry_show(args):
@@ -1022,6 +1078,26 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--all", action="store_true", dest="all",
                      help="include closed defects too")
     exp.set_defaults(func=cmd_harness_export)
+
+    chk = hsub.add_parser(
+        "check", help="installed core vs upstream, and what changed",
+        description="Read-only. Exit 0 up to date, 1 update available, and "
+                    "anything else means the comparison itself failed.")
+    chk.add_argument("--ref", help="branch or tag to compare against "
+                                   "(default: the [upstream] table, or main)")
+    chk.set_defaults(func=cmd_harness_check)
+
+    upd = hsub.add_parser(
+        "update", help="pull the latest core; re-render, validate, roll back "
+                        "if the upgrade made things worse",
+        description="Lands on the resolved head SHA, never a moving ref. "
+                    "Only validation problems that are NEW after the upgrade "
+                    "trigger a rollback; pre-existing ones ride along.")
+    upd.add_argument("--ref", help="branch or tag to pull "
+                                   "(default: the [upstream] table, or main)")
+    upd.add_argument("--dry-run", action="store_true", dest="dry_run",
+                     help="show the plan and the pip command; change nothing")
+    upd.set_defaults(func=cmd_harness_update)
 
     return ap
 

@@ -121,6 +121,14 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         measure = "bin/measure"
         # probe_target = "bin/probe-target"   # only if your target moves
 
+        [upstream]
+        # Where the core comes from, for `ar harness check` (what changed
+        # upstream?) and `ar harness update` (take it, validated, with
+        # rollback). A fork or a mirror changes the url; pin `ref` to a tag to
+        # make updates opt-in.
+        url = "https://github.com/Ryun1/auto-research-toolkit"
+        ref  = "main"
+
         [coordinator]
         workers_per_iteration    = 3
         generators_per_iteration = 2

@@ -203,7 +203,7 @@ ar reap        free ONE abandoned claim past the TTL
 ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
 ar research    spin up targeted research agents; their ideas land in the record
-ar harness     export this project's defects on the core as one upstream bundle
+ar harness     check for and pull the latest core; export defects upstream
 ar migrate     convert an existing prose corpus into records (one way)
 ar render      write the generated queue views
 ar validate    check records, views, runs and policy
@@ -465,6 +465,55 @@ because an issue somewhere said so.
 While a defect is open, what an agent may do locally is mitigate through the
 four domain-owned surfaces — guides, skills, `[policy]`, `[budgets]` — and
 nothing else. Every other workaround is the fork wearing a smaller hat.
+
+## Pulling improvements: updating the core
+
+The other half of the loop: fixes made upstream have to be easy enough to take
+that "bump deliberately" actually happens instead of decaying into "pin
+forever, drift silently."
+
+```
+$ ar harness check
+installed   core 0.1.0 @ fb9f8166a0e2 (editable from /Users/ryan/amanita/auto-research-toolkit)
+upstream    https://github.com/Ryun1/auto-research-toolkit  main @ 0c35928c41e2
+update available
+
+what changed:
+  0c35928 Contributing: guidelines, git hooks, CI, and lint config
+  fb9f816 Brain: any agent is a command, and scouts file targeted research
+
+take it with: ar harness update
+```
+
+`check` is read-only, safe on a schedule, and machine-readable: exit 0 up to
+date, 1 update available, and anything else means the comparison itself failed.
+It compares the installed commit — read from pip's own install record, or the
+checkout's HEAD for an editable install — against upstream, and shows the
+commits between them.
+
+`update` takes it, and is safe to automate because it can undo itself:
+
+1. it pins to the **resolved head SHA**, never a moving ref name — what lands
+   is what was checked;
+2. it re-renders the views **before** validating, because a new core may render
+   differently and a stale view must not read as a broken upgrade;
+3. it rolls back **only when validation found problems that were not there
+   before the upgrade**. A project with an incomplete defect entry pre-dating
+   the update must still be able to take a core fix; pre-existing problems ride
+   along, named;
+4. a rollback reinstalls the exact commit the project had and re-renders with
+   it, so the project is left precisely as it stood; and
+5. a successful upgrade writes a memo into `inbox/` — from-version, to-version,
+   the changelog — because an environment change the record does not know about
+   is the unrecorded-provenance shape (H39) all over again.
+
+Upgrades are an ordinary pip install, so a domain that wants them human-gated
+needs no new mechanism — it declares `[[policy.human_only]] pattern = "pip
+install"` and the update path refuses through the same engine that gates every
+other irreversible action.
+
+A domain points `[upstream]` at its own fork or mirror when it has one, and
+pins `ref` to a tag to make updates opt-in.
 
 ## The closure taxonomy, made operational
 

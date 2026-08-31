@@ -48,7 +48,7 @@ DISTIL_EVERY = 5
 
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
-              "skills"}
+              "skills", "upstream"}
 
 
 @dataclass
@@ -76,6 +76,31 @@ class Track:
 
     def is_id(self, entry_id: str) -> bool:
         return entry_id.startswith(self.prefix) and entry_id[len(self.prefix):].isdigit()
+
+
+@dataclass
+class Upstream:
+    """Where the core comes from, for `ar harness check` and
+    `ar harness update`. Defaults are recovered from pip's own install record;
+    a fork or a mirror is a one-line domain decision here, and `ref` names the
+    branch or tag to follow -- pin it to a tag to make updates opt-in."""
+    url: str = ""
+    ref: str = ""
+
+    @classmethod
+    def from_dict(cls, spec: dict) -> Upstream:
+        unknown = set(spec) - {"url", "ref"}
+        if unknown:
+            raise ConfigError(
+                f"[upstream] has unknown key(s) {sorted(unknown)}; "
+                f"known: ['url', 'ref']")
+        url = spec.get("url", "")
+        if not isinstance(url, str):
+            raise ConfigError(f"upstream.url must be a string, got {url!r}")
+        ref = spec.get("ref", "")
+        if not isinstance(ref, str):
+            raise ConfigError(f"upstream.ref must be a string, got {ref!r}")
+        return cls(url=url, ref=ref)
 
 
 @dataclass
@@ -167,6 +192,8 @@ class DomainConfig:
     hardware: dict = field(default_factory=dict)
     #: rentable classes, each costed only if someone measured its ratio
     remote: list = field(default_factory=list)
+    #: where the core comes from, for `ar harness check` / `update`
+    upstream: Upstream = field(default_factory=Upstream)
     description: str = ""
 
     # -- lookup -----------------------------------------------------------
@@ -319,7 +346,8 @@ class DomainConfig:
             hardware={name: Requirement.from_dict(name, spec)
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)
-                    for spec in (data.get("remote") or [])])
+                    for spec in (data.get("remote") or [])],
+            upstream=Upstream.from_dict(dict(data.get("upstream") or {})))
 
 
 def _brain_spec(data) -> dict:

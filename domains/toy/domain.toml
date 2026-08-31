@@ -73,6 +73,11 @@ domain_max_runs        = 400
 measure      = "bin/measure"
 probe_target = "bin/probe-target"
 
+[upstream]
+# Where the core comes from, for `ar harness check` and `ar harness update`.
+url = "https://github.com/Ryun1/auto-research-toolkit"
+ref  = "main"
+
 
 [coordinator]
 workers_per_iteration = 3
