@@ -77,7 +77,7 @@ is an opinion, and the gate lives upstream at export for the same reason.
 
 ## Testing
 
-- Full suite: `pytest` (about 30 seconds).
+- Full suite: `pytest` (about 40 seconds).
 - Every behaviour change needs a test that fails without the change.
 - New record fields, validators, or gate logic need tests for the invalid
   case, not just the valid one — invalid-but-tolerated data is how the

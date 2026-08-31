@@ -614,7 +614,7 @@ spends the spawn meter, so researchers cannot flood what generators could not.
 
 ## Status
 
-The core is complete and tested (342 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (389 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.
