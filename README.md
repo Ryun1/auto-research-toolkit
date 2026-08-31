@@ -21,6 +21,27 @@ provides those, and delegates judgement to a model through one narrow seam.
 orient -> generate -> rank -> dispatch -> curate -> qc -> stop?
 ```
 
+```mermaid
+flowchart LR
+    subgraph d["Domain"]
+        m["bin/measure"]
+        g["goal.yaml"]
+        k["guides/"]
+    end
+    subgraph c["Core: the coordinator"]
+        direction LR
+        o["orient"] --> gen["generate"] --> r["rank"] --> disp["dispatch"] --> cur["curate"] --> qc["qc"] --> s{"stop?"}
+        s -->|"running"| o
+    end
+    subgraph b["Brain (swappable)"]
+        roles["generator · judge · worker<br/>curator · qc"]
+    end
+    d --> c
+    c <-->|"role + brief → JSON"| b
+    c --> rec[("record: one file per entry<br/>every view generated")]
+    s -->|"target met · budget spent · yield floor"| stop(["stop"])
+```
+
 Every phase is metered. Generation runs *every* iteration, concurrently with the
 work, so the queue never starves. Ranking is a formula over recorded numbers that
 a judge may reorder but not overrule. Workers get isolated workspaces the
@@ -262,7 +283,8 @@ taxonomy exists to prevent.
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:
 `generator`, `judge`, `worker`, `curator`, `qc`. The brain is swappable —
 `SDKBrain` runs them through the Claude Agent SDK; `ScriptedBrain` runs the whole
-loop with no model, which is what makes `ar loop` a unit test rather than a bill.
+loop with no model, which is what makes `ar loop` a unit test rather than a bill. `docs/ARCHITECTURE.md` diagrams what each role reads, what it
+may return, and where the coordinator refuses it.
 
 ## Status
 
@@ -274,6 +296,10 @@ up in its own repository.
 Not yet exercised: `SDKBrain` has never made a real API call — it constructs,
 packages and is wired to the money ceiling, and that is all. The offline loop is
 proven; the model-in-the-loop path is not.
+
+`docs/ARCHITECTURE.md` draws the same picture in more detail: the three
+layers, the seven phases, what each role may and may not do, the entry
+lifecycle, and the worker pool.
 
 `docs/EVALUATION.md` carries the harness critique this was built from, plus an
 appendix on the eighteen defects found in the core itself, grouped by *how* each
