@@ -32,6 +32,9 @@ prefix = "H"
 title  = "Harness Debt"
 view   = "docs/log/Harness Debt.md"
 description = "The scaffolding's own defects. Kept separate so an agent booting into research never reads harness debt as a lead on the score."
+# A defect here must carry `core`, `repro` and `observed` -- see
+# `ar harness export`. Validation and export both refuse an entry missing them.
+requires_defect_evidence = true
 # The harness track closes differently: a defect is fixed or declined, not
 # confirmed or refuted.
 [tracks.terminal]

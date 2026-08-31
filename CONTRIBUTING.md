@@ -59,6 +59,22 @@ Rules:
 The `commit-msg` hook enforces the format; `--no-verify` is your escape hatch
 and should be rare.
 
+## Field defects from downstream projects
+
+Projects running this toolkit export the defects they find in the core with
+`ar harness export`; a person publishes the bundle (attach it to the issue or
+PR that carries it). Ingest it with:
+
+```bash
+python scripts/ingest-defects.py bundle.json --into state/entries --prefix F
+```
+
+Each defect becomes an ordinary entry tagged `from:<project>/<id>` — cite that
+tag, not the issue number, when you fix one, so the record and the upstream
+tracker stay resolvable in both directions. A bundle arriving without evidence
+is skipped by name, not filed incomplete: an entry that cannot be reproduced
+is an opinion, and the gate lives upstream at export for the same reason.
+
 ## Testing
 
 - Full suite: `pytest` (about 30 seconds).

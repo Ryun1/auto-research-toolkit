@@ -73,6 +73,11 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         title  = "Harness Debt"
         view   = "docs/log/Harness Debt.md"
         description = "The scaffolding's own defects, kept separate so an agent booting into research never reads them as a lead on the score."
+        # A defect here must carry `core`, `repro` and `observed`, so it can be
+        # reproduced by someone who has never seen this project. `ar validate`
+        # refuses an entry missing them; `ar harness export` refuses to publish
+        # one -- naming the missing field -- until `ar entry amend` completes it.
+        requires_defect_evidence = true
         [tracks.terminal]
         fixed   = {{ requires_evidence = true }}
         wontfix = {{ requires_evidence = true }}
@@ -87,7 +92,15 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         spend_ceiling = 0.0
         currency = "USD"
 
-        # Declare anything an agent must never do. Every rule states WHY, and
+        # Defects found in the core itself are recorded here and exported with
+        # `ar harness export`; a person publishes the bundle upstream. An agent
+        # may prepare it, never take the publishing step.
+        [[policy.human_only]]
+        pattern = "gh issue create"
+        reason  = "filing upstream is public and irreversible; run `ar harness export`, prepare the issue body, and hand both to a person"
+        example = "gh issue create -R Ryun1/auto-research-toolkit --title defect --body '...'"
+
+        # Declare anything else an agent must never do. Every rule states WHY, and
         # `ar policy` proves each one refuses something -- a rule whose
         # enforcement can be deleted without a test failing is a comment.
         # [[policy.human_only]]

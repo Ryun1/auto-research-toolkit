@@ -181,7 +181,8 @@ ignored checkout, and so could not be reproduced, is one of the defects in
 If you want to change something that is not one of the four domain-owned files —
 a new closure kind, the ranking formula, a brain, a role prompt — that is a core
 change and belongs upstream on the `H` track. Patching it into the project is
-the fork, arriving one increment at a time.
+the fork, arriving one increment at a time. "Filing defects upstream" below is
+the mechanism that makes that a workflow instead of an aspiration.
 
 ## Commands
 
@@ -195,13 +196,14 @@ ar rank        score the queue and show the numbers it ranked on
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar skill       list, show, check, distil and retire the domain's skills
-ar entry       file, show and list entries
+ar entry       file, show, amend and list entries
 ar claim       take one entry (serialised, always with a ceiling)
 ar release     hand a claim back, with a reason
 ar reap        free ONE abandoned claim past the TTL
 ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
 ar research    spin up targeted research agents; their ideas land in the record
+ar harness     export this project's defects on the core as one upstream bundle
 ar migrate     convert an existing prose corpus into records (one way)
 ar render      write the generated queue views
 ar validate    check records, views, runs and policy
@@ -414,6 +416,55 @@ regex matches `docs/` and not `guides/`, so distilling into `guides/` would put
 a scaffolding-lane file on every branch that also carries findings, and a mixed
 branch is refused (H51). A distilled skill is derived from findings and
 publishes with them; hand-written guides stay where they are.
+
+## Filing defects upstream: the field-to-core loop
+
+Agents running this harness find defects in it constantly — the QC role files
+harness debt every iteration. The design question is how that reaches the core
+without anybody patching the installed package, and the answer reuses what the
+record already does well.
+
+**A defect is an entry, and it must be reproducible.** The scaffold's harness
+track declares `requires_defect_evidence = true`, so every `H` entry must carry
+three fields:
+
+| field | what it says |
+|---|---|
+| `core` | which core was running when the defect was observed. Run provenance deliberately omits the core version — a run is reproducible from the record alone. A defect is the opposite case: nobody upstream can reproduce what the reporter saw without it. The loop stamps it automatically, because the reporter is the one place the running version is known for certain. |
+| `repro` | a command, or a path relative to the domain root, that demonstrates the defect |
+| `observed` | what actually happened; `expected` records what should have |
+
+`ar validate` refuses an `H` entry missing any of them, and every refusal names
+the field. A defect nobody can reproduce is an opinion, not a record — and the
+class of defect that is "declared and never wired" is precisely the one a test
+suite passes while the thing is broken. `ar entry amend` is the completion path
+for a defect the QC role spotted but could not fully evidence.
+
+**Export validates; publishing is human-only.** `ar harness export` collects
+every open defect carrying its evidence into one JSON bundle
+(`ar-defect-bundle-1`), counting what it read, exported, refused and skipped.
+An incomplete defect is refused by name and the command exits 1, so a script
+cannot mistake a partial bundle for a clean one. The scaffold ships a
+`[[policy.human_only]]` rule for `gh issue create`: an agent prepares the bundle
+and the issue body and hands both to a person. Filing upstream is public and
+irreversible, which puts it in the same category as every other outward-facing
+action this harness gates.
+
+**Upstream, a bundle becomes ordinary entries.** The receiving side is
+`scripts/ingest-defects.py`: each defect lands as an entry tagged
+`from:<project>/<id>`, so re-ingesting a bundle files nothing twice, and a
+defect that arrived without its evidence is skipped with the missing field
+named — ingest trusts nothing it did not validate itself.
+
+**The loop closes when the pin moves.** A field defect fixed upstream is fixed
+downstream by bumping the project's pin to the fixing SHA — the
+deliberate-upgrade decision "Pin the toolkit" asks you to make — and closing
+the local entry with the core version as its evidence. Nothing is closed
+because an issue somewhere said so.
+
+While a defect is open, what an agent may do locally is mitigate through the
+four domain-owned surfaces — guides, skills, `[policy]`, `[budgets]` — and
+nothing else. Every other workaround is the fork wearing a smaller hat.
 
 ## The closure taxonomy, made operational
 

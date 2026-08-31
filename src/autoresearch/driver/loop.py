@@ -409,6 +409,7 @@ class Coordinator:
         track = self.config.tracks[proposal.get("track", "research")] \
             if proposal.get("track") in self.config.tracks \
             else next(iter(self.config.tracks.values()))
+        from ..skills import core_version
         entry = Entry(
             id=self.store.next_id(track.prefix), track=track.id,
             title=str(proposal["title"])[:200],
@@ -421,7 +422,18 @@ class Coordinator:
             impact=float(proposal.get("impact", 0.0)),
             cost=float(proposal.get("cost", 1.0)),
             mechanisms=[str(m) for m in proposal.get("mechanisms", [])],
-            sources=[str(s) for s in proposal.get("sources", [])])
+            sources=[str(s) for s in proposal.get("sources", [])],
+            repro=str(proposal.get("repro", "")),
+            observed=str(proposal.get("observed", "")),
+            expected=str(proposal.get("expected", "")),
+            # Core stamps itself on a defect entry: the reporter is the one
+            # place the running version is known for certain, and a defect
+            # report without it cannot be reproduced upstream. An entry on an
+            # ordinary track stays unstamped -- run provenance deliberately
+            # omits the core version, and so does the entry unless it IS the
+            # defect report.
+            core=str(proposal.get("core", ""))
+            or (core_version() if track.requires_defect_evidence else ""))
         self.store.save(entry)
         return entry
 
@@ -843,7 +855,12 @@ class Coordinator:
                 verdicts=it.verdicts,
                 instruction=("Verify the iteration happened. Return JSON: "
                              "{problems: [str], harness_debt: [{title, "
-                             "hypothesis}], verdict: clean|problems}.")))
+                             "hypothesis, repro, observed}], verdict: "
+                             "clean|problems}. Every harness_debt item must "
+                             "carry a repro -- a command or path demonstrating "
+                             "the defect -- and what you observed; a defect "
+                             "report nobody can run is an opinion, and "
+                             "validation refuses it until a human completes it.")))
             self._charge(it, reply)
             data = reply.data if isinstance(reply.data, dict) else {}
             problems += [f"qc: {p}" for p in data.get("problems", [])]

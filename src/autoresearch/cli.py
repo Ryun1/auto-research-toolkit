@@ -20,6 +20,7 @@ import sys
 import textwrap
 
 from . import budget as budget_mod
+from . import defects as defects_mod
 from . import escalate as escalate_mod
 from . import hardware as hw
 from . import rank as rank_mod
@@ -28,7 +29,7 @@ from . import runs as runs_mod
 from . import skills as skills_mod
 from .claims import Claims
 from .config import DomainConfig, discover
-from .entries import Entry, Result, Store
+from .entries import Entry, Event, Result, Store
 from .errors import AutoresearchError
 from .states import CLOSURE_KINDS
 
@@ -217,7 +218,9 @@ def cmd_entry_new(args):
         bar=args.bar or "", why_filed=args.why or "",
         confidence=args.confidence, impact=args.impact, cost=args.cost,
         mechanisms=args.mechanism or [], sources=args.source or [],
-        gate=args.gate or "")
+        gate=args.gate or "",
+        core=args.core or "", repro=args.repro or "",
+        observed=args.observed or "", expected=args.expected or "")
     if store.exists(entry.id):
         raise AutoresearchError(
             f"{entry.id} already exists at {store.path(entry.id)}. Ids are "
@@ -225,6 +228,70 @@ def cmd_entry_new(args):
             "renumber after every citation was written (H79).")
     print(store.save(entry))
     return 0
+
+
+def cmd_entry_amend(args):
+    """Complete or correct evidence fields on an existing entry.
+
+    The honest completion path for a defect the QC role filed without a repro:
+    validation and `ar harness export` both refuse the entry until this has
+    been run. Every amendment appends a history event, like every other
+    transition -- history is append-only.
+    """
+    config = _load(args)
+    store = _store(config)
+    entry = store.load(args.id)
+    changes = {name: value for name, value in (
+        ("title", args.title), ("hypothesis", args.hypothesis),
+        ("core", args.core), ("repro", args.repro),
+        ("observed", args.observed), ("expected", args.expected))
+        if value is not None}
+    if not changes:
+        raise AutoresearchError(
+            "amend needs at least one field to change; nothing was written")
+    for name, value in changes.items():
+        setattr(entry, name, value)
+    entry.history.append(Event(
+        _iso(), "amend", args.session,
+        "set " + ", ".join(f"{name}={changes[name]!r}" for name in sorted(changes))))
+    entry.updated = _iso()
+    store.save(entry)
+    print(f"{entry.id} amended: {', '.join(sorted(changes))}")
+    return 0
+
+
+def cmd_harness_export(args):
+    """Export this project's defects against the core as one upstream bundle.
+
+    Defects live here, as entries, for as long as they live anywhere. This
+    command writes the bundle a person publishes; it never publishes itself,
+    and the scaffold's policy makes the publishing commands human-only.
+    """
+    config = _load(args)
+    entries = _store(config).all()
+    bundle, refused, stats = defects_mod.export_bundle(
+        config, entries, all_status=args.all)
+    print(f"read {stats['read']} entr(ies) on defect track {stats['track']!r}: "
+          f"exported {len(bundle['defects'])}, refused {len(refused)}, "
+          f"skipped {stats['closed_skipped']} closed"
+          + ("" if args.all else " (--all includes them)"))
+    for entry_id, reason in refused:
+        print(f"  refused {entry_id}: {reason}")
+        print(f"          complete it with: ar entry amend {entry_id} --repro ... --observed ...")
+    if not bundle["defects"]:
+        print("nothing to export")
+        return 1 if refused else 0
+    text = json.dumps(bundle, indent=2, sort_keys=True)
+    if args.out:
+        path = pathlib.Path(args.out)
+        path.write_text(text + "\n")
+        print(f"wrote {path} ({len(bundle['defects'])} defect(s), "
+              f"{bundle['schema']})")
+    else:
+        print(text)
+    # Refused entries are named above; a bundle that left them behind must not
+    # read as a clean pass, or the incomplete defect never gets completed.
+    return 1 if refused else 0
 
 
 def cmd_entry_show(args):
@@ -533,6 +600,8 @@ def cmd_validate(args):
             problems.append(
                 f"{entry.id}: hardware class {entry.hardware!r} is not declared; "
                 f"declared: {sorted(config.hardware) or '(none)'}")
+        if track.requires_defect_evidence:
+            problems += defects_mod.evidence_problems(entry, track)
     skipped_runs = 0
     try:
         rows, skipped_runs = runs_mod.read_with_skipped(config.paths.runs)
@@ -858,10 +927,24 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--cost", type=float, default=1.0)
     new.add_argument("--mechanism", action="append")
     new.add_argument("--source", action="append")
+    new.add_argument("--core", help="core version the defect was observed on "
+                                    "(stamped automatically when the loop files it)")
+    new.add_argument("--repro", help="command or path that demonstrates the defect")
+    new.add_argument("--observed", help="what actually happened")
+    new.add_argument("--expected", help="what should have happened instead")
     new.set_defaults(func=cmd_entry_new)
     show = esub.add_parser("show")
     show.add_argument("id")
     show.set_defaults(func=cmd_entry_show)
+    amend = esub.add_parser("amend", help="complete or correct evidence fields")
+    amend.add_argument("id")
+    amend.add_argument("--title")
+    amend.add_argument("--hypothesis")
+    amend.add_argument("--core", help="core version the defect was observed on")
+    amend.add_argument("--repro", help="command or path that demonstrates it")
+    amend.add_argument("--observed", help="what actually happened")
+    amend.add_argument("--expected", help="what should have happened instead")
+    amend.set_defaults(func=cmd_entry_amend)
     lst = esub.add_parser("list")
     lst.add_argument("--status", action="append")
     lst.add_argument("--track")
@@ -925,6 +1008,20 @@ def build_parser() -> argparse.ArgumentParser:
     meas.add_argument("--entry")
     meas.add_argument("rest", nargs="*", help="passed through to the domain command")
     meas.set_defaults(func=cmd_measure)
+
+    harness = sub.add_parser(
+        "harness", help="this project's defects on the core, packaged for upstream")
+    hsub = harness.add_subparsers(dest="harness_cmd", required=True)
+    exp = hsub.add_parser(
+        "export", help="write the upstream defect bundle",
+        description="Collects every defect entry carrying its evidence -- core, "
+                    "repro, observed -- into one JSON bundle a person publishes "
+                    "upstream. Incomplete entries are refused by name, never "
+                    "silently dropped. Publishing is human-only.")
+    exp.add_argument("--out", help="write the bundle to this path (default: stdout)")
+    exp.add_argument("--all", action="store_true", dest="all",
+                     help="include closed defects too")
+    exp.set_defaults(func=cmd_harness_export)
 
     return ap
 

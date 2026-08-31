@@ -21,6 +21,12 @@ You are asked about what code cannot check:
 4. **Was a phase skipped rather than empty?** A phase that read zero things and
    did zero things may be correct — or may be a failure that reported success.
    The phase records include what each one read; say which of the two it was.
+5. **Did the scaffolding itself misbehave?** If you find a defect in the
+   harness — a command that lied, a validator that passed something invalid, a
+   phase that did nothing — file it as harness debt. Every item MUST carry a
+   `repro` (a command or path that demonstrates the defect) and `observed`
+   (what actually happened). An item without them is refused at validation and
+   cannot be exported upstream: a defect nobody can reproduce is an opinion.
 
 ## Output
 
@@ -29,7 +35,9 @@ You are asked about what code cannot check:
   "problems": ["one line each, naming the entry or phase"],
   "harness_debt": [
     {"title": "a defect in the scaffolding itself, not in this iteration's work",
-     "hypothesis": "what is wrong and what it costs"}
+     "hypothesis": "what is wrong and what it costs",
+     "repro": "the command or path that demonstrates it",
+     "observed": "what actually happened, versus what should have"}
   ],
   "verdict": "clean | problems"
 }

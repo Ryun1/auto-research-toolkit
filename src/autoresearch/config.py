@@ -67,6 +67,12 @@ class Track:
     #: Distinct from `view` so a staged cutover can render beside the live
     #: document instead of over it.
     migrate_from: str = ""
+    #: entries on this track are defects against the harness itself, so each
+    #: must carry the evidence that makes it reproducible by someone who has
+    #: never seen this project: `core`, `repro` and `observed` (entries.py).
+    #: `ar validate` refuses an entry missing them, `ar harness export` refuses
+    #: to publish one, and ingest upstream skips one -- each naming the field.
+    requires_defect_evidence: bool = False
 
     def is_id(self, entry_id: str) -> bool:
         return entry_id.startswith(self.prefix) and entry_id[len(self.prefix):].isdigit()
@@ -282,7 +288,9 @@ class DomainConfig:
                 view=spec.get("view", f"docs/{tid}.md"),
                 machine=machine,
                 description=spec.get("description", ""),
-                migrate_from=spec.get("migrate_from", ""))
+                migrate_from=spec.get("migrate_from", ""),
+                requires_defect_evidence=bool(spec.get(
+                    "requires_defect_evidence", False)))
 
         coordinator = dict(data.get("coordinator") or {})
         lanes_spec = data.get("lanes") or {}

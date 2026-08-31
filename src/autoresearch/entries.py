@@ -121,6 +121,24 @@ class Entry:
     #: refused with a reason instead of dispatched and discovered.
     hardware: str = ""
 
+    # -- defect evidence ---------------------------------------------------
+    # Required (non-empty) on any track declaring `requires_defect_evidence`;
+    # see config.Track. A defect report missing these is an opinion, and the
+    # validation, export and ingest paths all refuse it by name.
+    #: which core was running when the defect was observed. Run provenance
+    #: deliberately omits the core version -- runs are reproducible from the
+    #: record alone. A defect is the opposite case: without the core that
+    #: produced it, nobody upstream can reproduce what the reporter saw.
+    core: str = ""
+    #: a command, or a path relative to the domain root, that demonstrates the
+    #: defect. The upstream half of the loop runs it before believing the report.
+    repro: str = ""
+    #: what actually happened. Paired with `expected`; a report carrying only
+    #: one of the two has not said what broke.
+    observed: str = ""
+    #: what should have happened instead.
+    expected: str = ""
+
     sources: list[str] = field(default_factory=list)
     supersedes: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
