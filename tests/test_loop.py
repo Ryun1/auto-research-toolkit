@@ -644,3 +644,20 @@ def test_force_overrides_distillation_being_turned_off(sandbox, store):
                                force=True)
     assert phase.did == 1, phase.detail
     assert (sandbox.paths.root / "docs/skills/forced/SKILL.md").exists()
+
+
+def test_the_prompts_only_name_brief_keys_the_brief_carries(sandbox):
+    """A prompt telling a role to read `skills_unreadable` when the brief calls
+    it something else is a rule that silently does not exist. Cheap to check,
+    and the two halves of the contract live in different files."""
+    from autoresearch.driver.brain import Role, role_prompt
+    brief = json.loads(Coordinator(sandbox, ScriptedBrain(dict(IDLE)))
+                       ._brief(Role.GENERATOR, Iteration(n=1)))
+    for role in (Role.GENERATOR, Role.WORKER):
+        prompt = role_prompt(role)
+        for key in ("skills", "skills_unreadable", "knowledge_paths"):
+            if f"`{key}`" in prompt:
+                assert key in brief, f"{role}.md names `{key}`, which no brief carries"
+    assert "`skills`" in role_prompt(Role.GENERATOR), \
+        "the generator must be told the index exists, or it reads every body"
+    assert "`skills`" in role_prompt(Role.WORKER)

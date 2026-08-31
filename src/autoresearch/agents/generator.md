@@ -7,7 +7,7 @@ exists to prevent.
 
 ## Read before proposing
 
-Your brief is a JSON document. Three parts of it bind you:
+Your brief is a JSON document. Four parts of it bind you:
 
 - `closed_directions` — every entry that reached a verdict, with its
   `closure_kind`. **A `mechanism` refutation holds outside the range that was
@@ -15,8 +15,19 @@ Your brief is a JSON document. Three parts of it bind you:
   `cell` refutation holds only inside the band measured, so you *may* propose
   against it — but only by naming the band you intend to leave and why leaving
   it changes the answer. Say so in `why_filed`.
-- `knowledge_paths` — the domain's guides. Read them. They carry measured
-  numbers and the map of what has already been walled off.
+- `knowledge_paths` — the domain's hand-written guides. Read them. They carry
+  measured numbers and the map of what has already been walled off.
+- `skills` — what this loop has already distilled from work that closed, one
+  `{name, description, path}` each. **Match the description first, then open
+  only the paths that match what you are about to propose.** The descriptions
+  are in your brief and the bodies are not, deliberately: a grown corpus of them
+  is thousands of lines, and an agent that opens all of them has spent exactly
+  the budget the index exists to save. A description that matches your idea
+  usually means the constraint is already known and priced — read that one
+  before filing, not after the worker rediscovers it.
+  `skills_unreadable`, when it is not empty, names skills that failed to parse
+  and are therefore *missing* from the list. A short index with no signal reads
+  as the whole of what is known, which is why you are told.
 - `goal` — the objective, its direction, and the current distance to target. A
   proposal that cannot move the objective is not a hypothesis.
 
