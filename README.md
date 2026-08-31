@@ -18,7 +18,7 @@ worth doing next, a way to know whether it is winning, and a way to stop. This
 provides those, and delegates judgement to a model through one narrow seam.
 
 ```
-orient -> generate -> rank -> dispatch -> curate -> qc -> stop?
+orient -> generate -> rank -> dispatch -> curate -> distil -> qc -> stop?
 ```
 
 ```mermaid
@@ -26,15 +26,15 @@ flowchart LR
     subgraph d["Domain"]
         m["bin/measure"]
         g["goal.yaml"]
-        k["guides/"]
+        k["guides/ + docs/skills/"]
     end
     subgraph c["Core: the coordinator"]
         direction LR
-        o["orient"] --> gen["generate"] --> r["rank"] --> disp["dispatch"] --> cur["curate"] --> qc["qc"] --> s{"stop?"}
+        o["orient"] --> gen["generate"] --> r["rank"] --> disp["dispatch"] --> cur["curate"] --> dis["distil"] --> qc["qc"] --> s{"stop?"}
         s -->|"running"| o
     end
     subgraph b["Brain (swappable)"]
-        roles["generator · judge · worker<br/>curator · qc"]
+        roles["generator · judge · worker<br/>curator · librarian · qc"]
     end
     d --> c
     c <-->|"role + brief → JSON"| b
@@ -58,7 +58,7 @@ Everything else is core-owned.
 | **Measurement** | a command that runs one experiment and emits a validated record |
 | **Goal** | metrics, an objective over them, a possibly-moving target, derived constants |
 | **Policy** | forbidden paths, never-push remotes, human-only commands, a spend ceiling — as data |
-| **Knowledge** | the guides agents read to form good hypotheses |
+| **Knowledge** | the guides agents read to form good hypotheses — and, once work starts closing, the skills the loop distils from it |
 
 ```toml
 # domain.toml
@@ -143,6 +143,7 @@ validator. Then:
 1. `bin/measure` — replace `evaluate()` with your real experiment
 2. `goal.yaml` — the metrics it returns, and what winning means
 3. `guides/landscape.md` — what an agent needs to know to guess well
+   (`docs/skills/` fills itself in as work closes)
 4. `domain.toml` — `[policy]` never-rules, `[budgets]`, `[hardware]`
 5. `ar hardware` — what this machine can and cannot run
 6. `ar loop` — go
@@ -193,6 +194,7 @@ ar rank        score the queue and show the numbers it ranked on
                (--explore F overrides coordinator.explore_fraction)
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
+ar skill       list, show, check, distil and retire the domain's skills
 ar entry       file, show and list entries
 ar claim       take one entry (serialised, always with a ceiling)
 ar release     hand a claim back, with a reason
@@ -327,7 +329,14 @@ iteration number is refused before any phase runs.
 Each comes from a failure class in `docs/EVALUATION.md`, and each has a test.
 
 1. **One record per entry; every document is generated.** A hand-edited view is a
-   validation failure, not a divergence found four hours later.
+   validation failure, not a divergence found four hours later. **One declared
+   exception:** a *skill* is model prose and cannot be byte-identical to a
+   re-render, so it is a third category — cited-and-checked prose. Its
+   compensating control is that every claim names the entry behind it and
+   validation fails the moment that entry is reopened or relabelled. An
+   undeclared exception to an invariant is the "declared and never wired" class
+   this document indicts; this one is declared, and `tests/test_skills.py` is
+   where it is wired.
 2. **No regex over prose reaches a decision.** Migration is the one exception and
    it is one-way, with a fidelity gate.
 3. **Every guard ships a negative test proving it refuses something.** A guard
@@ -348,6 +357,62 @@ Two conventions are inherited verbatim from the harness this came from, because
 they were already right: **reuse the reader that owns the parse**, and **every
 reader reports how many things it read** — a board that says "no live claims"
 must not be indistinguishable from one that read nothing.
+
+## Skills: what the loop learns, not just what it decided
+
+A verdict is a record. A *skill* is what the next agent should have known before
+it started, and the two are not the same artefact. The corpus this core came
+from grew thirteen hand-written guides — 2,730 lines — at which point "read the
+guides" is either a full-corpus read in every brief or a guess, and it grew a
+separate tool whose only job was failing the build when a guide quoted a number
+the record had since moved. Both mechanisms are core now, per project.
+
+```markdown
+---
+name: width-validity-gate
+description: "Use when a proposal touches `width` or a run comes back unscored:
+  'invalid', validity gate, rows that vanish from a sweep."
+cites: [Q7, Q12]
+distilled: {iteration: 14, at: 2026-08-31T09:12:04Z, core: 0.1.0}
+---
+
+# Width below 16 does not trade — it deletes the run
+
+Below 16 the run is `invalid` and does not score [Q7]. It is a gate, not a knob:
+there is no band in which paying width buys operations back [Q12].
+```
+
+**The description is the routing layer, and it is the whole efficiency
+argument.** Every brief carries the descriptions and the paths, never the
+bodies, so a role matches two lines and reads the one skill that applies.
+`ar skill list` prints both numbers — body lines held against index lines
+carried — because that ratio is an observation to check, not a claim to make.
+
+**A citation that moves invalidates the skill.** `cites` must name terminal
+entries; reopen or relabel one and `ar validate`, `ar skill check` and the
+loop's own QC phase all fail until the skill is re-distilled or retired. That is
+measured from `distilled.at`, which is therefore required — a skill with no
+timestamp has no "since", and every staleness check would pass by never running. A skill
+that outlived its evidence is worse than no skill, because it is confidently
+wrong. The same check refuses a skill that quotes a derived constant the goal no
+longer computes — invariant 4, applied to prose.
+
+**`distil` is a phase.** It runs after `curate` on a `distil_every` cadence, so
+QC checks in the same iteration what the librarian just wrote. The librarian is
+read-only and returns a body; the coordinator validates it against the store and
+writes it, because a role does not certify its own output. A skill citing an
+open entry is refused with its reason on the iteration record rather than
+landing and failing validation later. `ar skill distil` runs the same phase by
+hand — writing its own `out-of-band` iteration record, so the librarian's spend
+reaches the campaign money ceiling without counting as a sample of what the
+queue yields — and `--dry-run` shows what is left to distil without spending
+anything.
+
+`docs/skills/` and not `guides/` for one reason: the shipped `[lanes] findings`
+regex matches `docs/` and not `guides/`, so distilling into `guides/` would put
+a scaffolding-lane file on every branch that also carries findings, and a mixed
+branch is refused (H51). A distilled skill is derived from findings and
+publishes with them; hand-written guides stay where they are.
 
 ## The closure taxonomy, made operational
 
@@ -404,7 +469,7 @@ construction* and a judge shown one unlabelled reads the ranking as broken.
 ## Roles
 
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:
-`generator`, `judge`, `worker`, `curator`, `qc`. The brain is swappable —
+`generator`, `judge`, `worker`, `curator`, `librarian`, `qc`. The brain is swappable —
 `SDKBrain` runs them through the Claude Agent SDK; `ScriptedBrain` runs the whole
 loop with no model, which is what makes `ar loop` a unit test rather than a bill. `docs/ARCHITECTURE.md` diagrams what each role reads, what it
 may return, and where the coordinator refuses it.
@@ -416,7 +481,10 @@ synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.
 
-Not yet exercised: `SDKBrain` has never made a real API call — it constructs,
+Not yet exercised: the librarian's prose quality, which only a real model can
+show — the phase, its refusals and its record are covered offline, but nothing
+here says whether a model writes a *good* skill. And `SDKBrain` has never made a
+real API call — it constructs,
 packages and is wired to the money ceiling, and that is all. The offline loop is
 proven; the model-in-the-loop path is not.
 

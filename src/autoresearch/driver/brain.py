@@ -33,9 +33,10 @@ class Role:
     JUDGE = "judge"
     WORKER = "worker"
     CURATOR = "curator"
+    LIBRARIAN = "librarian"
     QC = "qc"
 
-    ALL = (GENERATOR, JUDGE, WORKER, CURATOR, QC)
+    ALL = (GENERATOR, JUDGE, WORKER, CURATOR, LIBRARIAN, QC)
 
 
 @dataclass
@@ -135,6 +136,9 @@ class SDKBrain:
         options = ClaudeAgentOptions(
             system_prompt=role_prompt(role),
             cwd=str(workspace or self.config.paths.root),
+            # Only the worker and the curator write. The librarian is read-only
+            # on purpose: it returns a skill body and the coordinator writes it,
+            # so a role never certifies its own output (see skills.write).
             allowed_tools=(self.allowed_tools if role in (Role.WORKER, Role.CURATOR)
                            else ["Read", "Grep", "Glob"]),
             permission_mode="acceptEdits",

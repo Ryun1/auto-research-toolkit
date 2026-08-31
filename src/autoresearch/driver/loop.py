@@ -1,6 +1,6 @@
-"""The coordinator: one iteration, seven phases, every phase metered.
+"""The coordinator: one iteration, eight phases, every phase metered.
 
-    orient -> generate -> rank -> dispatch -> curate -> qc -> stop?
+    orient -> generate -> rank -> dispatch -> curate -> distil -> qc -> stop?
 
 Shaped after auditician's coordinator, with three changes the research setting
 forces.
@@ -15,6 +15,13 @@ draining is a loop that never finishes anything.
 **The coordinator owns the pool.** Workers get isolated workspaces created and
 destroyed by the coordinator's own `finally`, so liveness is observed rather
 than inferred and teardown cannot be documented-but-unwired (H91).
+
+**Distillation is a phase, not a side effect.** A closed entry is one record
+among hundreds, and the next agent reads whatever the brief hands it -- so a
+constraint that is not in a skill gets paid for twice. `distil` promotes closed
+work into skills that cite it, on a cadence, and `check` refuses a skill whose
+evidence has since moved. It runs after `curate` so that `qc` checks what it
+wrote in the same iteration.
 
 **QC is mechanical first, model second.** Auditician's quality controller asks
 an agent whether anything was skipped. Here `ar validate` answers most of that
@@ -40,7 +47,7 @@ from dataclasses import dataclass, field
 from .. import budget as budget_mod
 from .. import hardware as hw
 from .. import rank as rank_mod
-from .. import render, runs as runs_mod
+from .. import render, runs as runs_mod, skills as skills_mod
 from ..claims import Claims
 from ..entries import Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
@@ -80,6 +87,12 @@ class Iteration:
     objective: float | None = None
     target: float | None = None
     cost_usd: float = 0.0
+    #: "iteration" for a full pass of the loop; "out-of-band" for a single phase
+    #: run by hand (`ar skill distil`). Both are recorded, because a ceiling
+    #: that refuses to record an overrun is a ceiling that hides one -- but only
+    #: the first is a sample of what the queue yields, so an out-of-band record
+    #: that counted would drag the yield floor down and stop a healthy loop.
+    kind: str = "iteration"
     #: what this iteration consumed, so a later invocation can charge it to the
     #: campaign's meters. An iteration record that does not say what it spent
     #: leaves every ceiling but `runs` starting from zero at the next `ar loop`.
@@ -251,12 +264,30 @@ class Coordinator:
             f"after {meter.spent:.1f}s")
         return False
 
+    def _skill_index(self) -> tuple[list[dict], list[str]]:
+        """Name, description and path for every readable skill, and what could
+        not be read.
+
+        By index and not by body, which is the entire point: thirteen skills at
+        the source corpus's median are 2,730 lines, and a brief that inlines
+        them has re-created the problem. A role routes on the description and
+        reads the one that matches.
+
+        The problems travel with it rather than being dropped. A skill that
+        cannot be parsed is missing from this brief, and a role given no signal
+        reads a short index as the whole of what is known -- which is the
+        silent-drop failure `skills.read_all` exists to prevent.
+        """
+        found, problems = skills_mod.read_all(self.config)
+        return skills_mod.index(self.config, found), problems
+
     def _brief(self, role: str, iteration: Iteration, **extra) -> str:
-        """Everything a role needs, assembled once. The knowledge guides are
-        included by path rather than inlined: a worker has tools and can read
-        them, and a generator that cannot see the closed-directions map will
-        propose closed directions."""
+        """Everything a role needs, assembled once. The knowledge guides and the
+        skills are included by path rather than inlined: a worker has tools and
+        can read them, and a generator that cannot see the closed-directions map
+        will propose closed directions."""
         entries = self.store.all()
+        skill_index, skill_problems = self._skill_index()
         payload = {
             "role": role,
             "iteration": iteration.n,
@@ -270,6 +301,8 @@ class Coordinator:
                 "best_so_far": iteration.objective,
             },
             "knowledge_paths": self.config.knowledge,
+            "skills": skill_index,
+            "skills_unreadable": skill_problems,
             "host": {
                 "fingerprint": self.host.fingerprint,
                 "chip": self.host.chip,
@@ -601,6 +634,104 @@ class Coordinator:
         phase.seconds = time.time() - start
         return phase
 
+    def distil(self, it: Iteration, budget, force: bool = False) -> Phase:
+        """Promote closed work into skills the next agent reads.
+
+        Runs on a cadence rather than every iteration: a librarian asked to
+        distil after a single verdict writes a skill that says what one entry
+        already says, and the record says it better. A cadence-skipped phase
+        still records *why*, because a phase that did nothing and a phase that
+        did not run are different facts (H98).
+
+        The role returns a body; this writes it. `skills.write` re-runs the full
+        check against the store before anything reaches disk, so a skill citing
+        an open entry is refused with its reason on the record rather than
+        landing and failing validation later.
+        """
+        phase = it.phase("distil")
+        start = time.time()
+        every = self.config.distil_every
+        existing, read_problems = skills_mod.read_all(self.config)
+        phase.read = len(existing)
+        phase.detail += read_problems
+        if existing:
+            # The efficiency claim, recorded rather than asserted: what every
+            # brief this iteration actually carried, against what it did not.
+            index_chars = sum(len(s.name) + len(s.description)
+                              for s in existing)
+            phase.detail.append(
+                f"index: {len(existing)} description(s), {index_chars} chars in "
+                f"every brief; {sum(s.lines for s in existing)} body lines held "
+                f"back")
+        if not every and not force:
+            phase.detail.append(
+                "not run: coordinator.distil_every is 0, so this domain has "
+                "turned distillation off")
+            phase.seconds = time.time() - start
+            return phase
+        if not force and it.n % every:
+            phase.detail.append(
+                f"not run: cadence is every {every} iterations; next at "
+                f"{(it.n // every + 1) * every}")
+            phase.seconds = time.time() - start
+            return phase
+
+        entries = self.store.all()
+        pending = skills_mod.undistilled(self.config, existing, entries)
+        stale = skills_mod.stale_report(self.config, existing, entries)
+        if not pending and not stale:
+            phase.detail.append(
+                "nothing to distil: every terminal entry is cited and no "
+                "citation has moved")
+            phase.seconds = time.time() - start
+            return phase
+        try:
+            budget.spend("spawns", note="librarian")
+            reply = self.brain.ask(Role.LIBRARIAN, self._brief(
+                Role.LIBRARIAN, it,
+                undistilled=pending,
+                stale=stale,
+                instruction=("Distil what is worth keeping. Return JSON: "
+                             "{write: [{name, description, cites, body}], "
+                             "retire: [{name, why}], notes: [str]}. Cite only "
+                             "terminal entries, and cite every one you name in "
+                             "the body. Return empty lists when nothing this "
+                             "iteration closed is worth a skill.")))
+            self._charge(it, reply)
+            data = reply.data if isinstance(reply.data, dict) else {}
+            measurements = skills_mod.best_measurements(self.config)
+            for spec in data.get("write", []):
+                if not isinstance(spec, dict) or not spec.get("name"):
+                    continue
+                try:
+                    path = skills_mod.write(
+                        self.config, spec["name"], spec.get("description", ""),
+                        spec.get("cites", []), spec.get("body", ""),
+                        iteration=it.n, entries=entries,
+                        measurements=measurements)
+                except AutoresearchError as exc:
+                    phase.detail.append(f"{spec['name']}: refused - {exc}")
+                    continue
+                phase.did += 1
+                phase.detail.append(
+                    f"wrote {path.relative_to(self.config.paths.root)}")
+            for spec in data.get("retire", []):
+                if not isinstance(spec, dict) or not spec.get("name"):
+                    continue
+                try:
+                    skills_mod.retire(self.config, spec["name"])
+                except AutoresearchError as exc:
+                    phase.detail.append(f"retire refused - {exc}")
+                    continue
+                phase.did += 1
+                phase.detail.append(
+                    f"retired {spec['name']}: {spec.get('why', 'no reason given')}")
+            phase.detail += [str(n) for n in data.get("notes", [])]
+        except (BudgetExceeded, AutoresearchError, KeyError, TypeError) as exc:
+            phase.detail.append(f"librarian skipped: {exc}")
+        phase.seconds = time.time() - start
+        return phase
+
     def qc(self, it: Iteration, budget) -> Phase:
         """Mechanical checks first. A check that is really a grep costs no token."""
         phase = it.phase("qc")
@@ -610,6 +741,10 @@ class Coordinator:
         problems = list(self.config.check())
         problems += [f"duplicate id {d}" for d in self.store.duplicates()]
         problems += render.check_views(self.config, entries)
+        found, skill_problems = skills_mod.read_all(self.config)
+        problems += skill_problems
+        problems += skills_mod.check(self.config, found, entries,
+                                     skills_mod.best_measurements(self.config))
         for entry in entries:
             machine = self.config.track_for(entry.id).machine
             status = machine.status(entry.status)
@@ -721,6 +856,9 @@ class Coordinator:
             if self._time_left(it, budget, "dispatch"):
                 self.dispatch(it, shortlist, budget, pool)
             self.curate(it, budget)
+            # Not clock-gated: like curate, it closes out work already paid for,
+            # and a verdict that never became knowledge is the run charged twice.
+            self.distil(it, budget)
             self.qc(it, budget)
         finally:
             # H91: teardown documented in a runbook and wired into no loop left
@@ -733,7 +871,8 @@ class Coordinator:
             self.config,
             measurements=best[1].metrics if best else None,
             target=it.target,
-            verdicts_per_iteration=[i.confirmed for i in self.history] + [it.confirmed],
+            verdicts_per_iteration=[i.confirmed for i in self.history
+                                    if i.kind == "iteration"] + [it.confirmed],
             budgets=[self.domain_budget])
         it.stop, it.stop_detail = decision.reason, decision.detail
         it.objective = best[0] if best else None

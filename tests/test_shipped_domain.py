@@ -51,3 +51,16 @@ def test_shipped_toy_domain_board_and_rank_run():
     for verb in ("board", "rank", "budget", "policy"):
         result = ar(verb)
         assert result.returncode == 0, f"ar {verb}: {result.stdout}{result.stderr}"
+
+
+def test_shipped_toy_domain_reports_zero_skills_rather_than_staying_silent():
+    """A reader that cannot say 'zero' is indistinguishable from one that read
+    nothing -- the convention this core inherited verbatim."""
+    result = ar("skill", "list")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 skill(s); 0 stale" in result.stdout
+
+
+def test_shipped_toy_domain_ships_no_skills():
+    """A committed skill would cite entries `state/entries/` does not hold."""
+    assert not list((TOY / "docs" / "skills").glob("*/SKILL.md"))

@@ -19,7 +19,7 @@ import pathlib
 import subprocess
 import sys
 
-from . import budget as budget_mod, escalate as escalate_mod, hardware as hw, rank as rank_mod, render, runs as runs_mod
+from . import budget as budget_mod, escalate as escalate_mod, hardware as hw, rank as rank_mod, render, runs as runs_mod, skills as skills_mod
 from .claims import Claims
 from .config import DomainConfig, discover
 from .entries import Entry, Result, Store
@@ -72,6 +72,7 @@ def cmd_init(args):
           3. edit  guides/landscape.md -- what an agent needs to know to guess well
           4. run   ar --domain {root} board
           5. run   ar --domain {root} hardware   -- what this machine can do
+          6. later ar --domain {root} skill list -- what the loop has distilled
         """).rstrip())
     return 0
 
@@ -496,6 +497,9 @@ def cmd_validate(args):
     entries = store.all()
     problems += [f"duplicate entry id: {d}" for d in store.duplicates()]
     problems += render.check_views(config, entries)
+    found, skill_problems = skills_mod.read_all(config)
+    problems += skill_problems
+    problems += skills_mod.check(config, found, entries, skills_mod.best_measurements(config))
     for entry in entries:
         track = config.track_for(entry.id)
         machine = track.machine
@@ -535,7 +539,8 @@ def cmd_validate(args):
     if skipped_runs:
         print(f"note: {skipped_runs} run row(s) predate adoption of this schema "
               f"and were not checked")
-    print(f"checked {len(entries)} entries, {len(config.tracks)} tracks, "
+    print(f"checked {len(entries)} entries, {len(found)} skills, "
+          f"{len(config.tracks)} tracks, "
           f"{len(config.policy.forbidden_paths + config.policy.human_only + config.policy.never_push_remotes)} "
           f"policy rules")
     if problems:
@@ -544,6 +549,124 @@ def cmd_validate(args):
             print(f"  - {p}")
         return 1
     print("clean")
+    return 0
+
+
+def _skills(config):
+    """Read, and print what could not be read. Every reader in this harness
+    reports how many things it read: "no skills" and "one unparseable skill"
+    must not be the same screen."""
+    found, problems = skills_mod.read_all(config)
+    for p in problems:
+        print(f"! {p}")
+    return found
+
+
+def cmd_skill_list(args):
+    config = _load(args)
+    found = _skills(config)
+    entries = _store(config).all()
+    stale = skills_mod.stale_report(config, found, entries)
+    body_lines = sum(s.lines for s in found)
+    index_lines = len(found)
+    for skill in sorted(found, key=lambda s: s.name):
+        mark = "STALE" if skill.name in stale else "ok"
+        print(f"{skill.name:<32} {skill.lines:>4}L  {mark:<5} "
+              f"cites {', '.join(skill.cites) or '(none)'}")
+        print(f"    {textwrap.shorten(skill.description, 96)}")
+        for reason in stale.get(skill.name, []):
+            print(f"    stale: {reason}")
+    pending = skills_mod.undistilled(config, found, entries)
+    print(f"\n{len(found)} skill(s); {len(stale)} stale; "
+          f"{len(pending)} terminal entr(ies) cited by none")
+    if found:
+        # The ratio is the design: a brief carries the descriptions, not the
+        # bodies. Printing it is what keeps that an observation and not a claim.
+        print(f"{body_lines} body lines held, {index_lines} index line(s) "
+              f"carried into each brief")
+    return 1 if stale else 0
+
+
+def cmd_skill_show(args):
+    config = _load(args)
+    for skill in _skills(config):
+        if skill.name == args.name:
+            print(skills_mod.render(skill))
+            return 0
+    raise AutoresearchError(f"no skill named {args.name!r}")
+
+
+def cmd_skill_check(args):
+    config = _load(args)
+    entries = _store(config).all()
+    found, problems = skills_mod.read_all(config)
+    problems += skills_mod.check(config, found, entries, skills_mod.best_measurements(config))
+    measured = skills_mod.best_measurements(config) is not None
+    print(f"checked {len(found)} skill(s) against {len(entries)} entries")
+    if not measured and config.goal.derived:
+        print("note: no scored run yet, so the derived-constant lint did not "
+              "run. That is a gap, not a pass.")
+    if problems:
+        print(f"\n{len(problems)} problem(s):")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    print("clean")
+    return 0
+
+
+def cmd_skill_retire(args):
+    config = _load(args)
+    path = skills_mod.retire(config, args.name)
+    print(f"retired {path.relative_to(config.paths.root)}: {args.why}")
+    return 0
+
+
+def cmd_skill_distil(args):
+    """Run the distil phase once, out of band.
+
+    The same phase the loop runs, so there is one implementation of what a
+    distillation is -- a second one here would be the copy that drifts.
+    """
+    from .driver.brain import SDKBrain
+    from .driver.loop import Coordinator, Iteration, _iso
+    from . import budget as _budget
+
+    config = _load(args)
+    if args.dry_run:
+        found = _skills(config)
+        entries = _store(config).all()
+        pending = skills_mod.undistilled(config, found, entries)
+        stale = skills_mod.stale_report(config, found, entries)
+        print(f"{len(found)} skill(s) on disk")
+        print(f"{len(pending)} terminal entr(ies) no skill cites:")
+        for item in pending:
+            print(f"  {item['id']:<6} {item['status']:<10} {item['title']}")
+        print(f"{len(stale)} stale skill(s):")
+        for name, reasons in stale.items():
+            print(f"  {name}: {'; '.join(reasons)}")
+        print("\nnothing was written (--dry-run)")
+        return 0
+    brain = SDKBrain(config, model=args.model, max_budget_usd=args.max_usd)
+    coordinator = Coordinator(config, brain, session=args.session)
+    it = Iteration(n=coordinator._last_recorded_n() + 1, kind="out-of-band")
+    it.target = coordinator._target()
+    try:
+        phase = coordinator.distil(it, _budget.iteration_budget(config), force=True)
+    finally:
+        # Recorded even when the phase raised. The campaign money meter is
+        # rebuilt from these records and from nothing else, so a librarian ask
+        # that spends and is not written here is spend the next `ar loop` cannot
+        # see -- a ceiling that hides an overrun rather than refusing it. The
+        # record is marked `out-of-band` so it charges the meters without
+        # counting as a sample of what the queue yields.
+        it.finished = _iso()
+        coordinator._record(it)
+    print(phase.name, f"read {phase.read}, did {phase.did}")
+    for line in phase.detail:
+        print(f"  {line}")
+    print(f"cost: ${it.cost_usd:.2f}  "
+          f"(recorded as iteration {it.n:04d}, out-of-band)")
     return 0
 
 
@@ -689,6 +812,26 @@ def build_parser() -> argparse.ArgumentParser:
     lst.add_argument("--status", action="append")
     lst.add_argument("--track")
     lst.set_defaults(func=cmd_entry_list)
+
+    skill = sub.add_parser("skill", help="the domain's distilled, cited skills")
+    ssub = skill.add_subparsers(dest="skill_cmd", required=True)
+    ssub.add_parser("list", help="every skill, its citations and its staleness"
+                    ).set_defaults(func=cmd_skill_list)
+    sshow = ssub.add_parser("show"); sshow.add_argument("name")
+    sshow.set_defaults(func=cmd_skill_show)
+    ssub.add_parser("check", help="validate every skill against the record"
+                    ).set_defaults(func=cmd_skill_check)
+    sdistil = ssub.add_parser("distil", help="run the distil phase once")
+    sdistil.add_argument("--dry-run", action="store_true",
+                         help="show what would be distilled; write nothing")
+    sdistil.add_argument("--model")
+    sdistil.add_argument("--max-usd", type=float, dest="max_usd")
+    sdistil.set_defaults(func=cmd_skill_distil)
+    sretire = ssub.add_parser("retire"); sretire.add_argument("name")
+    sretire.add_argument("--why", required=True,
+                         help="a skill removed without a reason is a skill that "
+                              "will be written again")
+    sretire.set_defaults(func=cmd_skill_retire)
 
     claim = sub.add_parser("claim", help="take one entry (serialised)")
     claim.add_argument("id")

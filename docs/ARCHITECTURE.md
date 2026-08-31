@@ -22,7 +22,7 @@ flowchart TB
         measure["bin/measure<br/>one experiment → one record"]
         goal["goal.yaml<br/>metrics, objective, target"]
         policy["domain.toml<br/>policy, budgets, hardware"]
-        guides["guides/<br/>knowledge agents read"]
+        guides["guides/ + docs/skills/<br/>knowledge agents read"]
     end
 
     subgraph core["Core (autoresearch)"]
@@ -32,6 +32,7 @@ flowchart TB
         rank["rank.py<br/>formula over recorded numbers,<br/>plus a reserve for amplitude"]
         budget["budget.py<br/>every ceiling is a meter,<br/>campaign spend read back from disk"]
         render["render.py<br/>every view is generated"]
+        skills["skills.py<br/>distilled prose, cited to entries<br/>and refused when they move"]
         hw["hardware.py · escalate.py<br/>what the host can run,<br/>and what renting would cost"]
     end
 
@@ -48,6 +49,7 @@ flowchart TB
     coord --- rank
     coord --- budget
     coord --- render
+    coord --- skills
     coord --- hw
 ```
 
@@ -61,7 +63,7 @@ disk already say was spent, not from zero: a campaign ceiling reconstructed
 fresh in each process is not a ceiling but a per-invocation allowance, renewable
 with the up-arrow.
 
-## 2. One iteration, seven phases
+## 2. One iteration, eight phases
 
 Every phase is metered and records what it *read* and what it *did*, so a phase
 that did nothing is distinguishable from a phase that did not run.
@@ -74,6 +76,7 @@ flowchart LR
     rankp["rank<br/>score, reserve for amplitude,<br/>then judge may reorder"]
     dispatch["dispatch<br/>claim → worker → verdict"]
     curate["curate<br/>re-price what moved,<br/>write views"]
+    distil["distil<br/>promote closed work into<br/>cited skills, on a cadence"]
     qc["qc<br/>mechanical first, model second"]
     stop{"should_stop?"}
 
@@ -88,7 +91,7 @@ flowchart LR
     c1 -.->|"no"| c2
     c2 -.->|"no"| c3
     c3 -.->|"no"| curate
-    curate --> qc --> stop
+    curate --> distil --> qc --> stop
     stop -->|"running"| orient
     stop -->|"target met /<br/>budget spent /<br/>yield floor"| done(["stop"])
 
@@ -102,6 +105,13 @@ Four things about this shape are deliberate:
 - **Generate runs every iteration**, concurrently with the work, so the queue
   cannot starve behind a rule that forbids draining it.
 - **The coordinator owns the pool.** Teardown is a `finally`, not a runbook.
+- **`distil` is not clock-gated, and sits before `qc`.** Like `curate` it closes
+  out work already paid for -- a verdict that never became knowledge is the run
+  charged twice -- and putting it ahead of `qc` means the same iteration that
+  wrote a skill also checks it. Its cadence is a domain decision
+  (`coordinator.distil_every`), and a cadence-skipped phase records *why*, so
+  "no cadence" and "nothing to distil" and "the librarian was refused" are three
+  distinguishable lines rather than one blank.
 - **QC is mechanical first.** `ar validate`-style checks answer most of it with
   no model; the QC role is asked only about what code cannot check.
 - **Wall clock gates the three phases that start new work.** `generate`, `rank`
@@ -118,8 +128,10 @@ makes a runaway iteration structurally impossible counts every role that ran.
 
 ## 3. Roles, and what each may do
 
-Five prompts in `src/autoresearch/agents/`. Only the worker and curator get
-write tools; everyone else is read-only.
+Six prompts in `src/autoresearch/agents/`. Only the worker and curator get
+write tools; everyone else is read-only -- the librarian included, deliberately:
+it returns a skill body and the coordinator writes it, so no role certifies its
+own output.
 
 ```mermaid
 flowchart TB
@@ -137,6 +149,9 @@ flowchart TB
     coord -->|"brief + this iteration's verdicts"| cur["curator<br/>read + write"]
     cur -->|"reprice: confidence/impact/cost"| repr["never a closed entry"]
 
+    coord -->|"brief + undistilled + stale"| lib["librarian<br/>read-only"]
+    lib -->|"write / retire skills"| skw["skills.write<br/>cites must be terminal;<br/>refusal is recorded, not written"]
+
     coord -->|"brief + mechanical problems"| qc["qc<br/>read-only"]
     qc -->|"problems, harness_debt"| debt["file debt on the<br/>harness track, not research"]
 
@@ -145,6 +160,7 @@ flowchart TB
     apply --> store
     repr --> store
     debt --> store
+    skw --> sk[("docs/skills/NAME/SKILL.md<br/>prose, cited to the record")]
 ```
 
 The right-hand boxes are the enforcement points. A role proposes; the

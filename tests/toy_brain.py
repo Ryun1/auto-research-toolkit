@@ -42,6 +42,7 @@ class ToyBrain:
         handler = {
             Role.GENERATOR: self._generate, Role.JUDGE: lambda p: [],
             Role.WORKER: self._work, Role.CURATOR: lambda p: {"reprice": [], "notes": []},
+            Role.LIBRARIAN: self._distil,
             Role.QC: lambda p: {"problems": [], "harness_debt": [], "verdict": "clean"},
         }[role]
         return Reply(role=role, data=handler(payload))
@@ -61,6 +62,22 @@ class ToyBrain:
             })
         self.filed += len(out)
         return out
+
+    def _distil(self, payload):
+        """One skill per closed entry the record has not distilled yet, cited
+        properly. Enough to exercise the phase end to end with no model -- which
+        is the whole point of a scripted brain."""
+        out = []
+        for item in payload.get("undistilled", [])[:1]:
+            out.append({
+                "name": f"lesson-{item['id'].lower()}",
+                "description": (f"Use when a proposal looks like {item['title']!r}: "
+                                f"the same knobs, the same mechanism."),
+                "cites": [item["id"]],
+                "body": (f"# {item['summary'] or item['title']}\n\n"
+                         f"Measured and closed as {item['status']} [{item['id']}].\n"),
+            })
+        return {"write": out, "retire": [], "notes": []}
 
     def _work(self, payload):
         entry = payload["entry"]

@@ -254,9 +254,9 @@ whole-harness class, and core adopts unknown-flag refusal from the first commit.
 
 ---
 
-## 6. The four gaps that block autonomy
+## 6. The five gaps that block autonomy
 
-Everything above is about correctness. These four are about capability, and they are why
+Everything above is about correctness. These five are about capability, and they are why
 the core exists rather than a refactor.
 
 1. **State is prose.** ~18,000 lines of append-only logs are the system of record,
@@ -270,6 +270,17 @@ the core exists rather than a refactor.
    subagents well — it even documents that two sessions built the same instrument within
    hours because neither could see the other starting (H60) — but the loop above it is
    strictly one agent, one claim, one iteration.
+5. **Knowledge is hand-grown and unchecked.** The thirteen guides are the most useful
+   artefact in the corpus and nothing in the loop produces one: a verdict becomes a
+   record, and whether it ever becomes something the next agent *reads* depends on a
+   human noticing. They are also the one place a stale number survives, which is why
+   `bin/staleness` had to exist at all — a whole tool standing in for the regeneration
+   prose cannot have. Core answers both with the `distil` phase and `skills.check`: a
+   skill names the entries behind each claim, and a citation that is reopened or
+   relabelled fails validation. It is also the one declared exception to invariant 1
+   (see `README.md`) — a skill is checked rather than generated, and that exception is
+   stated rather than discovered, because "declared and never wired" is the class the
+   appendix below says a passing test suite does not catch.
 
 ---
 

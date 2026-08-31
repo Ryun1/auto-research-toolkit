@@ -9,7 +9,8 @@ A domain supplies exactly four things; everything else is core-owned:
 3. **Safety policy** -- forbidden paths, never-push remotes, human-only commands,
    spend ceiling, declared as data. (`[policy]`)
 4. **Knowledge** -- the guides agents read to form good hypotheses, and the map
-   of closed directions ranking uses as a hard exclusion filter. (`knowledge`)
+   of closed directions ranking uses as a hard exclusion filter. (`knowledge`,
+   and the distilled skills under `[skills]`)
 
 Everything is validated at load: unknown top-level keys are refused, every
 expression's free names must resolve, every state machine must be total, and
@@ -35,8 +36,14 @@ from .states import StateMachine, default_machine
 
 CONFIG_NAME = "domain.toml"
 
+#: default cadence for the distil phase: every N iterations. Not every one --
+#: a librarian asked to distil after a single verdict writes a skill that says
+#: what one entry already says, and the record already says it better.
+DISTIL_EVERY = 5
+
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
-              "commands", "knowledge", "coordinator", "hardware", "remote"}
+              "commands", "knowledge", "coordinator", "hardware", "remote",
+              "skills"}
 
 
 @dataclass
@@ -61,6 +68,45 @@ class Track:
 
 
 @dataclass
+class Skills:
+    """Where a domain's distilled skills live, and how big one may get.
+
+    Distinct from `knowledge`, which is a hand-written list of guide paths.
+    A skill is written by the loop, cites the entries that back it, and is
+    checked against the record -- so it needs a directory core owns the shape
+    of rather than a path list a human maintains.
+
+    `dir` defaults under `docs/` rather than `guides/` for a lane reason: the
+    shipped findings pattern matches `docs/` and not `guides/`, so a distil
+    phase writing into `guides/` would put a scaffolding-lane file on every
+    branch that also carries findings, and `Lanes.explain` refuses a mixed
+    branch (H51). A distilled skill is derived from findings and publishes
+    with them.
+    """
+    dir: str = "docs/skills"
+    #: body line limit, following the 500-line ceiling in the skill-authoring
+    #: guidance this format borrows. A skill nobody finishes reading is a
+    #: guide with extra steps.
+    max_lines: int = 500
+
+    @classmethod
+    def from_dict(cls, spec: dict) -> "Skills":
+        unknown = set(spec) - {"dir", "max_lines"}
+        if unknown:
+            raise ConfigError(
+                f"[skills] has unknown key(s) {sorted(unknown)}; "
+                f"known: ['dir', 'max_lines']")
+        dir_ = spec.get("dir", "docs/skills")
+        if not isinstance(dir_, str) or not dir_ or dir_.startswith("/") or ".." in dir_:
+            raise ConfigError(
+                f"skills.dir must be a relative path inside the domain, got {dir_!r}")
+        raw = spec.get("max_lines", 500)
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            raise ConfigError(f"skills.max_lines must be a positive integer, got {raw!r}")
+        return cls(dir=dir_, max_lines=raw)
+
+
+@dataclass
 class Paths:
     root: pathlib.Path
     entries: pathlib.Path
@@ -82,6 +128,10 @@ class DomainConfig:
     commands: dict[str, str]
     budgets: dict[str, float]
     knowledge: list[str] = field(default_factory=list)
+    #: where distilled skills live. Always present -- a domain that declares no
+    #: [skills] table gets the default directory, which may not exist yet; an
+    #: absent directory reads as zero skills, never as an error.
+    skills: Skills = field(default_factory=Skills)
     coordinator: dict = field(default_factory=dict)
     #: share of each shortlist reserved for the largest `impact`, ignoring
     #: confidence and cost. Typed rather than left in the `coordinator` dict
@@ -92,6 +142,11 @@ class DomainConfig:
     #: reaches a float multiplication in `Ranking.shortlist`, and finding that
     #: out mid-iteration costs a run.
     explore_fraction: float = EXPLORE_FRACTION
+    #: run the distil phase every N iterations; 0 turns it off. Typed out of the
+    #: coordinator dict for the same reason as `explore_fraction`: it decides
+    #: whether a phase runs at all, and discovering it was misspelled mid-loop
+    #: costs the iteration that would have distilled.
+    distil_every: int = DISTIL_EVERY
     #: what each experiment class needs of the machine, checked before it runs
     hardware: dict = field(default_factory=dict)
     #: rentable classes, each costed only if someone measured its ratio
@@ -147,6 +202,10 @@ class DomainConfig:
         for rel in self.knowledge:
             if not (self.paths.root / rel).exists():
                 problems.append(f"knowledge path {rel!r} does not exist")
+        skills_dir = self.paths.root / self.skills.dir
+        if skills_dir.exists() and not skills_dir.is_dir():
+            problems.append(
+                f"skills.dir {self.skills.dir!r} exists and is not a directory")
         prefixes = [t.prefix for t in self.tracks.values()]
         if len(set(prefixes)) != len(prefixes):
             problems.append(
@@ -234,8 +293,10 @@ class DomainConfig:
             commands=dict(data.get("commands") or {}),
             budgets={k: float(v) for k, v in (data.get("budgets") or {}).items()},
             knowledge=list(data.get("knowledge") or []),
+            skills=Skills.from_dict(dict(data.get("skills") or {})),
             coordinator=coordinator,
             explore_fraction=_explore_fraction(coordinator),
+            distil_every=_distil_every(coordinator),
             hardware={name: Requirement.from_dict(name, spec)
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)
@@ -260,6 +321,22 @@ def _explore_fraction(coordinator: dict) -> float:
             "a reserve of the whole shortlist leaves no exploit lane, and the "
             "score is what connects an iteration to the objective")
     return float(raw)
+
+
+def _distil_every(coordinator: dict) -> int:
+    """Read and check `[coordinator] distil_every`.
+
+    Like `explore_fraction`, `0` is a decision -- the domain has turned
+    distillation off -- and must not be defaulted back on, so this tests for
+    the key rather than for falsiness."""
+    if "distil_every" not in coordinator:
+        return DISTIL_EVERY
+    raw = coordinator["distil_every"]
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        raise ConfigError(
+            f"coordinator.distil_every must be a non-negative integer, got {raw!r}; "
+            "0 turns distillation off")
+    return raw
 
 
 def discover(start=None) -> pathlib.Path:
