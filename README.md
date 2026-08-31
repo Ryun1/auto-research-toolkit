@@ -58,6 +58,8 @@ reason  = "irreversible and public; an agent may prepare it, never run it"
 [budgets]
 claim_max_runs        = 12
 iteration_fanout      = 3
+iteration_max_spawns  = 10
+iteration_max_seconds = 3600
 domain_max_runs       = 500
 
 [commands]
@@ -132,15 +134,22 @@ The harness inspects the machine it is on, records it, refuses work it cannot
 do, and says when to stop buying local time.
 
 ```
-$ ar hardware
+$ ar --domain domains/toy hardware
+host        puffin.local
 chip        Apple M2  [apple arm64]
 cpu         8 threads (4P + 4E)
-memory      16.0 GB (6.0 GB available)
+memory      16.0 GB (5.3 GB available)
 gpu         Apple M2, 10 cores, 16 GB unified
 power       battery  ** sustained throughput will be lower **
 note        unified memory: the GPU competes with the CPU for the same pool
 
-  OK   gpu-walk-full        (memory allows 323-way concurrency)
+requirements declared: 2
+  OK   cheap-sweep on Apple-M2/8t/16g
+  OK   wide-sweep on Apple-M2/8t/16g  (memory allows 524-way concurrency)
+
+rentable classes declared: 2
+  toy-cpu-16core         $0.35/h   2.50x @ 8-way   toy calibration, 2026-08-31
+  toy-gpu-unmeasured     $0.90/h   NO MEASURED RATIO — cannot be costed, and a spec sheet is not a measurement
 ```
 
 Three things make this more than a `uname` wrapper:
@@ -183,20 +192,26 @@ workload runs locally, how many units it needs, how long the answer stays worth
 having, and whether the work is already correct.
 
 ```
-$ ar escalate --need 200000 --rate 2.22 --unit candidates --concurrency 8 \
-              --workload screen --hours-available 24 --correct-locally
+$ ar --domain domains/toy escalate --need 200000 --rate 2.22 --unit candidates \
+     --concurrency 8 --workload screen --hours-available 24 --correct-locally
+host        Apple-M2/8t/16g
 escalation: GO  (trigger: too-slow)
-  rent rtx-4090: 2.3 h at $0.40/h = $0.90
+  rent toy-cpu-16core: 10.0 h at $0.35/h = $3.50
   local       2.22 candidates/s @ 8-way on Apple-M2/8t/16g [screen]
   need        200,000 candidates  ->  25.0 h locally
-    rtx-4090          2.3 h   $  0.90  [measured 11.10x @ 16384-way, run-abc]
-    cpu-32core        8.3 h   $  1.25  [measured 3.00x @ 32-way, run-def]
-    h100                —          —   [no measured ratio; not costed]
-  Renting spends money, which is a human decision.
+  available   24.0 h before this stops mattering
+    toy-cpu-16core             10.0 h   $     3.50  [measured 2.50x @ 8-way, toy calibration, 2026-08-31]
+    toy-gpu-unmeasured            —            —  [no measured ratio for this workload; not costed]
+  Renting spends money, which is a human decision. This is a recommendation with its arithmetic, not an action.
 ```
 
-Note the cheapest per hour is not the cheapest overall — which is why this is
-arithmetic and not a rule of thumb. Nothing here spends money.
+The second class is the one to look at: it has a price, a plausible spec and no
+measured ratio *for this workload*, so it is listed and not costed. With more
+classes declared the ordering matters too — the cheapest per hour is routinely
+not the cheapest overall, which is why this is arithmetic and not a rule of
+thumb. `GO` and `NOT_TRIGGERED` exit 0; `REFUSE` and `NEEDS_MEASUREMENT` exit 1,
+each naming something that has to happen before money is worth spending. Nothing
+here spends money.
 
 ## The seven invariants
 
@@ -251,7 +266,7 @@ loop with no model, which is what makes `ar loop` a unit test rather than a bill
 
 ## Status
 
-The core is complete and tested (189 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (212 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.
@@ -261,5 +276,8 @@ packages and is wired to the money ceiling, and that is all. The offline loop is
 proven; the model-in-the-loop path is not.
 
 `docs/EVALUATION.md` carries the harness critique this was built from, plus an
-appendix on the eleven defects found in the core itself, grouped by *how* each
-was caught. None was found by reading the code.
+appendix on the eighteen defects found in the core itself, grouped by *how* each
+was caught: running it against real data, rechecking finished work, independent
+review, and auditing a written claim against the code. None was found by reading
+the code unprompted — and the seven that a claim audit found were all things
+declared and never wired, a class whose test suite passes.

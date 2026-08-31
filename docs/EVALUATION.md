@@ -300,9 +300,11 @@ The core's job is to keep the judgement and delete the compensation.
 ## Appendix: how the core's own defects were found
 
 Written after the fact, and reorganised once it became clear that *how* each
-defect surfaced was more interesting than what it was. Eleven defects were found
-in the core during this work, by three different mechanisms — and **none of them
-by reasoning about the code.** Each mechanism found a class the others did not.
+defect surfaced was more interesting than what it was. Eighteen defects were
+found in the core during this work, by four different mechanisms, and **not one
+of them by reading the code for its own sake.** Each mechanism found a class the
+others did not. The fourth arrived last and is the awkward one: it *is* reading
+the code — but only ever with a claim from outside it in hand.
 
 ### Tier 1 — caught by running it against real data
 
@@ -400,6 +402,69 @@ top-level path it could not have been committed alongside findings either.
 a core record into the existing ledger — produced a row the domain's validator
 rejects, under a name asserting it should pass.
 
+### Tier 4 — caught by auditing a claim against the code
+
+Seven more, found by taking a claim made *outside* the code — a sentence in the
+README, a key in a config file, a heading in this document — and asking the code
+to show where it is honoured. Reading the code cold had already failed twice.
+Reading it against a specific external claim found seven in an afternoon, which
+is the whole difference between the two: the claim supplies the oracle.
+
+The pitch audited first was this repository's own opening line, *budgets that
+actually stop things*. Four ceilings were declared and never charged.
+
+**12. `domain.money` was constructed and left at zero.** It was built from
+`policy.spend_ceiling` and never debited, so `should_stop` could not reach the
+budget exit however long the loop ran. Worse once fixed naively: rebuilt from
+`spent=0.0` at each `ar loop`, a campaign ceiling is not a ceiling but a
+per-invocation allowance anyone renews with the up-arrow. Spend is now read back
+from the iteration records — which in turn required iteration numbering to
+continue from the highest record on disk, because numbering from zero in each
+process rewrote `0001.json` and discarded the spend it held.
+
+**13. `domain.gpu_hours` had no feed at all.** The run ledger cannot answer it:
+a worker measures inside its own workspace, so its rows are not in the
+coordinator's `data/runs` and its GPU-hours were recorded nowhere. The worker
+contract now reports it, and it is recorded on the iteration so it survives a
+restart.
+
+**14. `iteration.seconds` was scaffolded into every new domain and spent by
+nothing.** Wall clock is now charged between phases and gates the three that
+start new work — and a phase it skips is recorded *with a reason*, because a
+phase that did nothing and a phase that never ran are different facts (H98).
+
+**15. `iteration.runs` was charged after the fact, so it bounded nothing.**
+Every card is dispatched before any of them reports. It is now allocated at
+dispatch from the entry's declared cost, like `fanout` and `spawns`.
+
+**16. QC asked a model without spending a spawn** — so the meter that makes a
+runaway iteration structurally impossible undercounted by one every iteration.
+
+**17. Three copies of "pick the best row", all hardcoding `<`.** The board,
+`ar budget` and the coordinator each kept their own, so a `direction: maximise`
+domain was shown its worst measurement as its best, and the coordinator handed
+that row to the stop decision — making the goal-met exit unreachable. This is
+failure class 3.4 in a new dress: not a constant copied, but a *comparison*
+copied, which is a constant with a branch in it. There is now one
+`runs.best_run`, asking `Goal.better`; `render` asks `Goal.distance_to` instead
+of re-deriving the formula; and `ar budget` asks `Goal.is_met` instead of
+comparing against the target itself, which it had been disagreeing with the stop
+decision printed directly above it about.
+
+**18. A feature was fully implemented, tested, documented — and reachable from
+nothing.** `escalate.py` and `hardware.Throughput` had no verb, no call from the
+loop, and `Throughput` was constructed only in tests. This document and the
+README both described the behaviour and printed its output. The tell was a dead
+`escalate as escalate_mod` import in `cli.py`.
+
+Number 18 is the one to keep. A passing test suite, a written design and a
+README worked example all agreed the feature existed; nothing checked that a
+user could reach it. **Documentation is a claim about reachability, and no test
+here was pointed at it** — which is why the fix ships two refusals at the CLI
+edge (an undeclared `--hardware` class, and a non-positive `--rate`, which would
+otherwise report "local hardware is meeting the need" for a run making no
+progress) rather than only a verb.
+
 ### The finding that was not accepted
 
 The review reported that a TOML sub-table bound to the wrong track, leaving the
@@ -413,17 +478,28 @@ the accepted findings misrepresents what review costs and what it is worth.
 
 ### What this says about verification
 
-Eleven defects, three mechanisms, zero found by reading the code:
+Eighteen defects, four mechanisms, none found by reading the code unprompted:
 
 | mechanism | found | the class it is good at |
 |---|--:|---|
 | running against real data | 4 | assumptions that are wrong about *scale* — 400 verdicts, 9,443 rows, a real lane structure |
 | rechecking finished work | 1 | the gap between what is tested and what is shipped |
 | independent review | 6 | concurrency, and defects whose own verification was circular |
+| auditing a claim against the code | 7 | things declared and never wired — the gap between what is *written* and what runs |
 
-The third row is the one to take seriously. Every defect a review found had
-already survived the author's own checking twice — and the sharpest of them was
-protected by an assertion the author had written and watched pass.
+Two rows to take seriously. Every defect a review found had already survived the
+author's own checking twice — and the sharpest of them was protected by an
+assertion the author had written and watched pass.
+
+The fourth row is cheaper than the third and finds a different class. Review is
+adversarial and needs another party; a claim audit needs only a written claim and
+the discipline to grep for where it is honoured. Every one of its seven was
+invisible to the tests, because a meter that is never charged has no failing
+assertion to write — the test suite and the code agreed, and both were wrong
+about the same thing. The generalisation is uncomfortable and worth stating:
+**every declared-but-unwired thing is a defect whose test suite passes**, so the
+inventory of claims — README sentences, config keys, docstrings, section
+headings — is a defect-finding instrument, and a cheap one.
 
 ### What the migration says about the source corpus
 
