@@ -110,13 +110,25 @@ ar --domain domains/toy board
 
 ## Start a new research project
 
+**One repository per project, with this toolkit installed into it as a
+dependency.** Do not fork it and do not copy it in. A project owns the four
+domain things and nothing else, so a fork has nothing to customise and forfeits
+every core fix; and because every document here is generated, an upgrade has
+nothing to merge by hand.
+
 ```bash
-ar init ~/research/widgets --name widgets \
+mkdir ~/research/widgets && cd ~/research/widgets && git init
+python -m venv .venv && source .venv/bin/activate
+pip install "autoresearch @ git+https://github.com/Ryun1/auto-research-toolkit@main"
+
+ar init . --name widgets \
    --objective "round(latency) * memory" --metric latency --metric memory --target 5000
 ```
 
-That writes a domain which **validates clean and runs before you edit anything** —
-a scaffold whose first act is to fail teaches you to ignore the validator. Then:
+`ar init` refuses to scaffold over an existing `domain.toml`, so pointing it at
+a fresh repo is safe. What it writes **validates clean and runs before you edit
+anything** — a scaffold whose first act is to fail teaches you to ignore the
+validator. Then:
 
 1. `bin/measure` — replace `evaluate()` with your real experiment
 2. `goal.yaml` — the metrics it returns, and what winning means
@@ -124,6 +136,41 @@ a scaffold whose first act is to fail teaches you to ignore the validator. Then:
 4. `domain.toml` — `[policy]` never-rules, `[budgets]`, `[hardware]`
 5. `ar hardware` — what this machine can and cannot run
 6. `ar loop` — go
+
+The domain does not have to live anywhere in particular: `ar` finds the nearest
+enclosing `domain.toml`, or takes `--domain`. `domains/toy` sits inside this
+repository only because it is the fixture the tests run the whole loop against.
+
+### Why its own repository
+
+- **Workers get real isolation.** The workspace pool cuts a git worktree per
+  slot when the domain root is a git repository, and falls back to copying the
+  tree when it is not.
+- **The corpus is the project.** `state/`, `data/runs/` and `inbox/` accumulate
+  under the domain root, and the `[lanes] findings` regex is anchored there.
+  Those records are the thing being built; they belong in the project's history.
+
+### Two decisions worth making on day one
+
+**Pin the toolkit, in the project.** A run record's `provenance` carries the
+host, the interpreter and a hash of `bin/measure` — not the core version. So if
+ranking or closure semantics move under you mid-project, nothing in the corpus
+says which core produced which decision. Replace the `@main` above with a tag or
+a commit SHA, or commit a lockfile, and bump deliberately. An editable install
+against a local checkout is fine while the two are developed together — then the
+pin is a SHA the project records.
+
+**Commit `state/` and `data/runs/`.** Gitignore `.venv`, `__pycache__` and the
+workspace pool (`.ar/`) — not the records. A confirmed result that lived only in an
+ignored checkout, and so could not be reproduced, is one of the defects in
+`docs/EVALUATION.md` (H39) that this layout exists to prevent.
+
+### Where a change belongs
+
+If you want to change something that is not one of the four domain-owned files —
+a new closure kind, the ranking formula, a brain, a role prompt — that is a core
+change and belongs upstream on the `H` track. Patching it into the project is
+the fork, arriving one increment at a time.
 
 ## Commands
 
