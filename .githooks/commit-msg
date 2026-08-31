@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Enforce the "Area: summary" commit-message format (see CONTRIBUTING.md).
+set -euo pipefail
+
+file="$1"
+subject="$(head -n1 "$file")"
+
+# Git's own merge messages are exempt (squash-merges from GitHub never see
+# this hook either).
+case "$subject" in Merge\ *) exit 0 ;; esac
+
+if [ -z "$subject" ]; then
+  echo "commit-msg: empty commit message" >&2
+  exit 1
+fi
+
+if [ "${#subject}" -gt 88 ]; then
+  echo "commit-msg: subject exceeds 88 chars (got ${#subject}):" >&2
+  echo "  $subject" >&2
+  exit 1
+fi
+
+# "Area: summary" — the area prefix is the convention; the summary may start
+# with a lowercase word, a digit, or a proper noun.
+if ! grep -qE '^[A-Z][A-Za-z0-9 -]*: .+' "$file"; then
+  echo "commit-msg: subject must be 'Area: summary', e.g. 'Ranking: reserve a share of every shortlist for amplitude'" >&2
+  echo "  got: $subject" >&2
+  exit 1
+fi

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Full gate before anything is shared: the whole suite, no fast-exit.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=python3; fi
+if ! "$PY" -c "import pytest" 2>/dev/null; then
+  echo "pre-push: pytest not found; install with: pip install -e '.[dev]'" >&2
+  exit 1
+fi
+exec "$PY" -m pytest -q

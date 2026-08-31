@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Fast pre-commit checks: seconds, not minutes.
+# Full test suite runs on pre-push and in CI.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+# Prefer the project venv when it exists, so hooks work without activation.
+if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=python3; fi
+if [ -x .venv/bin/ruff ]; then RUFF=.venv/bin/ruff; elif command -v ruff >/dev/null 2>&1; then RUFF=ruff; else RUFF=; fi
+
+fail=0
+
+# 1. No trailing whitespace in staged files, except .md (markdown hard line
+#    breaks are two trailing spaces).
+if git diff --cached --name-only --diff-filter=ACM | grep -Ev '\.md$' | xargs -r \
+   grep -lEn ' +$' 2>/dev/null; then
+  echo "pre-commit: trailing whitespace found in staged files (see above)" >&2
+  fail=1
+fi
+
+# 2. Python compiles. Only run when staged .py files exist: grep exits 1 on
+#    no match, which pipefail would otherwise treat as a compile failure.
+PY_FILES="$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$' || true)"
+if [ -n "$PY_FILES" ]; then
+  echo "$PY_FILES" | xargs "$PY" -m py_compile || {
+    echo "pre-commit: python compilation failed" >&2
+    fail=1
+  }
+fi
+
+# 3. Ruff, if available. CI enforces it regardless.
+if [ -n "$RUFF" ]; then
+  "$RUFF" check . || fail=1
+else
+  echo "pre-commit: ruff not found; skipping (install with: pip install -e '.[dev]')" >&2
+fi
+
+exit $fail

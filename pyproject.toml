@@ -9,8 +9,21 @@ description = "A domain-agnostic autonomous research harness: typed goals, struc
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6.0"]
 
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
 [project.scripts]
 ar = "autoresearch.cli:main"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+  "E501",  # line length: prose-heavy docstrings and prompts, judged by eye
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
