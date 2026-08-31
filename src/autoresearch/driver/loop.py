@@ -113,8 +113,13 @@ class Coordinator:
         self.claims = Claims(self.store, config, session)
         self.probe_target = probe_target
         self.history: list[Iteration] = []
-        self.domain_budget = budget_mod.domain_budget(
-            config, spent_runs=len(runs_mod.read_all(config.paths.runs)))
+        # A domain adopting this core arrives with a corpus in its own older
+        # schema. Those rows are not counted against this campaign's run budget
+        # -- the budget is for work this loop does -- but the count is kept and
+        # reported rather than silently dropped, because "0 rows" and "0 rows we
+        # can read, of 9,443" are different facts (H81/H96).
+        rows, self.foreign_rows = runs_mod.read_with_skipped(config.paths.runs)
+        self.domain_budget = budget_mod.domain_budget(config, spent_runs=len(rows))
 
     # -- helpers -----------------------------------------------------------
 
@@ -188,7 +193,13 @@ class Coordinator:
         it.objective = best[0] if best else None
         phase.read = len(entries)
         phase.did = 1
-        phase.detail = [f"target={it.target}", f"best={it.objective}"]
+        phase.detail = [f"target={it.target}", f"best={it.objective}",
+                        f"runs charged to this campaign="
+                        f"{self.domain_budget['runs'].spent:g}"]
+        if self.foreign_rows:
+            phase.detail.append(
+                f"{self.foreign_rows} pre-adoption run row(s) present and not "
+                f"charged to this campaign's budget")
         # Free any claim whose holder has gone silent. Targeted, one at a time,
         # never all-or-nothing (H83).
         for entry, age in self.claims.reapable():

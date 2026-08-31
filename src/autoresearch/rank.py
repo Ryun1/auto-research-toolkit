@@ -30,7 +30,6 @@ it cannot. `apply_veto` refuses it, and refuses a veto with no justification.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 

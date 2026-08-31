@@ -5,7 +5,7 @@ import pytest
 from conftest import make_entry
 from toy_brain import ToyBrain
 
-from autoresearch.budget import MET, RUNNING
+from autoresearch.budget import MET
 from autoresearch.driver.brain import Role, ScriptedBrain, extract_json
 from autoresearch.driver.loop import Coordinator
 from autoresearch.errors import AutoresearchError

@@ -1,7 +1,6 @@
 import pytest
 from conftest import make_entry
 
-from autoresearch import rank as rank_mod
 from autoresearch.entries import Claim, Result
 from autoresearch.rank import Veto, apply_veto, rank
 

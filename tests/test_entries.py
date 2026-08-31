@@ -1,7 +1,7 @@
 import pytest
-from conftest import make_entry, memo
+from conftest import make_entry
 
-from autoresearch.entries import Entry, Result, Store
+from autoresearch.entries import Entry, Result
 from autoresearch.errors import SchemaError, TransitionError
 from autoresearch.states import default_machine
 

@@ -4,7 +4,6 @@ It replaces constants that were prose in a markdown table, parsed by a regex
 that understood one of the two table forms in use (H102). The whole benefit is
 that a derived value cannot go stale, so the evaluator has to be trustworthy.
 """
-import math
 import pytest
 
 from autoresearch import expr

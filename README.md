@@ -156,7 +156,7 @@ loop with no model, which is what makes `ar loop` a unit test rather than a bill
 
 ## Status
 
-The core is complete and tested (146 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (150 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.
