@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Full gate before anything is shared: the whole suite, no fast-exit.
+# Full gate before anything is shared: lint, then the whole suite, no fast-exit.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=python3; fi
+if [ -x .venv/bin/ruff ]; then RUFF=.venv/bin/ruff; elif command -v ruff >/dev/null 2>&1; then RUFF=ruff; else RUFF=; fi
+if [ -n "$RUFF" ]; then
+  "$RUFF" check .
+else
+  echo "pre-push: ruff not found; skipping (install with: pip install -e '.[dev]')" >&2
+fi
 if ! "$PY" -c "import pytest" 2>/dev/null; then
   echo "pre-push: pytest not found; install with: pip install -e '.[dev]'" >&2
   exit 1
