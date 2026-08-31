@@ -474,7 +474,7 @@ forever, drift silently."
 
 ```
 $ ar harness check
-installed   core 0.1.0 @ fb9f8166a0e2 (editable from /Users/ryan/amanita/auto-research-toolkit)
+installed   core 0.1.0 (editable from /Users/ryan/amanita/auto-research-toolkit) @ fb9f8166a0e2
 upstream    https://github.com/Ryun1/auto-research-toolkit  main @ 0c35928c41e2
 update available
 

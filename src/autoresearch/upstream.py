@@ -175,15 +175,21 @@ def _pull_status(url: str, ref: str, local: str,
         subprocess.run(
             ["git", "clone", "--quiet", "--no-checkout", url, str(clone)],
             capture_output=True, text=True, timeout=TIMEOUT_SECONDS, check=True)
-        head = subprocess.run(
-            ["git", "-C", str(clone), "rev-parse", f"refs/remotes/origin/{ref}"],
-            capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
-        )
-        if head.returncode != 0:
+        head = None
+        for candidate in (f"refs/remotes/origin/{ref}",
+                          f"refs/tags/{ref}^{{}}",    # annotated: peel to commit
+                          f"refs/tags/{ref}"):       # lightweight: the tag is it
+            proc = subprocess.run(
+                ["git", "-C", str(clone), "rev-parse", "--verify", "--quiet",
+                 candidate],
+                capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
+            if proc.returncode == 0:
+                head = proc.stdout.strip().splitlines()[0]
+                break
+        if head is None:
             raise AutoresearchError(
                 f"upstream {url} has no branch or tag named {ref!r}; "
                 "check the [upstream] table or pass --ref")
-        head = head.stdout.strip()
         if local == head:
             return head, False, None
         ancestor = subprocess.run(
@@ -249,6 +255,9 @@ class UpdatePlan:
     head: str
     behind: bool
     changelog: str | None = None
+    #: for an editable checkout, the commit the checkout itself is on --
+    #: distinct from install.commit, which only a pip-recorded git install has
+    local: str | None = None
 
     def summary(self) -> str:
         inst = self.install
@@ -258,7 +267,8 @@ class UpdatePlan:
             state = f" @ {inst.commit[:12]}"
         else:
             state = " (not git-pinned)"
-        return (f"installed   core {inst.version}{state}\n"
+        local = f" @ {self.local[:12]}" if self.local else ""
+        return (f"installed   core {inst.version}{state}{local}\n"
                 f"upstream    {self.url}  {self.ref} @ {self.head[:12]}")
 
 
@@ -284,28 +294,31 @@ def plan_update(config, ref: str | None = None) -> UpdatePlan:
     compared nothing would read as 'up to date'."""
     inst = installed()
     url, ref = upstream_url(config, ref)
-    head = remote_head(url, ref)
-    if head is None:
-        raise AutoresearchError(
-            f"upstream {url} has no branch or tag named {ref!r}; "
-            "check the [upstream] table or pass --ref")
     commit = inst.commit or (_editable_head(inst) if inst.editable else None)
     if inst.editable and commit:
         # A checkout may be ahead of or diverged from origin, so the plain
         # commit compare is not enough; the ancestry check comes free with the
-        # clone this path does anyway.
+        # clone this path does anyway -- which also resolves the ref, so no
+        # ls-remote is spent on it here.
         head, behind, log = _pull_status(url, ref, commit)
-    elif commit:
-        behind = head != commit
-        log = changelog(url, commit, head) if behind else None
     else:
-        # Not a git install (a version pin from a package index, say): compare
-        # against the newest tag, which is the only honest comparable.
-        newest = latest_tag(remote_tags(url))
-        behind = newest is not None and _vkey(newest) > _vkey(inst.version)
-        log = None
+        head = remote_head(url, ref)
+        if head is None:
+            raise AutoresearchError(
+                f"upstream {url} has no branch or tag named {ref!r}; "
+                "check the [upstream] table or pass --ref")
+        if commit:
+            behind = head != commit
+            log = changelog(url, commit, head) if behind else None
+        else:
+            # Not a git install (a version pin from a package index, say):
+            # compare against the newest tag, the only honest comparable.
+            newest = latest_tag(remote_tags(url))
+            behind = newest is not None and _vkey(newest) > _vkey(inst.version)
+            log = None
     return UpdatePlan(install=inst, url=url, ref=ref, head=head,
-                      behind=behind, changelog=log)
+                      behind=behind, changelog=log,
+                      local=commit if inst.editable else None)
 
 
 # -- applying it --------------------------------------------------------------
@@ -321,16 +334,21 @@ def pip_command(url: str, commit: str) -> list[str]:
 def _pip_install(cmd: list[str]) -> str:
     """Run pip, then ask a fresh interpreter what landed -- this process still
     has the old modules loaded, so asking it would report the past."""
-    proc = subprocess.run(cmd, capture_output=True, text=True,
-                          timeout=TIMEOUT_SECONDS * 5)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=TIMEOUT_SECONDS * 5)
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "from autoresearch.skills import core_version; print(core_version())"],
+            capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise AutoresearchError(
+            f"pip did not finish within {TIMEOUT_SECONDS * 5}s; is the "
+            "machine offline? The install may be partial") from exc
     if proc.returncode != 0:
         raise AutoresearchError(
             f"pip install failed ({proc.returncode}):\n"
             f"{proc.stderr.strip()[-800:]}")
-    probe = subprocess.run(
-        [sys.executable, "-c",
-         "from autoresearch.skills import core_version; print(core_version())"],
-        capture_output=True, text=True, timeout=TIMEOUT_SECONDS)
     if probe.returncode != 0:
         raise AutoresearchError(
             f"the upgraded core does not import ({probe.returncode}):\n"
@@ -345,10 +363,18 @@ def _verify(config) -> list[str]:
     This never raises for a failing domain -- a failing domain is exactly the
     evidence the rollback decision needs."""
     def run(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, "-m", "autoresearch.cli", *args,
-             "--domain", str(config.paths.root)],
-            capture_output=True, text=True, timeout=TIMEOUT_SECONDS * 5)
+        try:
+            return subprocess.run(
+                [sys.executable, "-m", "autoresearch.cli", *args,
+                 "--domain", str(config.paths.root)],
+                capture_output=True, text=True, timeout=TIMEOUT_SECONDS * 5)
+        except subprocess.TimeoutExpired:
+            # A wedged verify must not escape as a traceback: the caller needs
+            # a problem list to roll back on, not an exception to die on with
+            # the new core already installed.
+            return subprocess.CompletedProcess(
+                args, returncode=124, stdout="",
+                stderr=f"timed out after {TIMEOUT_SECONDS * 5}s")
 
     problems: list[str] = []
     render = run("render")
@@ -393,43 +419,69 @@ def apply_update(config, plan: UpdatePlan, *, installer=None, verifier=None) -> 
     verifier = verifier or _verify
     detail: list[str] = []
 
+    # A human-gated domain refuses before anything runs -- including before
+    # the pre-check below, which regenerates the views.
+    config.policy.check_command(" ".join(pip_command(plan.url, plan.head)))
+
     # The pre-check is what makes "only new problems roll back" possible.
     before = set(verifier(config))
     if before:
         detail.append(f"{len(before)} validation problem(s) existed before the "
                       "upgrade; they do not block it and are not caused by it")
 
-    config.policy.check_command(" ".join(pip_command(plan.url, plan.head)))
     # The installer reports what actually landed, from a fresh interpreter --
     # this process still has the old modules loaded and would report the past.
-    new_version = installer(pip_command(plan.url, plan.head))
-    detail.append(f"installed core {new_version} @ {plan.head[:12]} "
-                  f"from {plan.url} ({plan.ref})")
-
-    after = verifier(config)
+    new_version, failure = None, None
+    try:
+        new_version = installer(pip_command(plan.url, plan.head))
+        detail.append(f"installed core {new_version} @ {plan.head[:12]} "
+                      f"from {plan.url} ({plan.ref})")
+        after = verifier(config)
+    except AutoresearchError as exc:
+        # An upgrade that cannot even complete is the strongest possible new
+        # problem; it goes through the same rollback decision as any other.
+        failure = exc
+        after = []
     new_problems = [p for p in after if p not in before]
+    if failure and not new_problems:
+        new_problems = [f"the upgrade could not be completed: {failure}"]
     if new_problems:
         detail += new_problems
-        if plan.install.commit:
-            installer(pip_command(plan.url, plan.install.commit))
-            verifier(config)   # re-render with the core that owns the views
-            detail.append(
-                f"rolled back to core {plan.install.version} "
-                f"@ {plan.install.commit[:12]}: the upgrade introduced "
-                f"{len(new_problems)} new problem(s). Fix upstream or here "
-                "before taking it; the record is unchanged.")
-        else:
-            detail.append(
-                "the upgrade introduced new problem(s) and the previous "
-                "install recorded no commit to roll back to; reinstall the "
-                "version you had")
-        return UpdateResult(ok=False, rolled_back=bool(plan.install.commit),
-                            detail=detail)
+        rolled = _rollback(config, plan, installer, verifier, detail,
+                           len(new_problems))
+        return UpdateResult(ok=False, rolled_back=rolled, detail=detail)
 
     detail.append("re-rendered and validated clean under the new core")
     memo = _write_memo(config, plan, new_version)
     detail.append(f"wrote {memo.relative_to(config.paths.root)}")
     return UpdateResult(ok=True, rolled_back=False, detail=detail)
+
+
+def _rollback(config, plan: UpdatePlan, installer, verifier, detail: list[str],
+              new_problem_count: int) -> bool:
+    """Put the previous core back and re-render with it. Returns whether the
+    project was actually restored -- a rollback that silently failed would be
+    a failure that reads as a result, the shape this harness exists to kill."""
+    if not plan.install.commit:
+        detail.append(
+            "the upgrade introduced new problem(s) and the previous install "
+            "recorded no commit to roll back to; reinstall the version you had")
+        return False
+    try:
+        installer(pip_command(plan.url, plan.install.commit))
+        verifier(config)   # re-render with the core that owns the views
+    except AutoresearchError as exc:
+        detail.append(
+            f"ROLLBACK FAILED: the project may be left on the upgraded core. "
+            f"Reinstall it by hand: pip install --force-reinstall "
+            f"autoresearch @ git+{plan.url}@{plan.install.commit} ({exc})")
+        return False
+    detail.append(
+        f"rolled back to core {plan.install.version} "
+        f"@ {plan.install.commit[:12]}: the upgrade introduced "
+        f"{new_problem_count} new problem(s). Fix upstream or here before "
+        "taking it; the record is unchanged.")
+    return True
 
 
 def _write_memo(config, plan: UpdatePlan, new_version: str) -> pathlib.Path:

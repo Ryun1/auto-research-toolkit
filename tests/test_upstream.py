@@ -5,6 +5,7 @@ real git plumbing. The two properties under test are the ones that make an
 automated upgrade honest: only NEW validation problems roll an upgrade back,
 and what lands is always the resolved SHA, never a moving ref name.
 """
+import pathlib
 import subprocess
 
 import pytest
@@ -323,6 +324,83 @@ def test_update_refuses_to_pip_replace_an_editable_checkout(sandbox, upstream_re
     with pytest.raises(AutoresearchError, match="editable"):
         up.apply_update(sandbox, plan, installer=FakeInstaller(),
                         verifier=verifier)
+
+
+def test_an_upgrade_that_cannot_even_install_rolls_back(sandbox, upstream_repo):
+    """pip failing mid-upgrade (or the new core refusing to import) is the
+    strongest possible new problem, and it must reach the same rollback the
+    validation failures get -- not escape as a traceback with the project
+    stranded on whichever core pip left behind."""
+    repo, _, first = upstream_repo
+
+    class FlakyInstaller:
+        def __init__(self):
+            self.commands = []
+
+        def __call__(self, cmd):
+            self.commands.append(cmd)
+            if len(self.commands) == 1:
+                raise AutoresearchError("pip install failed (1): no network")
+            return "0.1.0"
+
+    installer = FlakyInstaller()
+
+    def verifier(config):
+        return []
+
+    result = up.apply_update(sandbox, make_plan(upstream_repo, first),
+                             installer=installer, verifier=verifier)
+    assert not result.ok
+    assert len(installer.commands) == 2, "the old core is put back"
+    assert installer.commands[1][-1].endswith(f"@{first}")
+    assert any("rolled back" in d for d in result.detail)
+    assert not list(sandbox.paths.memos.glob("core-update-*.md"))
+
+
+def test_a_rollback_that_fails_is_reported_not_swallowed(sandbox, upstream_repo):
+    """A rollback that silently fails would be a failure that reads as a
+    result; if the old core cannot be put back, the operator is told, with
+    the exact command to run."""
+    repo, _, first = upstream_repo
+
+    def always_fail(cmd):
+        raise AutoresearchError("no network")
+
+    calls = []
+
+    def verifier(config):
+        calls.append(1)
+        return [] if len(calls) == 1 else ["new problem after upgrade"]
+
+    result = up.apply_update(sandbox, make_plan(upstream_repo, first),
+                             installer=always_fail, verifier=verifier)
+    assert not result.ok and not result.rolled_back
+    assert any("ROLLBACK FAILED" in d and first[:12] in d for d in result.detail)
+
+
+def test_a_tag_ref_resolves_on_the_editable_path(upstream, upstream_repo,
+                                                 monkeypatch):
+    """`ref` may name a tag; the clone-based path must resolve it the same way
+    the ls-remote path does, or an editable project pinned to a tag gets 'no
+    such ref' for a ref that plainly exists."""
+    repo, commit, first = upstream_repo
+    second = commit("Ranking: a fix worth tagging")
+    git("tag", "v0.1.0", cwd=repo)
+    tmp_clone(repo, first, monkeypatch)
+    upstream.upstream = Upstream(url=str(repo), ref="v0.1.0")
+    plan = up.plan_update(upstream)
+    assert plan.behind and plan.head == second
+
+
+def tmp_clone(repo, at, monkeypatch):
+    import tempfile
+    checkout = pathlib.Path(tempfile.mkdtemp()) / "checkout"
+    subprocess.run(["git", "clone", "--quiet", str(repo), str(checkout)],
+                   check=True, capture_output=True)
+    git("checkout", "--quiet", at, cwd=checkout)
+    monkeypatch.setattr(up, "installed", lambda: Install(
+        version="0.1.0", editable=True, url="file://" + str(checkout)))
+    return checkout
 
 
 def test_the_scaffold_ships_an_upstream_table(tmp_path):
