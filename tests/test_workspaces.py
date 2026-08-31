@@ -49,3 +49,14 @@ def test_release_all_survives_a_slot_that_vanished(sandbox):
     slot = pool.acquire("w1")
     shutil.rmtree(slot.path)
     assert pool.release_all() == 1
+
+
+def test_release_all_reports_a_release_it_could_not_do(sandbox, capsys):
+    """A release that fails must not vanish into `except: pass`: the leaked
+    slot is named, and the count says nothing was freed."""
+    pool = Pool(sandbox, "c")
+    pool.acquire("w1")
+    (pool.root / "w1.json").write_text("{not json")
+    assert pool.release_all() == 0
+    err = capsys.readouterr().err
+    assert "w1" in err and "release failed" in err
