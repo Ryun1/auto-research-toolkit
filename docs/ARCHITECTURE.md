@@ -29,8 +29,9 @@ flowchart TB
         coord["Coordinator<br/>driver/loop.py"]
         store["Store<br/>one record per entry"]
         rank["rank.py<br/>formula over recorded numbers"]
-        budget["budget.py<br/>every ceiling is a meter"]
+        budget["budget.py<br/>every ceiling is a meter,<br/>campaign spend read back from disk"]
         render["render.py<br/>every view is generated"]
+        hw["hardware.py · escalate.py<br/>what the host can run,<br/>and what renting would cost"]
     end
 
     subgraph brainlayer["Brain (the one seam)"]
@@ -46,11 +47,18 @@ flowchart TB
     coord --- rank
     coord --- budget
     coord --- render
+    coord --- hw
 ```
 
 Core never calls a model directly and the brain never touches the record: a
 role returns JSON, and the coordinator decides what — if anything — that JSON
 is allowed to change.
+
+The campaign meters are the ones to watch on the left. `domain.money` and
+`domain.gpu_hours` are rebuilt at startup from what the iteration records on
+disk already say was spent, not from zero: a campaign ceiling reconstructed
+fresh in each process is not a ceiling but a per-invocation allowance, renewable
+with the up-arrow.
 
 ## 2. One iteration, seven phases
 
@@ -68,7 +76,18 @@ flowchart LR
     qc["qc<br/>mechanical first, model second"]
     stop{"should_stop?"}
 
-    orient --> generate --> rankp --> dispatch --> curate --> qc --> stop
+    c1{"time?"}
+    c2{"time?"}
+    c3{"time?"}
+
+    orient --> c1
+    c1 -->|"yes"| generate --> c2
+    c2 -->|"yes"| rankp --> c3
+    c3 -->|"yes"| dispatch --> curate
+    c1 -.->|"no"| c2
+    c2 -.->|"no"| c3
+    c3 -.->|"no"| curate
+    curate --> qc --> stop
     stop -->|"running"| orient
     stop -->|"target met /<br/>budget spent /<br/>yield floor"| done(["stop"])
 
@@ -77,13 +96,24 @@ flowchart LR
     qc -.-> teardown
 ```
 
-Three things about this shape are deliberate:
+Four things about this shape are deliberate:
 
 - **Generate runs every iteration**, concurrently with the work, so the queue
   cannot starve behind a rule that forbids draining it.
 - **The coordinator owns the pool.** Teardown is a `finally`, not a runbook.
 - **QC is mechanical first.** `ar validate`-style checks answer most of it with
   no model; the QC role is asked only about what code cannot check.
+- **Wall clock gates the three phases that start new work.** `generate`, `rank`
+  and `dispatch` each ask whether the iteration's `iteration_max_seconds`
+  remains before beginning; `curate` and `qc` are not gated, because they close
+  out work that has already been paid for. A phase the clock skips is written to
+  the record *with its reason* — which is what makes the distinguishability
+  claim above true rather than aspirational. The check is made separately before
+  each of the three (the dotted edges), not once for the group: an iteration can
+  generate, then run out of clock before it dispatches.
+
+Every model call spends a `spawns` meter, QC's included, so the ceiling that
+makes a runaway iteration structurally impossible counts every role that ran.
 
 ## 3. Roles, and what each may do
 
@@ -151,6 +181,12 @@ stateDiagram-v2
 `in_progress` is spelled `in-progress` in the record; Mermaid will not take the
 hyphen in a state id.
 
+This is the research track's machine. A track declares its own terminal set and
+nothing else about the shape changes — the harness-debt track the toy domain
+ships uses `fixed`/`wontfix`/`refuted` in place of `confirmed`/`refuted`, and
+gets the same reopen edge on each, because `default_machine` takes the terminal
+set as its only parameter.
+
 ## 5. Dispatch and the worker pool
 
 Liveness is observed, not inferred: the coordinator submits the work, so it
@@ -167,7 +203,7 @@ sequenceDiagram
     participant Br as Brain
 
     loop each entry on the shortlist
-        C->>B: spend fanout + spawns
+        C->>B: spend fanout + spawns + runs (entry's declared cost)
         B-->>C: ok / BudgetExceeded → stop dispatching
         C->>Cl: claim(entry, why="ranked #k")
         Cl-->>C: ok / held by another session → skip
@@ -177,7 +213,7 @@ sequenceDiagram
         C->>P: acquire(slot)
         C->>W: run
         W->>Br: ask(worker, brief, workspace=slot)
-        Br-->>W: Reply{verdict, memo, closure_kind, runs, cost}
+        Br-->>W: Reply{verdict, memo, closure_kind, runs, gpu_hours, cost}
         W->>P: release(slot) (finally)
     end
 
@@ -189,3 +225,10 @@ sequenceDiagram
 A worker that raises is recorded as `failed` *against its entry id* — the item
 is part of the answer, because a failure that reads as a result is the exact
 shape this harness keeps filing defects about.
+
+Two details in the first block are load-bearing. `runs` is spent at *dispatch*,
+from the entry's declared cost, not after the worker reports: every card is
+dispatched before any of them answers, so a meter charged after the fact bounds
+nothing. And `gpu_hours` has to come back through the reply because the rows a
+worker wrote live in its own workspace, not in the coordinator's `data/runs` —
+the ledger cannot answer that meter alone.
