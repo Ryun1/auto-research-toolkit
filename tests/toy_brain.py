@@ -92,7 +92,7 @@ class ToyBrain:
         if proc.returncode != 0:
             return {"verdict": "inconclusive",
                     "summary": f"measure failed: {proc.stderr[:200]}",
-                    "verification": {"memo_reread": True,
+                    "verification": {"reread": True,
                                      "claims_checked": ["failure reproduced"]}}
 
         objective = float(line.split("objective=")[1].split()[0].replace(",", "")) \
@@ -107,17 +107,17 @@ class ToyBrain:
         if objective is None:
             return {"verdict": "refuted", "memo": memo, "closure_kind": "mechanism",
                     "summary": "run was invalid: below the validity gate", "runs": 1,
-                    "verification": {"memo_reread": True,
+                    "verification": {"reread": True,
                                      "claims_checked": ["objective", "validity gate"]}}
         improved = baseline is None or objective < baseline
         if improved:
             return {"verdict": "confirmed", "memo": memo, "runs": 1,
                     "summary": f"objective {objective:,.0f} beats baseline {baseline}",
-                    "verification": {"memo_reread": True,
+                    "verification": {"reread": True,
                                      "claims_checked": ["objective", "arithmetic"]}}
         return {"verdict": "refuted", "memo": memo, "closure_kind": "cell",
                 "reopen_condition": f"measured at {knobs} only; re-opens at another width",
                 "summary": f"objective {objective:,.0f} does not beat {baseline:,.0f}",
                 "runs": 1,
-                "verification": {"memo_reread": True,
+                "verification": {"reread": True,
                                  "claims_checked": ["objective", "arithmetic"]}}

@@ -91,7 +91,7 @@ def test_fanout_budget_caps_dispatch(sandbox):
     assert len(it.shortlist) == 1
 
 
-VERIFIED = {"memo_reread": True, "claims_checked": ["summary", "verdict"],
+VERIFIED = {"reread": True, "claims_checked": ["summary", "verdict"],
             "corrections": []}
 
 
@@ -253,7 +253,7 @@ def test_a_verified_verdict_records_the_rereview(sandbox, store):
     from autoresearch.entries import Store
     make_entry(store, "Q1", impact=1.0)
     (sandbox.paths.root / "inbox" / "real.md").write_text("numbers")
-    verification = {"memo_reread": True, "claims_checked": ["objective"],
+    verification = {"reread": True, "claims_checked": ["objective"],
                     "corrections": []}
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [],
