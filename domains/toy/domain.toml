@@ -1,0 +1,65 @@
+knowledge = ["guides/toy-landscape.md"]
+
+[domain]
+name = "toy"
+description = "A synthetic optimisation domain used to exercise the loop end to end in seconds."
+goal = "goal.yaml"
+
+[state]
+entries    = "state/entries"
+claims     = "state/claims"
+runs       = "data/runs"
+memos      = "inbox"
+iterations = "state/iterations"
+
+[[tracks]]
+id     = "research"
+prefix = "Q"
+title  = "Hypothesis Queue"
+view   = "docs/log/Hypothesis Queue.md"
+description = "Leads on the score. Nothing here is about the harness."
+
+[[tracks]]
+id     = "harness"
+prefix = "H"
+title  = "Harness Debt"
+view   = "docs/log/Harness Debt.md"
+description = "The scaffolding's own defects. Kept separate so an agent booting into research never reads harness debt as a lead on the score."
+# The harness track closes differently: a defect is fixed or declined, not
+# confirmed or refuted.
+[tracks.terminal]
+fixed   = { requires_evidence = true }
+wontfix = { requires_evidence = true }
+refuted = { requires_evidence = true, requires_closure_kind = true }
+
+[lanes]
+# Default-deny: anything not matching is scaffolding and takes the proposal lane.
+findings = "^(data/runs|data/artifacts|inbox|docs|state)/"
+
+[policy]
+spend_ceiling = 5.0
+currency = "USD"
+
+[[policy.forbidden_paths]]
+pattern = "secrets/*"
+reason  = "the toy domain's stand-in for a path that must never be committed"
+
+[[policy.human_only]]
+pattern = "toy publish"
+reason  = "stand-in for an irreversible outward-facing action; an agent may prepare it, never run it"
+
+[budgets]
+claim_wall_clock_hours = 0.25
+claim_max_runs         = 40
+iteration_fanout       = 4
+iteration_max_seconds  = 300
+domain_max_runs        = 400
+
+[commands]
+measure      = "bin/measure"
+probe_target = "bin/probe-target"
+
+
+[coordinator]
+workers_per_iteration = 3
+generators_per_iteration = 2

@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""The toy domain's moving target: prints one number on stdout.
+
+Real research targets move -- the first domain this core serves chases a
+frontier that advanced 22.5% in 18.8 days -- so the toy has a target that drifts
+too, driven by a file rather than by wall-clock so tests are deterministic.
+"""
+import pathlib, sys
+
+BASE = 6_000_000.0
+DRIFT = pathlib.Path(__file__).resolve().parent.parent / "state" / "target-drift"
+steps = int(DRIFT.read_text().strip()) if DRIFT.exists() else 0
+print(BASE * (0.99 ** steps))

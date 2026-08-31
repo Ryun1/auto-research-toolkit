@@ -1,0 +1,39 @@
+# The toy domain's goal. Same shape a real domain uses: metrics measured by a
+# command, an objective over them, a target that moves, and stopping conditions.
+goal:
+  id: beat-toy-target
+  description: >
+    Minimise round(ops) * peak for the synthetic circuit below a moving target.
+    The landscape has an interior optimum on `unroll`, a fold/cache interaction,
+    and a validity gate at width < 16.
+  direction: minimise
+
+  metrics:
+    ops:
+      field: ops
+      direction: minimise
+      unit: operations
+      description: executed operations, averaged
+    peak:
+      field: peak
+      direction: minimise
+      unit: qubits
+      description: peak width
+
+  objective: "round(ops) * peak"
+
+  derived:
+    # Never stored, always computed: what one unit of width has to buy in ops
+    # for a width-for-ops trade to be worth taking.
+    break_even: "ops / peak"
+
+  target:
+    source: bin/probe-target
+    moving: true
+    refresh_seconds: 300
+
+  stop_when: "objective < target"
+
+  yield_floor:
+    confirmed_per_iteration: 0.25
+    over_iterations: 6

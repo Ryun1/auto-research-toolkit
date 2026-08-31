@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Toy domain measurement: one experiment, one validated run record on stdout.
+
+A deliberately cheap stand-in for a real evaluator, so the whole loop -- generate,
+rank, dispatch, curate, QC, stop -- can be exercised in seconds instead of in the
+9,024-shot runs the first real domain needs. It has the properties that make a
+research loop interesting rather than trivial:
+
+* a U-shaped axis with an interior optimum (`unroll`), so greedy single-step
+  search can get stuck;
+* an **interaction**: `cache` only pays when `fold` is on, so a one-knob-at-a-time
+  sweep refutes it and a paired sweep confirms it;
+* a **validity gate**: `width` below 16 produces an invalid run, so the loop must
+  learn that a cheaper-looking config does not score;
+* deterministic noise, so repeated measurement of one config is stable but two
+  configs are not trivially ordered.
+"""
+import argparse, hashlib, json, os, platform, subprocess, sys, time, uuid
+
+DEFAULTS = {"unroll": 1, "width": 32, "fold": 0, "cache": 0}
+
+
+def jitter(knobs):
+    """Deterministic per-config noise: same config, same number, always."""
+    seed = hashlib.sha256(repr(sorted(knobs.items())).encode()).hexdigest()
+    return 1.0 + (int(seed[:8], 16) / 0xFFFFFFFF - 0.5) * 0.004   # +/- 0.2%
+
+
+def evaluate(knobs):
+    unroll, width = max(1, int(knobs["unroll"])), int(knobs["width"])
+    fold, cache = bool(int(knobs["fold"])), bool(int(knobs["cache"]))
+    ops = 1_000_000 / unroll + 5_000 * unroll
+    if fold:
+        ops *= 0.85
+    if cache and fold:          # the interaction: cache alone does nothing
+        ops *= 0.95
+    ops *= jitter(knobs)
+    peak = width + 2 * unroll + (8 if cache else 0)
+    return {"ops": round(ops, 3), "peak": float(peak)}
+
+
+def provenance():
+    return {"host": platform.node(), "python": platform.python_version(),
+            "measure_sha": hashlib.sha256(
+                open(__file__, "rb").read()).hexdigest()[:12]}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--knob", action="append", default=[], metavar="K=V")
+    ap.add_argument("--session", default=os.environ.get("AR_SESSION", "unknown"))
+    ap.add_argument("--entry", default=os.environ.get("AR_ENTRY"))
+    args = ap.parse_args()
+
+    knobs = dict(DEFAULTS)
+    for item in args.knob:
+        if "=" not in item:
+            sys.exit(f"--knob wants K=V, got {item!r}")
+        key, value = item.split("=", 1)
+        if key not in DEFAULTS:
+            # H135, applied to a domain command: an unrecognised knob must not
+            # read as a successful run of the defaults.
+            sys.exit(f"unknown knob {key!r}; known: {sorted(DEFAULTS)}")
+        knobs[key] = int(value)
+
+    started = time.time()
+    metrics = evaluate(knobs)
+    # The validity gate: too narrow and the result does not count. Reporting
+    # `invalid` rather than a cheap-looking `ok` is the whole point (H134).
+    status = "invalid" if int(knobs["width"]) < 16 else "ok"
+    record = {
+        "schema": "run-v1", "id": uuid.uuid4().hex[:12],
+        "session": args.session, "entry": args.entry, "status": status,
+        "started": started, "finished": time.time(),
+        "metrics": metrics, "config": {"knobs": knobs},
+        "provenance": provenance(), "outputs": [], "cost": {"seconds": 0.01},
+        "notes": "" if status == "ok" else "width < 16: below the validity gate",
+    }
+    json.dump(record, sys.stdout, sort_keys=True)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()
