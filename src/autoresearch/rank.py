@@ -46,6 +46,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .errors import ConfigError
+
 #: Share of the shortlist reserved for amplitude. Small enough that the loop
 #: still spends most of every iteration on the objective, large enough that at
 #: the fanouts actually run (k=3) it reserves one slot.
@@ -87,22 +89,38 @@ class Ranking:
 
         Rounding is deliberate: `int(k * f + 0.5)` rather than a floor, because
         a floor at the fanouts this loop actually runs (k=3, f=0.2 -> 0.6) would
-        reserve nothing and the lane would exist only on paper. At k=1 it still
-        rounds to 0: the only slot in an iteration is never spent on a lottery
-        ticket.
+        reserve nothing and the lane would exist only on paper. It is then
+        clamped to `k - 1`, which is what actually holds the two guarantees the
+        validators promise: at least one slot always goes to the score, and the
+        only slot in an iteration is never spent on a lottery ticket. Rounding
+        alone held neither -- `f=0.9, k=3` reserves all three, and `f=0.5, k=1`
+        reserves the one.
         """
         if k <= 0:
             return []
         for card in self.scored:            # recomputed, so this is idempotent
             card.explore = False
-        reserve = int(k * self.explore_fraction + 0.5)
+        # Nothing to reserve when everything ranked is dispatched anyway: the
+        # pick would be labelled an explore entry that "sits low on score by
+        # design" when it is simply k-th.
+        if len(self.scored) <= k:
+            return list(self.scored)
+        reserve = min(int(k * self.explore_fraction + 0.5), k - 1)
         picks = self.scored[:k - reserve]
         if reserve:
             taken = {c.entry_id for c in picks}
             # Impact alone. Confidence and cost are precisely the terms that
             # bury a long shot, so the reserve must not consult them; ties break
             # on score so the ordering stays deterministic.
-            rest = sorted((c for c in self.scored if c.entry_id not in taken),
+            #
+            # A judge's `demote`/`drop` is honoured here too. `apply_veto`
+            # implements both by moving the card to the tail of `scored`, which
+            # is exactly where the reserve looks, so without this filter a veto
+            # on a high-impact entry puts it straight back and the entry it was
+            # making room for stays out.
+            vetoed = ("demote", "drop")
+            rest = sorted((c for c in self.scored if c.entry_id not in taken
+                           and c.terms.get("veto") not in vetoed),
                           key=lambda c: (-c.terms.get("impact", 0.0), -c.score))
             for card in rest[:reserve]:
                 card.explore = True
@@ -179,7 +197,7 @@ def rank(entries, config, *, prior_weight: float = 3.0,
     the module docstring. It is off by default so a library caller gets the
     score and nothing else; the loop and the CLI pass `EXPLORE_FRACTION`."""
     if not 0.0 <= explore_fraction < 1.0:
-        raise ValueError(
+        raise ConfigError(
             f"explore_fraction must be in [0, 1), got {explore_fraction!r}; "
             "a reserve of the whole shortlist leaves no exploit lane, and the "
             "score is what connects an iteration to the objective")

@@ -358,10 +358,14 @@ def cmd_rank(args):
     explore = config.explore_fraction if args.explore is None else args.explore
     ranking = rank_mod.rank(entries, config, explore_fraction=explore,
                             budget_ok=lambda e: e.cost <= remaining)
+    # Shortlisted first: `shortlist` is what marks the reserve, and the table
+    # is the ranking a human corrects. An explore pick sits low in it by design,
+    # and one shown unmarked reads as the formula having gone wrong.
+    shortlist = ranking.shortlist(args.top) if args.top else []
     print(ranking.explain())
     if args.top:
         print(f"\nshortlist (top {args.top}):")
-        for s in ranking.shortlist(args.top):
+        for s in shortlist:
             print(f"  {s.entry_id}  {s.title}"
                   + ("  [explore]" if s.explore else ""))
     return 0

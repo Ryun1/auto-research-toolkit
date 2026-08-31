@@ -51,3 +51,22 @@ def test_the_explore_flag_overrides_the_domain(sandbox, store, capsys):
     cli.main(["--domain", str(sandbox.paths.root), "rank", "--top", "3",
               "--explore", "0.5"])
     assert "explore reserve: 50%" in capsys.readouterr().out
+
+
+def test_a_bad_explore_flag_is_refused_rather_than_traced(sandbox, store, capsys):
+    """H135's shape at the CLI: `ar` catches AutoresearchError and prints a
+    refusal; anything else reaches the user as a traceback."""
+    _queue(store)
+    assert cli.main(["--domain", str(sandbox.paths.root), "rank",
+                     "--explore", "1.5"]) == 2   # `ar`'s refusal code
+    assert "explore_fraction" in capsys.readouterr().err
+
+
+def test_the_score_table_marks_the_reserve_too(sandbox, store, capsys):
+    """The table is the ranking a human corrects. An explore pick sits low in it
+    by design, and one shown unmarked reads as the formula having gone wrong."""
+    _queue(store)
+    cli.main(["--domain", str(sandbox.paths.root), "rank", "--top", "3"])
+    table = capsys.readouterr().out.split("shortlist (top 3):")[0]
+    marked = [ln for ln in table.splitlines() if "[explore]" in ln]
+    assert len(marked) == 1 and "Q90" in marked[0], table

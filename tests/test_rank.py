@@ -197,6 +197,62 @@ def test_the_reserve_falls_back_to_exploit_when_there_is_nothing_to_explore(sand
     assert ids == ["Q11", "Q12"]                           # no gaps, no repeats
 
 
-def test_an_explore_fraction_that_leaves_no_exploit_lane_is_refused(sandbox, store):
-    with pytest.raises(ValueError, match="explore_fraction"):
+def test_a_dropped_entry_does_not_return_through_the_reserve(sandbox, store):
+    """`drop` is a demotion out of the shortlist. The reserve re-picks from the
+    tail of `scored`, which is exactly where a drop puts a high-impact entry, so
+    without this the judge's veto is silently undone and the entry it was making
+    room for stays out."""
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
+    r = rank(store.all(), sandbox, explore_fraction=0.25)
+    assert "Q91" in [s.entry_id for s in r.shortlist(3)]
+    out = apply_veto(r, [Veto("Q91", "drop", "measured last week under another id")])
+    ids = [s.entry_id for s in out.shortlist(3)]
+    assert "Q91" not in ids, ids
+    assert ids == ["Q11", "Q12", "Q13"]
+
+
+def test_a_demoted_entry_does_not_return_through_the_reserve(sandbox, store):
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
+    r = rank(store.all(), sandbox, explore_fraction=0.25)
+    out = apply_veto(r, [Veto("Q91", "demote", "the adder rewrite is Q92's premise")])
+    assert "Q91" not in [s.entry_id for s in out.shortlist(3)]
+
+
+def test_the_reserve_never_takes_the_whole_shortlist(sandbox, store):
+    """Both validators refuse `f >= 1` because a full reserve leaves no exploit
+    lane. Rounding must not reach that state from inside the accepted range."""
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
+    r = rank(store.all(), sandbox, explore_fraction=0.9)
+    picks = r.shortlist(3)
+    assert [c.entry_id for c in picks if not c.explore] == ["Q11"]
+
+
+def test_a_single_slot_survives_a_large_fraction(sandbox, store):
+    """The k=1 guarantee has to hold for every accepted fraction, not only the
+    small ones the default happens to use."""
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
+    r = rank(store.all(), sandbox, explore_fraction=0.5)
+    assert [s.entry_id for s in r.shortlist(1)] == ["Q11"]
+
+
+def test_a_queue_no_larger_than_the_shortlist_has_nothing_to_reserve(sandbox, store):
+    """Everything is dispatched either way, so labelling one entry an explore
+    pick tells the judge it 'sits low on score by design' about an entry that is
+    simply third."""
+    _increments(store)
+    r = rank(store.all(), sandbox, explore_fraction=0.25)
+    picks = r.shortlist(3)
+    assert [c.entry_id for c in picks] == ["Q11", "Q12", "Q13"]
+    assert [c.entry_id for c in picks if c.explore] == []
+
+
+def test_a_bad_explore_fraction_is_refused_as_an_autoresearch_error(sandbox, store):
+    """`errors.py`: one error type per refusal reason, so no caller has to
+    string-match. A bare ValueError escapes `ar`'s handler as a traceback."""
+    from autoresearch.errors import ConfigError
+    with pytest.raises(ConfigError, match="explore_fraction"):
         rank(store.all(), sandbox, explore_fraction=1.0)
