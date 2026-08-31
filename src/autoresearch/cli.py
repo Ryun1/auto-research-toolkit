@@ -528,7 +528,7 @@ def cmd_budget(args):
     held = [e for e in entries if e.claim
             and not config.track_for(e.id).machine.status(e.status).terminal]
     print(f"\n{len(held)} live claim(s)")
-    claims = Claims(store, config, session=getattr(args, "session", "budget"))
+    claims = Claims(store, config, session=args.session)
     for entry in held:
         # Runs spent under THIS claim, not the entry's whole history: work
         # done under an earlier claim went against that claim's ceiling.
