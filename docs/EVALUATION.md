@@ -337,8 +337,21 @@ one indistinguishable message and the actual cause (a bad path) took a separate
 run to find. A failure that reads as a result, in the code written to prevent
 failures that read as results.
 
-None of these were caught by reasoning. All four were caught by running the
-thing against 412 real entries and 9,443 real rows.
+**5. The domain shipped as the getting-started example did not pass the gate.**
+Found only when explicitly rechecking finished work. `domains/toy` — named in the
+README as the thing you run first — had accumulated the debris of a manual CLI
+walkthrough, and a later `--reopen` left its generated view out of step with its
+records, so `ar validate` on it exited 1. Every test used a fixture that copies
+the domain and **wipes exactly those directories first**, so 146 passing tests
+said nothing about what was actually committed. This is H101's shape precisely: a
+verification block that reported OK having checked strictly less than the gate.
+The fix is a test that checks the artefact rather than a cleaned copy of it, and
+it is the one of these five that generalises furthest — a test suite that
+normalises away the state it is meant to inspect is not testing the artefact.
+
+None of these were caught by reasoning. Four were caught by running the thing
+against 412 real entries and 9,443 real rows; the fifth was caught only by going
+back over finished work and asking what had not been looked at.
 
 ### What the migration says about the source corpus
 
