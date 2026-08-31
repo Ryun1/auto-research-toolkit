@@ -47,9 +47,12 @@ the goal, the domain's measure command, and the paths to the domain's guides.
   "summary": "the numbers and the arithmetic to the verdict, in one or two sentences",
   "closure_kind": "mechanism | slope | cell",
   "reopen_condition": "required for slope and cell",
-  "runs": 3
+  "runs": 3,
+  "gpu_hours": 0
 }
 ```
 
-`runs` is how many measurements you spent; it is charged to the campaign budget,
-so report it accurately.
+`runs` is how many measurements you spent and `gpu_hours` how much accelerator
+time they took (0 if none). Both are charged to the campaign's meters, and a
+meter nobody feeds is a ceiling that does not exist — so report them accurately
+even when the answer is zero.

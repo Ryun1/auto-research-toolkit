@@ -138,8 +138,7 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0) -> str:
                + ("  [moving]" if goal.target.moving else ""))
     if best is not None and target:
         value, entry_id = best
-        distance = (value - target) / abs(target) if goal.direction == "minimise" \
-            else (target - value) / abs(target)
+        distance = goal.distance_to(value, target)
         out.append(f"best       {_fmt(value)}  ({entry_id})   "
                    f"distance {distance:+.2%}"
                    + ("  ** GOAL MET **" if distance <= 0 else ""))

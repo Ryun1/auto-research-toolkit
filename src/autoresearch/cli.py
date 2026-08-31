@@ -119,17 +119,10 @@ def cmd_board(args):
     except AutoresearchError as exc:
         print(f"(target unavailable: {exc})", file=sys.stderr)
         target = None
-    best = None
-    for record in all_runs:
-        if record.status != "ok":
-            continue
-        try:
-            value = config.goal.objective_value(record.metrics)
-        except AutoresearchError:
-            continue
-        if best is None or value < best[0]:
-            best = (value, record.entry or record.id)
-    print(render.board(config, entries, all_runs, target, best, skipped))
+    best = runs_mod.best_run(all_runs, config.goal)
+    print(render.board(config, entries, all_runs, target,
+                       (best[0], best[1].entry or best[1].id) if best else None,
+                       skipped))
     return 0
 
 
@@ -311,7 +304,14 @@ def cmd_budget(args):
     config = _load(args)
     entries = _store(config).all()
     all_runs = runs_mod.read_all(config.paths.runs)
-    domain = budget_mod.domain_budget(config, spent_runs=len(all_runs))
+    # Consumption is read back from the iteration records, the same source the
+    # coordinator charges against, so `ar budget` and the loop cannot disagree
+    # about how much of a ceiling is left.
+    recorded = budget_mod.recorded_usage(config)
+    domain = budget_mod.domain_budget(
+        config, spent_runs=len(all_runs) + recorded["runs"],
+        spent_money=recorded["money"],
+        spent_gpu_hours=recorded["gpu_hours"])
     iteration = budget_mod.iteration_budget(config)
     print(domain.report())
     print()
@@ -334,25 +334,22 @@ def cmd_budget(args):
         target = _probe_target(config)
     except AutoresearchError:
         target = None
-    best = None
-    for record in all_runs:
-        if record.status != "ok":
-            continue
-        try:
-            value = config.goal.objective_value(record.metrics)
-        except AutoresearchError:
-            continue
-        if best is None or value < best:
-            best = value
+    best = runs_mod.best_run(all_runs, config.goal)
     decision = budget_mod.should_stop(
         config,
-        measurements=None,
+        measurements=best[1].metrics if best else None,
         target=target,
         budgets=[domain])
     print(f"\nstop decision: {decision}")
-    if best is not None and target is not None:
-        met = config.goal.direction == "minimise" and best < target
-        print(f"best objective {best:,.0f} vs target {target:,.0f}"
+    # `target` is tested for truth, not for None: a zero target cannot be
+    # normalised against, and `is_met` refuses it rather than dividing by it.
+    if best is not None and target:
+        # The goal decides what "met" means -- its direction, and its own
+        # `stop_when` if it declares one. This line used to test `<` against the
+        # target itself, which said "not met" for every maximise domain and
+        # disagreed with the stop decision printed directly above it.
+        met = config.goal.is_met(best[1].metrics, target)
+        print(f"best objective {best[0]:,.0f} vs target {target:,.0f}"
               + ("  ** GOAL MET **" if met else ""))
     return 0
 

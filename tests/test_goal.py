@@ -84,3 +84,18 @@ def test_yield_floor_stops_a_loop_that_stopped_learning():
 
 def test_inactive_yield_floor_never_breaches():
     assert not YieldFloor().breached([0] * 50)
+
+
+def test_better_asks_the_goal_rather_than_assuming_smaller_wins():
+    """Three call sites each kept their own `<`, so a maximise domain was told
+    its worst measurement was its best."""
+    low = make(direction="minimise", objective="T", stop_when=None, derived={})
+    high = make(direction="maximise", objective="T", stop_when=None, derived={})
+    assert low.better(1.0, 2.0) and not low.better(2.0, 1.0)
+    assert high.better(2.0, 1.0) and not high.better(1.0, 2.0)
+
+
+def test_distance_to_and_distance_agree():
+    g = make(direction="maximise", objective="T", stop_when=None, derived={})
+    assert g.distance_to(g.objective_value({"T": 90.0, "Q": 1.0}), 100.0) == \
+        g.distance({"T": 90.0, "Q": 1.0}, 100.0)
