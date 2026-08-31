@@ -59,7 +59,7 @@ def test_ideas_land_as_ordinary_entries(sandbox, store):
 
 def test_a_scout_that_raises_is_attributed_and_the_others_still_file(
         sandbox, store):
-    """`_fan_out` substitutes silence for failure; research must not."""
+    """A failure filtered from the replies reads as silence; research must not."""
     import threading
     outcomes = [RuntimeError("the scout's backend fell over"), [dict(PROPOSAL)]]
     lock = threading.Lock()

@@ -172,6 +172,53 @@ class CostlyBrain(ScriptedBrain):
                      cost_usd=self.per_ask)
 
 
+def test_a_generator_that_raises_is_attributed(sandbox, store):
+    """Filtering a failed generator out of the replies reads as a queue that
+    starves; a failure goes on the record, the way a scout's does."""
+    import re
+    import threading
+    proposal = {
+        "title": "an unrolled idea",
+        "hypothesis": "unrolling beats caching here",
+        "prediction": "measuring it moves the objective",
+        "bar": "at least 1% on the objective",
+        "confidence": 0.4, "impact": 0.05, "cost": 2.0,
+        "mechanisms": ["generated"],
+        "why_filed": "the board has not tried it",
+    }
+    outcomes = [RuntimeError("the generator's backend fell over"), [proposal]]
+    lock = threading.Lock()
+
+    def handler(brief):
+        with lock:
+            outcome = outcomes.pop()
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    coordinator = Coordinator(
+        sandbox, ScriptedBrain({**IDLE, Role.GENERATOR: handler}))
+    history = coordinator.run(max_iterations=1)
+    phase = next(p for it in history for p in it.phases if p.name == "generate")
+    assert len(store.all()) == 1, "the healthy generator's idea survives"
+    assert any(re.search(r"generator \d+ raised", line) for line in phase.detail)
+
+
+def test_a_failed_target_probe_is_recorded_not_silent(sandbox):
+    """target=None must be distinguishable from 'no target configured' (H98):
+    the orient record carries the reason the probe failed."""
+    def broken_probe(command):
+        raise RuntimeError("the probe exploded")
+
+    coordinator = Coordinator(sandbox, ScriptedBrain(IDLE),
+                              probe_target=broken_probe)
+    it = Iteration(n=coordinator._last_recorded_n() + 1)
+    phase = coordinator.orient(it)
+    assert it.target is None
+    assert any("target probe failed" in line and "exploded" in line
+               for line in phase.detail)
+
+
 def test_model_spend_is_charged_to_the_campaign_money_meter(sandbox):
     """The money meter was built from `policy.spend_ceiling` and then never
     spent, so the loop could not reach the budget exit on money."""
@@ -401,8 +448,8 @@ def test_orient_counts_only_genuinely_resumed_iterations(sandbox):
     second = Coordinator(sandbox, ToyBrain(sandbox))
     second.run(max_iterations=2)
     for it in second.history[1:]:
-        detail = next(p for p in it.phases if p.name == "orient").detail[0]
-        assert "resumed 1 prior iteration(s), through 1" == detail, detail
+        detail = next(p for p in it.phases if p.name == "orient").detail
+        assert "resumed 1 prior iteration(s), through 1" in detail, detail
 
 
 def test_an_iteration_record_is_written_atomically(sandbox, monkeypatch):

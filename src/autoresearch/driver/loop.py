@@ -203,16 +203,33 @@ class Coordinator:
 
     # -- helpers -----------------------------------------------------------
 
-    def _target(self):
+    def _target(self, detail=None):
+        """The goal's target, or None with the reason on `detail`.
+
+        A failed probe is recorded, never silent: a target that reads as None
+        is indistinguishable from a domain that configured none (H98), and the
+        goal-met exit is dead either way."""
         try:
             return self.config.goal.target.resolve(self.probe_target)
-        except Exception:
+        except Exception as exc:      # the probe is domain input; attributed
+            if detail is not None:
+                detail.append(f"target probe failed: {exc}")
             return None
 
     def _best(self):
         """`(objective, record)` for the best measurement on disk, or None."""
         return runs_mod.best_run(runs_mod.read_all(self.config.paths.runs),
                                  self.config.goal)
+
+    @staticmethod
+    def _norm_title(title) -> str:
+        return str(title).strip().lower()
+
+    def _seen_titles(self) -> set[str]:
+        """Every title already in the record, normalised: the H60 dedup key.
+        One derivation -- generate and research must refuse the same
+        duplicates, or the two paths file different ones."""
+        return {self._norm_title(e.title) for e in self.store.all()}
 
     def _charge(self, it: Iteration, reply) -> None:
         """The one place model spend lands: this iteration's tally *and* the
@@ -342,7 +359,7 @@ class Coordinator:
         phase = it.phase("orient")
         start = time.time()
         entries = self.store.all()
-        it.target = self._target()
+        it.target = self._target(phase.detail)
         best = self._best()
         it.objective = best[0] if best else None
         phase.read = len(entries)
@@ -387,18 +404,22 @@ class Coordinator:
                              "prediction, bar, confidence (0-1), impact (fractional "
                              "move on the objective), cost (in run-units), "
                              "mechanisms (list of tags), why_filed.")))
-        replies = self._fan_out(Role.GENERATOR, briefs)
+        numbered = list(enumerate(briefs))
         phase.read = len(briefs)
 
-        existing = {e.title.strip().lower() for e in self.store.all()}
-        for reply in replies:
+        existing = self._seen_titles()
+        for (i, _), ok, reply in self._map(
+                lambda nb: self.brain.ask(Role.GENERATOR, nb[1]), numbered):
+            if not ok:
+                phase.detail.append(f"generator {i} raised {reply!r}")
+                continue
             for proposal in (reply.data or []):
                 if not isinstance(proposal, dict) or not proposal.get("title"):
                     continue
-                if proposal["title"].strip().lower() in existing:
+                if self._norm_title(proposal["title"]) in existing:
                     continue          # two generators proposing one idea (H60)
                 entry = self._file(proposal)
-                existing.add(entry.title.strip().lower())
+                existing.add(self._norm_title(entry.title))
                 phase.detail.append(entry.id)
                 phase.did += 1
             self._charge(it, reply)
@@ -656,9 +677,9 @@ class Coordinator:
         board; their ideas land through the same `_file` path a generator's
         do, so the next `rank` prices them and the next loop can claim them.
         The record keeps which backend each scout ran on, and a scout that
-        raised is attributed rather than dropped -- `_fan_out` substitutes
-        silence for failure, and a silent scout is indistinguishable from a
-        question that opened nothing.
+        raised is attributed rather than dropped -- a failure filtered from
+        the replies would read as silence, indistinguishable from a question
+        that opened nothing.
         """
         phase = it.phase("research")
         start = time.time()
@@ -683,7 +704,7 @@ class Coordinator:
                              "closed direction. Return [] if it opens "
                              "nothing.")))
         phase.read = len(briefs)
-        existing = {e.title.strip().lower() for e in self.store.all()}
+        existing = self._seen_titles()
 
         def scout(numbered_brief):
             i, brief = numbered_brief
@@ -701,10 +722,10 @@ class Coordinator:
             for proposal in proposals:
                 if not isinstance(proposal, dict) or not proposal.get("title"):
                     continue
-                if str(proposal["title"]).strip().lower() in existing:
+                if self._norm_title(proposal["title"]) in existing:
                     continue          # two agents proposing one idea (H60)
                 entry = self._file(proposal)
-                existing.add(entry.title.strip().lower())
+                existing.add(self._norm_title(entry.title))
                 filed += 1
                 phase.did += 1
             phase.detail.append(
@@ -882,12 +903,6 @@ class Coordinator:
             phase.error = f"{len(problems)} problem(s)"
         phase.seconds = time.time() - start
         return phase
-
-    # -- fan-out -----------------------------------------------------------
-
-    def _fan_out(self, role, briefs):
-        return [value for _, ok, value in self._map(
-            lambda b: self.brain.ask(role, b), briefs) if ok]
 
     def _map(self, fn, items):
         """Run `fn` over `items` in parallel.
