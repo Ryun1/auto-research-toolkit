@@ -29,7 +29,7 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from .errors import BudgetExceeded
+from .errors import AutoresearchError, BudgetExceeded
 
 
 @dataclass
@@ -170,8 +170,13 @@ def recorded_usage(config) -> dict[str, float]:
     for path in sorted(directory.glob("*.json")):
         try:
             record = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue      # an unreadable record is not a licence to spend again
+        except (OSError, ValueError) as exc:
+            raise AutoresearchError(
+                f"{path}: not a readable iteration record ({exc}). The "
+                "campaign budget is rebuilt from these records, so an "
+                "unreadable one under-counts the ceiling -- and a budget that "
+                "under-counts does not stop. Fix or remove it deliberately.") \
+            from exc
         for meter, field_name in USAGE_FIELDS.items():
             try:
                 usage[meter] += float(record.get(field_name) or 0.0)

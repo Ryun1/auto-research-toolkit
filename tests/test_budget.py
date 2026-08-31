@@ -9,9 +9,10 @@ from autoresearch.budget import (
     Meter,
     domain_budget,
     iteration_budget,
+    recorded_usage,
     should_stop,
 )
-from autoresearch.errors import BudgetExceeded
+from autoresearch.errors import AutoresearchError, BudgetExceeded
 from conftest import make_entry
 
 
@@ -99,3 +100,13 @@ def test_claim_budget_uses_the_claims_own_ceiling(toy, sandbox, store):
                                max_runs=3, max_hours=1.5))
     b = claim_budget(e, sandbox)
     assert b["runs"].ceiling == 3 and b["hours"].ceiling == 1.5
+
+
+def test_recorded_usage_refuses_an_unreadable_record(sandbox):
+    """Dropping an unreadable record under-counts the campaign ceiling -- the
+    licence to spend again the old comment claimed to deny. read_history
+    refuses such a history; the standalone read refuses too."""
+    sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
+    (sandbox.paths.iterations / "corrupt.json").write_text('{"n": 1, ')
+    with pytest.raises(AutoresearchError, match="corrupt.json"):
+        recorded_usage(sandbox)
