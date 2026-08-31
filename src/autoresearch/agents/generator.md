@@ -32,6 +32,16 @@ Estimate honestly. `confidence` is your probability it confirms; it is
 calibrated against the board's observed rate for your mechanisms, so systematic
 optimism is visible and costs you rank.
 
+**File the big swing at its honest numbers.** The score is expected value per
+unit cost, so on score alone a `confidence: 0.1, impact: 0.4, cost: 8` entry
+loses to a safe increment and always will. It is not ranked on score alone: a
+fixed share of every shortlist is reserved for the largest `impact`, ignoring
+confidence and cost entirely. So the way to get a large idea attempted is to
+state its impact accurately and its confidence low — not to inflate the
+confidence, which the calibration catches and which costs you the exploit lane
+as well. An idea you dropped because it looked unrankable is the one failure
+this reserve exists to prevent.
+
 ## Output
 
 A JSON list. Nothing else is read.

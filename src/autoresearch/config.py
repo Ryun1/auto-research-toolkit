@@ -30,6 +30,7 @@ from .goal import Goal
 from .hardware import Requirement
 from .lanes import Lanes
 from .policy import Policy
+from .rank import EXPLORE_FRACTION
 from .states import StateMachine, default_machine
 
 CONFIG_NAME = "domain.toml"
@@ -82,6 +83,15 @@ class DomainConfig:
     budgets: dict[str, float]
     knowledge: list[str] = field(default_factory=list)
     coordinator: dict = field(default_factory=dict)
+    #: share of each shortlist reserved for the largest `impact`, ignoring
+    #: confidence and cost. Typed rather than left in the `coordinator` dict
+    #: because it is a risk appetite -- how much of an iteration a domain will
+    #: spend on a swing that probably fails -- and a domain chasing a frontier
+    #: that moved 22.5% in 18.8 days wants a different one from a domain
+    #: polishing a number that is nearly converged. Validated at load: it
+    #: reaches a float multiplication in `Ranking.shortlist`, and finding that
+    #: out mid-iteration costs a run.
+    explore_fraction: float = EXPLORE_FRACTION
     #: what each experiment class needs of the machine, checked before it runs
     hardware: dict = field(default_factory=dict)
     #: rentable classes, each costed only if someone measured its ratio
@@ -205,6 +215,7 @@ class DomainConfig:
                 description=spec.get("description", ""),
                 migrate_from=spec.get("migrate_from", ""))
 
+        coordinator = dict(data.get("coordinator") or {})
         lanes_spec = data.get("lanes") or {}
         if "findings" not in lanes_spec:
             raise ConfigError(
@@ -223,11 +234,32 @@ class DomainConfig:
             commands=dict(data.get("commands") or {}),
             budgets={k: float(v) for k, v in (data.get("budgets") or {}).items()},
             knowledge=list(data.get("knowledge") or []),
-            coordinator=dict(data.get("coordinator") or {}),
+            coordinator=coordinator,
+            explore_fraction=_explore_fraction(coordinator),
             hardware={name: Requirement.from_dict(name, spec)
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)
                     for spec in (data.get("remote") or [])])
+
+
+def _explore_fraction(coordinator: dict) -> float:
+    """Read and check `[coordinator] explore_fraction`.
+
+    Absent means the core default; `0` means the domain has decided against a
+    reserve and must not be defaulted back into one, which is why this tests for
+    the key rather than for falsiness."""
+    if "explore_fraction" not in coordinator:
+        return EXPLORE_FRACTION
+    raw = coordinator["explore_fraction"]
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ConfigError(
+            f"coordinator.explore_fraction must be a number, got {raw!r}")
+    if not 0.0 <= raw < 1.0:
+        raise ConfigError(
+            f"coordinator.explore_fraction must be in [0, 1), got {raw!r}; "
+            "a reserve of the whole shortlist leaves no exploit lane, and the "
+            "score is what connects an iteration to the objective")
+    return float(raw)
 
 
 def discover(start=None) -> pathlib.Path:

@@ -1,11 +1,12 @@
 # Architecture
 
-Five diagrams. The first says who owns what; the rest expand one iteration,
-the roles inside it, the entry lifecycle, and the worker pool.
+Six diagrams. The first says who owns what; the rest expand one iteration,
+the roles inside it, the entry lifecycle, the worker pool, and how a campaign
+moves between machines.
 
 Everything here is drawn from `src/autoresearch/driver/loop.py` (the
-coordinator), `driver/brain.py` (the model seam), `states.py` (the lifecycle)
-and `workspaces.py` (the pool).
+coordinator), `driver/brain.py` (the model seam), `states.py` (the lifecycle),
+`rank.py` (scoring and the reserve) and `workspaces.py` (the pool).
 
 ## 1. The three layers
 
@@ -28,7 +29,7 @@ flowchart TB
         direction LR
         coord["Coordinator<br/>driver/loop.py"]
         store["Store<br/>one record per entry"]
-        rank["rank.py<br/>formula over recorded numbers"]
+        rank["rank.py<br/>formula over recorded numbers,<br/>plus a reserve for amplitude"]
         budget["budget.py<br/>every ceiling is a meter,<br/>campaign spend read back from disk"]
         render["render.py<br/>every view is generated"]
         hw["hardware.py · escalate.py<br/>what the host can run,<br/>and what renting would cost"]
@@ -68,9 +69,9 @@ that did nothing is distinguishable from a phase that did not run.
 ```mermaid
 flowchart LR
     start(["run_iteration(n)"]) --> orient
-    orient["orient<br/>read record, resolve target,<br/>reap dead claims"]
+    orient["orient<br/>read record, resolve target,<br/>reap dead claims,<br/>report resumed history"]
     generate["generate<br/>N generators, in parallel"]
-    rankp["rank<br/>score, then judge may reorder"]
+    rankp["rank<br/>score, reserve for amplitude,<br/>then judge may reorder"]
     dispatch["dispatch<br/>claim → worker → verdict"]
     curate["curate<br/>re-price what moved,<br/>write views"]
     qc["qc<br/>mechanical first, model second"]
@@ -232,3 +233,40 @@ dispatched before any of them answers, so a meter charged after the fact bounds
 nothing. And `gpu_hours` has to come back through the reply because the rows a
 worker wrote live in its own workspace, not in the coordinator's `data/runs` —
 the ledger cannot answer that meter alone.
+
+## 6. Resuming on another machine
+
+The coordination primitives are single-filesystem, so two machines working in
+parallel is not supported. *Sequential* handoff is, and it turns on one thing:
+`state/iterations/` is read as well as written.
+
+```mermaid
+flowchart LR
+    subgraph a["Machine A"]
+        r1["ar loop<br/>iterations 1, 2, 3"]
+    end
+    rec[("state/iterations/<br/>0001 · 0002 · 0003<br/>committed")]
+    subgraph b["Machine B"]
+        ctor["Coordinator.__init__<br/>read_history()"]
+        r2["ar loop<br/>continues at 4"]
+    end
+    local["state/claims/lock<br/>workspace pool<br/>.gitignore'd"]
+
+    r1 --> rec --> ctor --> r2
+    r1 -.->|"holder, pid,<br/>absolute paths"| local
+    local -.->|"never travels"| b
+```
+
+Three consequences, each of which was a defect before it was a design:
+
+- **Numbering continues from the highest record**, and reusing a recorded number
+  is refused *before* any phase runs rather than at record time, when the fanout
+  has already been spent. Numbering from zero in each process overwrote the
+  previous session's audit trail — silently, and by the session resuming it.
+- **`yield_floor` needs history to work at all.** The third exit wants
+  `over_iterations` samples of confirmed-per-iteration; seeing only the current
+  process's, it never fired under `--iterations 1`.
+- **The claim lock and the workspace pool never travel.** They name a holder, a
+  pid and absolute paths that mean nothing on the other machine, so the findings
+  lane enumerates `state/entries` and `state/iterations` rather than taking
+  `state/` whole.

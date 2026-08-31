@@ -32,6 +32,8 @@ import concurrent.futures as futures
 import dataclasses
 import datetime as dt
 import json
+import os
+import pathlib
 import time
 from dataclasses import dataclass, field
 
@@ -89,6 +91,13 @@ class Iteration:
         self.phases.append(p)
         return p
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Iteration":
+        data = dict(data)
+        data["phases"] = [Phase(**p) if isinstance(p, dict) else p
+                          for p in data.get("phases", [])]
+        return cls(**data)
+
     @property
     def confirmed(self) -> int:
         return sum(1 for v in self.verdicts.values() if v in ("confirmed", "fixed"))
@@ -108,6 +117,39 @@ class Iteration:
         return "\n".join(out)
 
 
+def read_history(directory) -> list[Iteration]:
+    """Every iteration already recorded, in order.
+
+    This directory was write-only: nothing read it back, so every new `ar loop`
+    process started numbering at 1 again. Two things broke, and both bite
+    hardest in the workflow the records exist to serve -- stopping work on one
+    machine and resuming it on another.
+
+    The audit trail of the previous session was overwritten, silently, by the
+    session that resumed it. And `yield_floor` -- the third exit, the one that
+    stops a loop that has stopped repaying its machine time -- needs
+    `over_iterations` samples of confirmed-per-iteration and only ever saw what
+    the current process had run. Resume often enough, or run `--iterations 1`,
+    and that stop condition never fires at all.
+
+    Malformed records are reported with their filename, never skipped: a reader
+    that quietly drops a row is how a corpus grows history nobody can explain.
+    """
+    directory = pathlib.Path(directory)
+    if not directory.exists():
+        return []
+    out = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            out.append(Iteration.from_dict(json.loads(path.read_text())))
+        except (ValueError, TypeError) as exc:
+            raise AutoresearchError(
+                f"{path}: not a readable iteration record ({exc}). It was "
+                f"written by this loop, so a record it cannot read back is a "
+                f"corrupt history, not something to resume past.") from exc
+    return sorted(out, key=lambda i: i.n)
+
+
 class Coordinator:
     """Runs iterations until the goal is met, a budget runs out, or the queue
     stops repaying the machine time."""
@@ -118,7 +160,16 @@ class Coordinator:
         self.store = Store(config.paths.entries)
         self.claims = Claims(self.store, config, session)
         self.probe_target = probe_target
-        self.history: list[Iteration] = []
+        # Resumed from disk, so stopping here and picking the work up on
+        # another machine continues the numbering and the yield floor's
+        # window rather than restarting both at one.
+        self.history: list[Iteration] = read_history(config.paths.iterations)
+        # Fixed here, not read off `history` later: that list grows as this
+        # process runs, so a length read per-iteration reports work this
+        # process did as work it resumed -- in the record whose only job is to
+        # say what happened.
+        self.resumed = len(self.history)
+        self.resumed_through = self.history[-1].n if self.history else 0
         # A domain adopting this core arrives with a corpus in its own older
         # schema. Those rows are not counted against this campaign's run budget
         # -- the budget is for work this loop does -- but the count is kept and
@@ -261,7 +312,11 @@ class Coordinator:
         it.objective = best[0] if best else None
         phase.read = len(entries)
         phase.did = 1
-        phase.detail = [f"host={self.host.fingerprint}",
+        if self.resumed:
+            phase.detail.append(
+                f"resumed {self.resumed} prior iteration(s), "
+                f"through {self.resumed_through}")
+        phase.detail += [f"host={self.host.fingerprint}",
                         f"target={it.target}", f"best={it.objective}",
                         f"runs charged to this campaign="
                         f"{self.domain_budget['runs'].spent:g}"]
@@ -345,8 +400,15 @@ class Coordinator:
         remaining = min(self.domain_budget["runs"].remaining(),
                         budget["runs"].remaining())
         ranking = rank_mod.rank(entries, self.config, host=self.host,
-                                budget_ok=lambda e: e.cost <= remaining)
+                                budget_ok=lambda e: e.cost <= remaining,
+                                explore_fraction=self.config.explore_fraction)
         phase.read = len(entries)
+        k = int(budget["fanout"].remaining())
+        # Computed before the judge so the brief can name the entries the
+        # reserve would take. An explore pick sits low on score by
+        # construction, and a judge shown it unlabelled reads the ranking as
+        # broken and vetoes the one slot aimed at a big swing.
+        reserve = [c.entry_id for c in ranking.shortlist(k) if c.explore]
 
         # The judge may reorder within the shortlist; it may not overrule a
         # hard filter, and apply_veto refuses that outright.
@@ -358,10 +420,14 @@ class Coordinator:
                           "title": s.title} for s in ranking.scored],
                 excluded=[{"id": s.entry_id, "why": s.excluded}
                           for s in ranking.excluded],
+                explore_reserve=reserve,
                 instruction=("Return a JSON list of vetoes, each {entry_id, "
                              "action: promote|demote|drop, justification}. "
                              "Return [] if the ordering is right. You may not "
-                             "veto an excluded entry.")))
+                             "veto an excluded entry. `explore_reserve` names "
+                             "the entries taking the reserved slots, ranked on "
+                             "impact alone -- they sit low on score by design, "
+                             "which is not a reason to veto them.")))
             self._charge(it, reply)
             vetoes = [rank_mod.Veto(v["entry_id"], v["action"], v.get("justification", ""))
                       for v in (reply.data or []) if isinstance(v, dict)]
@@ -371,11 +437,13 @@ class Coordinator:
         except (BudgetExceeded, AutoresearchError, ValueError, KeyError) as exc:
             phase.detail.append(f"judge skipped: {exc}")
 
-        k = int(budget["fanout"].remaining())
         shortlist = ranking.shortlist(k)
         it.shortlist = [s.entry_id for s in shortlist]
         phase.did = len(shortlist)
         phase.detail.append(f"{len(ranking.excluded)} excluded by hard filters")
+        taken = [c.entry_id for c in shortlist if c.explore]
+        if taken:
+            phase.detail.append(f"explore reserve: {', '.join(taken)}")
         phase.seconds = time.time() - start
         return phase, shortlist
 
@@ -628,6 +696,15 @@ class Coordinator:
     # -- the loop ----------------------------------------------------------
 
     def run_iteration(self, n: int) -> Iteration:
+        # Before any phase runs, not after: a collision discovered at record
+        # time has already spent the fanout, and the cheapest moment to refuse
+        # is the one where nothing has been claimed yet.
+        record = self.config.paths.iterations / f"{n:04d}.json"
+        if record.exists():
+            raise AutoresearchError(
+                f"iteration {n} is already recorded at {record}. Overwriting it "
+                f"would destroy the earlier session's audit trail; `run()` "
+                f"continues from {self._last_recorded_n()}.")
         it = Iteration(n=n)
         budget = budget_mod.iteration_budget(self.config)
         pool = Pool(self.config, f"{self.session}-it{n}")
@@ -666,9 +743,23 @@ class Coordinator:
         return it
 
     def _record(self, it: Iteration) -> None:
+        """Write one iteration record, atomically.
+
+        `read_history` refuses an unreadable record rather than skipping it, so
+        a half-written file does not degrade the next run -- it stops it, at
+        construction, with no way past. Truncate-then-write leaves exactly that
+        window open on the crash this directory exists to survive, so the
+        record is built beside its name and moved onto it in one step.
+        """
         path = self.config.paths.iterations / f"{it.n:04d}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(dataclasses.asdict(it), indent=2, default=str))
+        body = json.dumps(dataclasses.asdict(it), indent=2, default=str)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_text(body)
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _last_recorded_n(self) -> int:
         """The highest iteration number already on disk.
@@ -685,6 +776,10 @@ class Coordinator:
         return highest
 
     def run(self, max_iterations: int = 10, on_iteration=None) -> list[Iteration]:
+        """Iterations this call ran. `self.history` holds those plus whatever
+        was resumed -- the caller reports a count and sums a cost over what
+        comes back, and neither is true of a previous machine's work."""
+        already = len(self.history)
         start = max(len(self.history), self._last_recorded_n())
         for i in range(max_iterations):
             it = self.run_iteration(start + i + 1)
@@ -692,4 +787,4 @@ class Coordinator:
                 on_iteration(it)
             if it.stop != budget_mod.RUNNING:
                 break
-        return self.history
+        return self.history[already:]

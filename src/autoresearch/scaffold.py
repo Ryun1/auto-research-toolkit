@@ -72,7 +72,7 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
 
         [lanes]
         # Default-deny: anything not matching is scaffolding and takes review.
-        findings = "^(data/runs|data/artifacts|inbox|docs|state)/"
+        findings = "^(data/runs|data/artifacts|inbox|docs|state/entries|state/iterations)/"
 
         [policy]
         # Above this, a person approves. Rented compute is charged here.
@@ -104,6 +104,12 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         workers_per_iteration    = 3
         generators_per_iteration = 2
         max_parallel             = 3
+        # Share of each shortlist reserved for the largest `impact`, ignoring
+        # confidence and cost. The score is expected value per unit cost, which
+        # is risk-neutral, so without a reserve a cheap certain increment always
+        # beats an honest long shot and the loop never attempts a big swing.
+        # Raise it while the frontier is moving; 0 disables it entirely.
+        explore_fraction         = 0.2
         ''').replace("{metric_block}", metric_block)
 
 
@@ -249,6 +255,25 @@ here: those hold outside the range measured and should never be re-proposed.
 '''
 
 
+GITIGNORE = '''# Per-machine state. Stopping work on one machine and resuming on another is a
+# supported workflow; these two are exactly what must NOT travel with it.
+#
+# state/claims/ holds the claim lock. It names a holder and a pid that mean
+# nothing on the other machine, so a committed lock buys a stall until it goes
+# stale (claim_lock_stale_seconds) and a steal notice naming a session that was
+# never running here -- plus a merge conflict on every handoff, over a file
+# whose whole purpose is local mutual exclusion.
+state/claims/
+
+# .ar/ holds the workspace pool: markers recording absolute paths that exist on
+# one machine only. The coordinator destroys its own slots in a `finally`;
+# anything left here after a crash is cleared with:
+#     git worktree prune
+#     git branch --list 'ar/*' | xargs -n1 git branch -D
+.ar/
+'''
+
+
 def init(root, name: str, objective: str = "cost", metrics=("cost",),
          target: float = 100.0, force: bool = False) -> list[pathlib.Path]:
     root = pathlib.Path(root).resolve()
@@ -274,5 +299,19 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
         path = root / rel
         path.write_text(content)
         written.append(path)
+
+    # `.gitignore` is appended, never written over. Every other file here
+    # belongs to the domain being scaffolded, but this one routinely exists
+    # already in a directory someone is adopting -- and what it protects is
+    # exactly the class of path `[policy] forbidden_paths` exists for. The
+    # `domain.toml` guard does not cover it: a directory with a `.gitignore`
+    # and no `domain.toml` is the normal case, not the refused one.
+    ignore = root / ".gitignore"
+    existing = ignore.read_text() if ignore.exists() else ""
+    if "state/claims/" not in existing:
+        joiner = "" if not existing or existing.endswith("\n\n") else (
+            "\n" if existing.endswith("\n") else "\n\n")
+        ignore.write_text(existing + joiner + GITIGNORE)
+        written.append(ignore)
     (root / "bin" / "measure").chmod(0o755)
     return written

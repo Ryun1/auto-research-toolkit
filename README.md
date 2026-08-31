@@ -44,8 +44,10 @@ flowchart LR
 
 Every phase is metered. Generation runs *every* iteration, concurrently with the
 work, so the queue never starves. Ranking is a formula over recorded numbers that
-a judge may reorder but not overrule. Workers get isolated workspaces the
-coordinator creates and destroys. QC is mechanical first and a model second.
+a judge may reorder but not overrule, with a share of every shortlist reserved
+for amplitude so the loop can still attempt a big swing. Workers get isolated
+workspaces the coordinator creates and destroys. QC is mechanical first and a
+model second.
 
 ## A domain supplies four things
 
@@ -70,7 +72,9 @@ prefix = "Q"
 view = "docs/log/Hypothesis Queue.md"
 
 [lanes]
-findings = "^(data/runs|inbox|docs|state)/"
+# `state/` is enumerated, never taken whole: state/claims holds a lock whose
+# holder and pid mean nothing on another machine.
+findings = "^(data/runs|data/artifacts|inbox|docs|state/entries|state/iterations)/"
 
 [[policy.human_only]]
 pattern = "thing submit"
@@ -82,6 +86,10 @@ iteration_fanout      = 3
 iteration_max_spawns  = 10
 iteration_max_seconds = 3600
 domain_max_runs       = 500
+
+[coordinator]
+workers_per_iteration = 3
+explore_fraction      = 0.2      # share of each shortlist reserved for amplitude
 
 [commands]
 measure      = "bin/measure"
@@ -112,13 +120,25 @@ ar --domain domains/toy board
 
 ## Start a new research project
 
+**One repository per project, with this toolkit installed into it as a
+dependency.** Do not fork it and do not copy it in. A project owns the four
+domain things and nothing else, so a fork has nothing to customise and forfeits
+every core fix; and because every document here is generated, an upgrade has
+nothing to merge by hand.
+
 ```bash
-ar init ~/research/widgets --name widgets \
+mkdir ~/research/widgets && cd ~/research/widgets && git init
+python -m venv .venv && source .venv/bin/activate
+pip install "autoresearch @ git+https://github.com/Ryun1/auto-research-toolkit@main"
+
+ar init . --name widgets \
    --objective "round(latency) * memory" --metric latency --metric memory --target 5000
 ```
 
-That writes a domain which **validates clean and runs before you edit anything** —
-a scaffold whose first act is to fail teaches you to ignore the validator. Then:
+`ar init` refuses to scaffold over an existing `domain.toml`, so pointing it at
+a fresh repo is safe. What it writes **validates clean and runs before you edit
+anything** — a scaffold whose first act is to fail teaches you to ignore the
+validator. Then:
 
 1. `bin/measure` — replace `evaluate()` with your real experiment
 2. `goal.yaml` — the metrics it returns, and what winning means
@@ -126,6 +146,41 @@ a scaffold whose first act is to fail teaches you to ignore the validator. Then:
 4. `domain.toml` — `[policy]` never-rules, `[budgets]`, `[hardware]`
 5. `ar hardware` — what this machine can and cannot run
 6. `ar loop` — go
+
+The domain does not have to live anywhere in particular: `ar` finds the nearest
+enclosing `domain.toml`, or takes `--domain`. `domains/toy` sits inside this
+repository only because it is the fixture the tests run the whole loop against.
+
+### Why its own repository
+
+- **Workers get real isolation.** The workspace pool cuts a git worktree per
+  slot when the domain root is a git repository, and falls back to copying the
+  tree when it is not.
+- **The corpus is the project.** `state/`, `data/runs/` and `inbox/` accumulate
+  under the domain root, and the `[lanes] findings` regex is anchored there.
+  Those records are the thing being built; they belong in the project's history.
+
+### Two decisions worth making on day one
+
+**Pin the toolkit, in the project.** A run record's `provenance` carries the
+host, the interpreter and a hash of `bin/measure` — not the core version. So if
+ranking or closure semantics move under you mid-project, nothing in the corpus
+says which core produced which decision. Replace the `@main` above with a tag or
+a commit SHA, or commit a lockfile, and bump deliberately. An editable install
+against a local checkout is fine while the two are developed together — then the
+pin is a SHA the project records.
+
+**Commit `state/` and `data/runs/`.** Gitignore `.venv`, `__pycache__` and the
+workspace pool (`.ar/`) — not the records. A confirmed result that lived only in an
+ignored checkout, and so could not be reproduced, is one of the defects in
+`docs/EVALUATION.md` (H39) that this layout exists to prevent.
+
+### Where a change belongs
+
+If you want to change something that is not one of the four domain-owned files —
+a new closure kind, the ranking formula, a brain, a role prompt — that is a core
+change and belongs upstream on the `H` track. Patching it into the project is
+the fork, arriving one increment at a time.
 
 ## Commands
 
@@ -135,6 +190,7 @@ ar hardware    what this machine is, what it can run, and what it cannot
 ar escalate    whether to rent compute, which class, and the arithmetic
 ar board       one screen: goal, distance to target, queues, live claims, measurements
 ar rank        score the queue and show the numbers it ranked on
+               (--explore F overrides coordinator.explore_fraction)
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar entry       file, show and list entries
@@ -234,6 +290,38 @@ thumb. `GO` and `NOT_TRIGGERED` exit 0; `REFUSE` and `NEEDS_MEASUREMENT` exit 1,
 each naming something that has to happen before money is worth spending. Nothing
 here spends money.
 
+## Working across two machines
+
+The loop's coordination primitives are single-filesystem: the claim lock is an
+`O_CREAT|O_EXCL` file, the TTL is local wall-clock, and ids are `max + 1` over
+local records. So two machines running *at the same time* is not supported.
+Stopping on one and picking the work up on another is, and costs one rule each
+way:
+
+- **Stop between iterations.** The coordinator destroys its workspace pool in
+  its own `finally` and QC asserts no claim outlived dispatch, so a completed
+  iteration leaves nothing held. Commit `state/entries`, `state/iterations`,
+  `data/runs`, `inbox` and `docs/log`; pull before you resume.
+- **`state/claims/` and `.ar/` never travel**, and the scaffold's `.gitignore`
+  and lane boundary both say so. A committed lock names a holder and a pid that
+  mean nothing on the other machine — H32 reintroduced by other means — and the
+  workspace markers record absolute paths that are not there.
+- **Use one session name across both machines.** Claims, releases and the
+  run-file name all key off `--session`, and those are equality checks: under
+  one name the second machine can release or close what the first left behind,
+  which is otherwise refused outright. (Run them concurrently under one name and
+  those same checks pass when they should refuse — which is why the two rules
+  are a pair.)
+- **After a crash**, `ar reap --ttl-hours 0 <id>` frees a claim whose holder is
+  gone, and `git worktree prune` followed by
+  `git branch --list 'ar/*' | xargs -n1 git branch -D` clears the pool. Anything
+  a worker wrote only inside its slot is unrecoverable — which is why a memo
+  backing a closure has to live under the domain root.
+
+Iteration records are read back at startup, so numbering continues and the
+`yield_floor` stop keeps its window across the handoff. Reusing a recorded
+iteration number is refused before any phase runs.
+
 ## The seven invariants
 
 Each comes from a failure class in `docs/EVALUATION.md`, and each has a test.
@@ -278,6 +366,41 @@ already paid for. A `slope` or `cell` refutation only **penalises**, because it
 re-opens outside its band, and excluding it would be exactly the over-claim the
 taxonomy exists to prevent.
 
+## Ranking, and the reserve for amplitude
+
+```
+score = confidence × impact / cost × staleness × overlap
+```
+
+Expected value per unit cost, over numbers already in the record. That is
+risk-neutral, and risk-neutral EV/cost is **pure exploitation**: an honest long
+shot (confidence 0.10, impact 0.40, cost 8 → 0.005) loses to a safe increment
+(0.85, 0.02, 1 → 0.017) by 3.4×, and would need impact above 1.0 — more than the
+whole objective — to draw level. Nothing else in the formula corrects for it,
+because `staleness` and `overlap` are both bounded by 1: every term is a penalty
+and none is a bonus. Left alone, the loop cannot attempt a big swing.
+
+So `[coordinator] explore_fraction` reserves that share of each shortlist for
+the largest **`impact`**, ignoring confidence and cost — precisely the terms
+that bury a long shot. Risk appetite is a domain decision, which is why it is a
+domain's to set: a domain chasing a frontier that moved 22.5% in 18.8 days wants
+a different one from a domain polishing a converged number. `0` is read as a
+decision, not as unset.
+
+Three things it deliberately does not do:
+
+- **It is not a second route past the hard filters.** It reorders among
+  *ranked* entries only, so a `mechanism`-refuted direction stays dead however
+  large its impact looks.
+- **It never takes the whole shortlist, and never spends the only slot.**
+- **It honours a judge's `demote`/`drop`** — both of which `apply_veto`
+  implements by moving the card to the tail, which is exactly where the reserve
+  looks.
+
+`ar rank --explore F` overrides it for one look. The judge's brief names which
+entries hold reserved slots, because an explore pick sits low on score *by
+construction* and a judge shown one unlabelled reads the ranking as broken.
+
 ## Roles
 
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:
@@ -288,7 +411,7 @@ may return, and where the coordinator refuses it.
 
 ## Status
 
-The core is complete and tested (212 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (255 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.

@@ -82,3 +82,49 @@ def test_ar_budget_survives_a_zero_target(sandbox, capsys):
     assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
     out = capsys.readouterr().out
     assert "stop decision" in out and "best objective" not in out
+
+
+# -- the explore reserve, as a domain decision ---------------------------
+
+
+def _minimal(tmp_path, coordinator=""):
+    (tmp_path / "goal.yaml").write_text(
+        "goal:\n  id: g\n  objective: T\n  metrics: {T: {}}\n  target: {value: 1}\n")
+    (tmp_path / CONFIG_NAME).write_text(
+        '[domain]\nname="x"\n[lanes]\nfindings="^a/"\n'
+        '[[tracks]]\nid="r"\nprefix="Q"\n' + coordinator)
+    return tmp_path
+
+
+def test_a_domain_may_set_its_own_explore_fraction(tmp_path):
+    """How much of a shortlist to spend on amplitude is a risk appetite, and
+    risk appetite belongs to the domain, not to the core."""
+    config = DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\nexplore_fraction = 0.5\n"))
+    assert config.explore_fraction == 0.5
+
+
+def test_a_domain_that_says_nothing_gets_the_core_default(tmp_path):
+    from autoresearch.rank import EXPLORE_FRACTION
+    config = DomainConfig.load(_minimal(tmp_path))
+    assert config.explore_fraction == EXPLORE_FRACTION
+
+
+def test_a_domain_may_disable_the_reserve_outright(tmp_path):
+    """Zero is a real answer, and must not read as 'unset' and be defaulted."""
+    config = DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\nexplore_fraction = 0\n"))
+    assert config.explore_fraction == 0.0
+
+
+def test_an_out_of_range_explore_fraction_is_refused_at_load(tmp_path):
+    with pytest.raises(ConfigError, match="coordinator.explore_fraction"):
+        DomainConfig.load(_minimal(
+            tmp_path, "[coordinator]\nexplore_fraction = 1.0\n"))
+
+
+def test_a_non_numeric_explore_fraction_is_refused_at_load(tmp_path):
+    """It reaches a float division either way; failing here costs no iteration."""
+    with pytest.raises(ConfigError, match="coordinator.explore_fraction"):
+        DomainConfig.load(_minimal(
+            tmp_path, '[coordinator]\nexplore_fraction = "a fifth"\n'))

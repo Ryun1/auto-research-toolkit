@@ -1,0 +1,16 @@
+# Per-machine state. Stopping work on one machine and resuming on another is a
+# supported workflow; these two are exactly what must NOT travel with it.
+#
+# state/claims/ holds the claim lock. It names a holder and a pid that mean
+# nothing on the other machine, so a committed lock buys a stall until it goes
+# stale (claim_lock_stale_seconds) and a steal notice naming a session that was
+# never running here -- plus a merge conflict on every handoff, over a file
+# whose whole purpose is local mutual exclusion.
+state/claims/
+
+# .ar/ holds the workspace pool: markers recording absolute paths that exist on
+# one machine only. The coordinator destroys its own slots in a `finally`;
+# anything left here after a crash is cleared with:
+#     git worktree prune
+#     git branch --list 'ar/*' | xargs -n1 git branch -D
+.ar/
