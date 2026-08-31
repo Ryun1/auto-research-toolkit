@@ -2,7 +2,8 @@ import pytest
 
 from autoresearch.errors import SchemaError
 from autoresearch.goal import Goal
-from autoresearch.runs import OK, RunRecord, append, read_all
+from autoresearch.runs import (OK, RunRecord, append, best_run,
+                               read_all)
 
 GOAL = Goal.from_dict({"goal": {
     "id": "g", "objective": "ops * peak",
@@ -96,3 +97,32 @@ def test_failed_is_not_subject_to_the_all_zero_guard():
     """The H134 guard is about a run claiming success having measured nothing;
     a run that reports failure is not making that claim."""
     record(status="failed", metrics={"ops": 0.0, "peak": 0.0}).validate(GOAL)
+
+
+MAXIMISE = Goal.from_dict({"goal": {
+    "id": "g", "objective": "ops * peak", "direction": "maximise",
+    "metrics": {"ops": {}, "peak": {}}, "target": {"value": 1}}})
+
+
+def test_best_run_follows_the_goal_direction():
+    """The board, `ar budget` and the coordinator each hardcoded `<`, so a
+    `direction: maximise` domain was shown its worst row as its best -- and the
+    coordinator handed that row to the stop decision, which could therefore
+    never reach the goal-met exit."""
+    rows = [record(metrics={"ops": 10.0, "peak": 1.0}, id="lo"),
+            record(metrics={"ops": 100.0, "peak": 1.0}, id="hi")]
+    assert best_run(rows, GOAL)[1].id == "lo"
+    assert best_run(rows, MAXIMISE)[1].id == "hi"
+
+
+def test_best_run_skips_rows_it_cannot_score():
+    """A row that cannot be scored is skipped, never counted as zero (H134)."""
+    rows = [record(metrics={}, status="invalid", id="bad"),
+            record(metrics={"ops": 5.0}, id="partial"),
+            record(metrics={"ops": 10.0, "peak": 1.0}, id="good")]
+    value, best = best_run(rows, GOAL)
+    assert (best.id, value) == ("good", 10.0)
+
+
+def test_best_run_of_nothing_is_none():
+    assert best_run([], GOAL) is None

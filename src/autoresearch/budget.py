@@ -25,6 +25,7 @@ nobody checks, and a warning nobody can act on is worse than nothing (H138).
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 
@@ -130,17 +131,53 @@ def iteration_budget(config) -> Budget:
     })
 
 
-def domain_budget(config, spent_runs: float = 0.0, spent_money: float = 0.0) -> Budget:
+def domain_budget(config, spent_runs: float = 0.0, spent_money: float = 0.0,
+                  spent_gpu_hours: float = 0.0) -> Budget:
     """What the whole campaign may spend. Money is a human gate."""
     budget = Budget("domain", {
         "runs": Meter("runs", config.budgets.get("domain_max_runs"),
                       spent=spent_runs, unit="runs"),
         "gpu_hours": Meter("gpu_hours", config.budgets.get("domain_max_gpu_hours"),
-                           unit="gpu-h"),
+                           spent=spent_gpu_hours, unit="gpu-h"),
         "money": Meter("money", config.policy.spend_ceiling, spent=spent_money,
                        unit=config.policy.currency),
     })
     return budget
+
+
+#: what one iteration's record says it consumed, keyed by the meter it feeds
+USAGE_FIELDS = {"money": "cost_usd", "runs": "runs", "gpu_hours": "gpu_hours"}
+
+
+def recorded_usage(config) -> dict[str, float]:
+    """What this campaign has already consumed, read back from the iteration
+    records on disk.
+
+    A campaign meter has to survive a restart. Rebuilt from `spent=0.0` at every
+    `ar loop`, a campaign ceiling is not a ceiling -- it is a per-invocation
+    allowance anyone can renew by pressing up-arrow.
+
+    The run ledger cannot answer this on its own: a worker measures inside its
+    own workspace, so the rows it wrote are not in the coordinator's `data/runs`
+    and its GPU-hours are recorded nowhere else at all. Where the two sources
+    could overlap the count is high rather than low, deliberately -- a budget
+    that over-counts stops early, and one that under-counts does not stop.
+    """
+    usage = dict.fromkeys(USAGE_FIELDS, 0.0)
+    directory = config.paths.iterations
+    if not directory.exists():
+        return usage
+    for path in sorted(directory.glob("*.json")):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue      # an unreadable record is not a licence to spend again
+        for meter, field_name in USAGE_FIELDS.items():
+            try:
+                usage[meter] += float(record.get(field_name) or 0.0)
+            except (TypeError, ValueError, AttributeError):
+                continue  # a malformed figure must not make the loop unstartable
+    return usage
 
 
 # -- the third exit --------------------------------------------------------

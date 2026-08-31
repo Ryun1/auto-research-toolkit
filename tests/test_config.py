@@ -60,3 +60,25 @@ def test_check_reports_a_missing_command(toy, monkeypatch):
 def test_check_reports_duplicate_track_prefixes(toy):
     toy.tracks["harness"].prefix = "Q"
     assert any("share an id prefix" in p for p in toy.check())
+
+
+def test_ar_budget_survives_a_zero_target(sandbox, capsys):
+    """`is_met` refuses to normalise against a zero target, so the goal-met line
+    has to test the target for truth rather than for None -- driving a metric to
+    zero is a legitimate goal and it must not end in a traceback."""
+    from autoresearch import cli
+    from autoresearch.runs import RunRecord, append
+
+    goal = sandbox.paths.root / "goal.yaml"
+    goal.write_text(goal.read_text().replace(
+        "  target:\n    source: bin/probe-target\n    moving: true\n"
+        "    refresh_seconds: 300",
+        "  target:\n    value: 0.0").replace(
+        '  stop_when: "objective < target"', ""))
+    append(sandbox.paths.runs / "seed.jsonl",
+           RunRecord(metrics={"ops": 10.0, "peak": 1.0}, session="seed",
+                     provenance={"host": "test"}))
+
+    assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
+    out = capsys.readouterr().out
+    assert "stop decision" in out and "best objective" not in out

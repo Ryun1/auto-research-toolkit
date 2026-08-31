@@ -128,3 +128,58 @@ def test_zero_local_throughput_is_refused_rather_than_extrapolated():
     with pytest.raises(ConfigError, match="must be positive"):
         recommend(trigger=TOO_SLOW, local=zero, units_needed=1, classes=[FAST],
                   gate0_correct_locally=True)
+
+
+# -- the verb --------------------------------------------------------------
+#
+# The module was fully implemented, tested, and reachable from nothing: no CLI
+# verb, no call from the loop, and `Throughput` constructed only in tests.
+
+def run(config, *args):
+    from autoresearch import cli
+    return cli.main(["--domain", str(config.paths.root), "escalate",
+                     "--need", "200000", "--rate", "2.22", "--unit", "candidates",
+                     "--concurrency", "8", *args])
+
+
+def test_the_verb_recommends_the_cheapest_measured_class(sandbox, capsys):
+    code = run(sandbox, "--hours-available", "24", "--correct-locally")
+    out = capsys.readouterr().out
+    assert code == 0 and "escalation: GO" in out
+    assert "toy-cpu-16core" in out and "$     3.50" in out
+    assert "toy-gpu-unmeasured" in out and "not costed" in out, \
+        "an unmeasured class is listed and refused, not quietly dropped"
+
+
+def test_gate_0_defaults_to_refusing(sandbox, capsys):
+    """Asserted by the domain, never inferred: core cannot know whether your
+    port is correct, and a rented hour spent finding that out buys nothing."""
+    code = run(sandbox, "--hours-available", "24")
+    assert code == 1 and "Gate 0 fails" in capsys.readouterr().out
+
+
+def test_local_hardware_meeting_the_need_is_not_an_escalation(sandbox, capsys):
+    code = run(sandbox, "--hours-available", "40", "--correct-locally")
+    assert code == 0 and "NOT_TRIGGERED" in capsys.readouterr().out
+
+
+def test_an_undeclared_hardware_class_is_refused(sandbox, capsys):
+    code = run(sandbox, "--hardware", "typo", "--correct-locally")
+    assert code == 2
+    assert "not declared" in capsys.readouterr().err
+
+
+def test_a_zero_local_rate_is_refused_rather_than_read_as_sufficient(sandbox, capsys):
+    from autoresearch import cli
+    code = cli.main(["--domain", str(sandbox.paths.root), "escalate",
+                     "--need", "1", "--rate", "0", "--concurrency", "8"])
+    assert code == 2 and "must be positive" in capsys.readouterr().err
+
+
+def test_with_no_measured_ratio_the_verdict_is_not_a_guess(sandbox, capsys):
+    toml = sandbox.paths.root / "domain.toml"
+    toml.write_text(toml.read_text().replace("measured_ratio = 2.5", "# unmeasured"))
+    code = run(sandbox, "--hours-available", "24", "--correct-locally")
+    out = capsys.readouterr().out
+    assert code == 1 and "NEEDS_MEASUREMENT" in out
+    assert "spec sheet" in out

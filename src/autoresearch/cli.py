@@ -109,6 +109,71 @@ def cmd_hardware(args):
     return 1 if blocked else 0
 
 
+def cmd_escalate(args):
+    """Should this stop running locally, and what should be rented instead.
+
+    Every input core can know, core supplies: the host, the declared hardware
+    classes, the rentable classes and their measured ratios, the spend ceiling.
+    The four it cannot are flags, because none of them has an honest source
+    here: how fast this workload runs locally, how many units it needs, how long
+    the answer stays worth having, and whether the work is already correct. In
+    particular Gate 0 is a flag and defaults to false -- core cannot know whether
+    your port is right, and guessing in the permissive direction is how an hour
+    gets spent debugging on a rented box.
+    """
+    config = _load(args)
+    host = hw.detect()
+
+    capability = None
+    if args.hardware:
+        if args.hardware not in config.hardware:
+            raise AutoresearchError(
+                f"hardware class {args.hardware!r} is not declared by this "
+                f"domain; declared: {sorted(config.hardware) or '(none)'}")
+        capability = hw.check(host, config.hardware[args.hardware])
+
+    if args.rate <= 0:
+        # `recommend` refuses this too, but only once something has triggered --
+        # and a zero rate reported as "local hardware is meeting the need" is
+        # the failure-that-reads-as-a-result shape this harness keeps filing.
+        raise AutoresearchError(
+            f"--rate is {args.rate:g}; a local throughput must be positive to "
+            "extrapolate from. A run that made no progress is not a rate.")
+    local = hw.Throughput(
+        value=args.rate, unit=args.unit,
+        # A rate that does not name its machine is not a measurement. The
+        # default is the machine we are standing on, never a blank.
+        machine=args.machine or host.fingerprint,
+        concurrency=args.concurrency, workload=args.workload or "",
+        lower_bound=args.lower_bound)
+    hours_needed = (args.need / local.value / 3600.0) if local.value > 0 else None
+
+    trigger = escalate_mod.triggered(
+        capability=capability,
+        hours_needed=hours_needed, hours_available=args.hours_available,
+        stalled_iterations=args.stalled_iterations,
+        stall_threshold=args.stall_threshold)
+
+    escalation = escalate_mod.recommend(
+        trigger=trigger, local=local, units_needed=args.need,
+        classes=config.remote, hours_available=args.hours_available,
+        spend_ceiling=config.policy.spend_ceiling,
+        gate0_correct_locally=args.correct_locally,
+        gate0_note=args.gate0_note or "")
+
+    print(f"host        {host.fingerprint}")
+    if capability is not None:
+        print("  " + capability.report().replace("\n", "\n  "))
+    if not config.remote:
+        print("  (no [[remote]] classes declared; there is nothing to cost)")
+    print(escalation.report())
+    # A verdict is not an error, but REFUSE and NEEDS_MEASUREMENT each name
+    # something that has to happen before money is worth spending, so they are
+    # distinguishable from "go" without reading the prose.
+    return 0 if escalation.verdict in (escalate_mod.GO,
+                                       escalate_mod.NOT_TRIGGERED) else 1
+
+
 def cmd_board(args):
     config = _load(args)
     store = _store(config)
@@ -119,17 +184,10 @@ def cmd_board(args):
     except AutoresearchError as exc:
         print(f"(target unavailable: {exc})", file=sys.stderr)
         target = None
-    best = None
-    for record in all_runs:
-        if record.status != "ok":
-            continue
-        try:
-            value = config.goal.objective_value(record.metrics)
-        except AutoresearchError:
-            continue
-        if best is None or value < best[0]:
-            best = (value, record.entry or record.id)
-    print(render.board(config, entries, all_runs, target, best, skipped))
+    best = runs_mod.best_run(all_runs, config.goal)
+    print(render.board(config, entries, all_runs, target,
+                       (best[0], best[1].entry or best[1].id) if best else None,
+                       skipped))
     return 0
 
 
@@ -311,7 +369,14 @@ def cmd_budget(args):
     config = _load(args)
     entries = _store(config).all()
     all_runs = runs_mod.read_all(config.paths.runs)
-    domain = budget_mod.domain_budget(config, spent_runs=len(all_runs))
+    # Consumption is read back from the iteration records, the same source the
+    # coordinator charges against, so `ar budget` and the loop cannot disagree
+    # about how much of a ceiling is left.
+    recorded = budget_mod.recorded_usage(config)
+    domain = budget_mod.domain_budget(
+        config, spent_runs=len(all_runs) + recorded["runs"],
+        spent_money=recorded["money"],
+        spent_gpu_hours=recorded["gpu_hours"])
     iteration = budget_mod.iteration_budget(config)
     print(domain.report())
     print()
@@ -334,25 +399,22 @@ def cmd_budget(args):
         target = _probe_target(config)
     except AutoresearchError:
         target = None
-    best = None
-    for record in all_runs:
-        if record.status != "ok":
-            continue
-        try:
-            value = config.goal.objective_value(record.metrics)
-        except AutoresearchError:
-            continue
-        if best is None or value < best:
-            best = value
+    best = runs_mod.best_run(all_runs, config.goal)
     decision = budget_mod.should_stop(
         config,
-        measurements=None,
+        measurements=best[1].metrics if best else None,
         target=target,
         budgets=[domain])
     print(f"\nstop decision: {decision}")
-    if best is not None and target is not None:
-        met = config.goal.direction == "minimise" and best < target
-        print(f"best objective {best:,.0f} vs target {target:,.0f}"
+    # `target` is tested for truth, not for None: a zero target cannot be
+    # normalised against, and `is_met` refuses it rather than dividing by it.
+    if best is not None and target:
+        # The goal decides what "met" means -- its direction, and its own
+        # `stop_when` if it declares one. This line used to test `<` against the
+        # target itself, which said "not met" for every maximise domain and
+        # disagreed with the stop decision printed directly above it.
+        met = config.goal.is_met(best[1].metrics, target)
+        print(f"best objective {best[0]:,.0f} vs target {target:,.0f}"
               + ("  ** GOAL MET **" if met else ""))
     return 0
 
@@ -523,6 +585,45 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("hardware", help="what this machine is and what it can run"
                    ).set_defaults(func=cmd_hardware)
+
+    esc = sub.add_parser(
+        "escalate", help="whether to rent compute, which class, and the arithmetic",
+        description="Recommends rented compute under two gates, and never "
+                    "invents a speedup: a class with no measured ratio for this "
+                    "workload is not costed. Nothing here spends money.")
+    esc.add_argument("--need", type=float, required=True,
+                     help="how many units the work needs, in --unit")
+    esc.add_argument("--rate", type=float, required=True,
+                     help="measured local throughput, units per second")
+    esc.add_argument("--unit", default="units",
+                     help="what --need and --rate count (candidates, shots, ops)")
+    esc.add_argument("--concurrency", type=int, required=True,
+                     help="the concurrency --rate was measured at; a ratio is a "
+                          "function of concurrency as well as machine")
+    esc.add_argument("--workload", help="what was being run; rates for different "
+                                        "workloads never compare")
+    esc.add_argument("--machine", help="where --rate was measured "
+                                       "(default: this host's fingerprint)")
+    esc.add_argument("--lower-bound", action="store_true", dest="lower_bound",
+                     help="the rate was still climbing when it was capped")
+    esc.add_argument("--hours-available", type=float, dest="hours_available",
+                     help="wall clock before the answer stops mattering")
+    esc.add_argument("--hardware", help="declared hardware class to check the "
+                                        "host against")
+    esc.add_argument("--stalled-iterations", type=int, default=0,
+                     dest="stalled_iterations",
+                     help="iterations stalled for a reason you have established "
+                          "is compute-bound")
+    esc.add_argument("--stall-threshold", type=int, default=0,
+                     dest="stall_threshold",
+                     help="how many such iterations count as a trigger")
+    esc.add_argument("--correct-locally", action="store_true",
+                     dest="correct_locally",
+                     help="Gate 0: assert the work is already proven correct on "
+                          "local hardware. Asserted, never inferred")
+    esc.add_argument("--gate0-note", dest="gate0_note",
+                     help="what backs the Gate 0 assertion, or what is missing")
+    esc.set_defaults(func=cmd_escalate)
 
     sub.add_parser("board", help="one screen: goal, queues, claims, measurements"
                    ).set_defaults(func=cmd_board)

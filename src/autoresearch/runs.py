@@ -31,7 +31,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from .errors import SchemaError
+from .errors import AutoresearchError, SchemaError
 
 # Deliberately NOT "run-v1": the first domain to adopt this core already has a
 # `schemas/run-v1.schema.json` of its own, with entirely different required
@@ -131,6 +131,33 @@ def append(path, record: RunRecord) -> pathlib.Path:
     with path.open("a") as fh:
         fh.write(json.dumps(record.to_dict(), sort_keys=True) + "\n")
     return path
+
+
+def best_run(records, goal):
+    """The best valid measurement, in whichever direction the goal wants.
+
+    Returns `(objective_value, record)`, or None if no row is both `ok` and
+    readable against this goal. Rows that cannot be scored are skipped rather
+    than counted as zero -- a metric that reads as absent must not read as a
+    perfect result (H134).
+
+    This exists because the board, `ar budget` and the coordinator's stop
+    decision each had their own copy of this loop and all three hardcoded `<`.
+    A `direction: maximise` domain was therefore shown its *worst* row as its
+    best, and the coordinator fed that row to `should_stop`, so the goal-met
+    exit could never be reached.
+    """
+    best = None
+    for record in records:
+        if record.status != OK:
+            continue
+        try:
+            value = goal.objective_value(record.metrics)
+        except AutoresearchError:
+            continue
+        if best is None or goal.better(value, best[0]):
+            best = (value, record)
+    return best
 
 
 def read_all(directory, strict: bool = False) -> list[RunRecord]:

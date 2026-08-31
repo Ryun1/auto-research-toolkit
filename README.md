@@ -177,6 +177,7 @@ the fork, arriving one increment at a time.
 ```
 ar init        scaffold a new domain that is valid and runnable before you edit it
 ar hardware    what this machine is, what it can run, and what it cannot
+ar escalate    whether to rent compute, which class, and the arithmetic
 ar board       one screen: goal, distance to target, queues, live claims, measurements
 ar rank        score the queue and show the numbers it ranked on
 ar budget      every meter, and the stop decision
@@ -243,7 +244,15 @@ measured ratio for this workload cannot be costed — the verdict is
 `NEEDS_MEASUREMENT`, not a guess. The same walk measured 0.82× on one GPU and
 38.1× on another; nothing about the hardware predicted either.
 
+Core supplies every input it can know — the host, the declared hardware classes,
+the rentable classes and their measured ratios, the spend ceiling. The four it
+cannot are flags, because none of them has an honest source here: how fast this
+workload runs locally, how many units it needs, how long the answer stays worth
+having, and whether the work is already correct.
+
 ```
+$ ar escalate --need 200000 --rate 2.22 --unit candidates --concurrency 8 \
+              --workload screen --hours-available 24 --correct-locally
 escalation: GO  (trigger: too-slow)
   rent rtx-4090: 2.3 h at $0.40/h = $0.90
   local       2.22 candidates/s @ 8-way on Apple-M2/8t/16g [screen]

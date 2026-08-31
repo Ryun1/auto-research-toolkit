@@ -174,18 +174,29 @@ class Goal:
     def objective_value(self, measurements: dict[str, float]) -> float:
         return expr.evaluate(self.objective, self.namespace(measurements))
 
-    def distance(self, measurements: dict[str, float], target: float) -> float:
-        """Signed, normalised distance to the target. Positive means not there
-        yet; negative means past it, in whichever direction the goal wants.
+    def better(self, value: float, than: float) -> bool:
+        """Is `value` the better objective, in whichever direction this goal
+        wants? Three callers each kept their own `<` and all three were wrong
+        for `direction: maximise` -- see `runs.best_run`, which is now the only
+        place that picks a winner."""
+        return value < than if self.direction == MINIMISE else value > than
+
+    def distance_to(self, value: float, target: float) -> float:
+        """Signed, normalised distance from an objective value to the target.
+        Positive means not there yet; negative means past it, in whichever
+        direction the goal wants.
 
         Normalising by the target is what lets ranking compare a proposed
         improvement against the objective without the domain's units leaking
         into core."""
-        value = self.objective_value(measurements)
         if target == 0:
             raise GoalError("cannot normalise distance against a zero target")
         gap = (value - target) if self.direction == MINIMISE else (target - value)
         return gap / abs(target)
+
+    def distance(self, measurements: dict[str, float], target: float) -> float:
+        """`distance_to` for a set of measurements."""
+        return self.distance_to(self.objective_value(measurements), target)
 
     def is_met(self, measurements: dict[str, float], target: float) -> bool:
         ns = self.namespace(measurements)

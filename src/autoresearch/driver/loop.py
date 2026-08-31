@@ -78,6 +78,11 @@ class Iteration:
     objective: float | None = None
     target: float | None = None
     cost_usd: float = 0.0
+    #: what this iteration consumed, so a later invocation can charge it to the
+    #: campaign's meters. An iteration record that does not say what it spent
+    #: leaves every ceiling but `runs` starting from zero at the next `ar loop`.
+    runs: float = 0.0
+    gpu_hours: float = 0.0
 
     def phase(self, name: str) -> Phase:
         p = Phase(name)
@@ -124,7 +129,11 @@ class Coordinator:
         # a measurement.
         self.host = hw.detect()
         rows, self.foreign_rows = runs_mod.read_with_skipped(config.paths.runs)
-        self.domain_budget = budget_mod.domain_budget(config, spent_runs=len(rows))
+        recorded = budget_mod.recorded_usage(config)
+        self.domain_budget = budget_mod.domain_budget(
+            config, spent_runs=len(rows) + recorded["runs"],
+            spent_money=recorded["money"],
+            spent_gpu_hours=recorded["gpu_hours"])
 
     # -- helpers -----------------------------------------------------------
 
@@ -135,17 +144,61 @@ class Coordinator:
             return None
 
     def _best(self):
-        best = None
-        for record in runs_mod.read_all(self.config.paths.runs):
-            if record.status != "ok":
-                continue
-            try:
-                value = self.config.goal.objective_value(record.metrics)
-            except AutoresearchError:
-                continue
-            if best is None or value < best[0]:
-                best = (value, record.metrics)
-        return best
+        """`(objective, record)` for the best measurement on disk, or None."""
+        return runs_mod.best_run(runs_mod.read_all(self.config.paths.runs),
+                                 self.config.goal)
+
+    def _charge(self, it: Iteration, reply) -> None:
+        """The one place model spend lands: this iteration's tally *and* the
+        campaign's money meter.
+
+        The meter was built from `policy.spend_ceiling` and then never spent, so
+        `should_stop` could not reach the budget exit on money however long the
+        loop ran. Recorded rather than `spend()`-ed: the money is already gone
+        by the time we hear about it, and a ceiling that refuses to record an
+        overrun is a ceiling that hides one.
+        """
+        cost = float(getattr(reply, "cost_usd", 0.0) or 0.0)
+        it.cost_usd += cost
+        self.domain_budget["money"].spent += cost
+
+    def _charge_runs(self, it: Iteration, runs: float, gpu_hours: float = 0.0) -> None:
+        """Charge measurements to the campaign, and record them on the iteration.
+
+        The counts are the worker's own report because the rows it wrote landed
+        in its workspace rather than in the coordinator's ledger -- so they are
+        the only numbers available here, and they are charged rather than
+        dropped. `domain_max_gpu_hours` had no feed at all before this, which
+        made it a ceiling that could not be reached by any amount of spending.
+
+        The iteration's *pool* of runs is allocated at dispatch, not here; this
+        is consumption, which is a campaign-level fact.
+        """
+        self.domain_budget["runs"].spent += runs
+        self.domain_budget["gpu_hours"].spent += gpu_hours
+        it.runs += runs
+        it.gpu_hours += gpu_hours
+
+    def _charge_seconds(self, budget) -> float:
+        """Wall clock is spent whether or not anyone spends it. Returns what is
+        left of this iteration's seconds ceiling."""
+        budget["seconds"].spent = time.time() - budget.started
+        return budget["seconds"].remaining()
+
+    def _time_left(self, it: Iteration, budget, phase_name: str) -> bool:
+        """Charge elapsed time and say whether this phase may start.
+
+        `iteration_max_seconds` is scaffolded into every new domain, so a phase
+        it skips has to be visible: a phase that did nothing and a phase that
+        never ran are different facts, which is H98's whole subject.
+        """
+        if self._charge_seconds(budget) > 0:
+            return True
+        meter = budget["seconds"]
+        it.phase(phase_name).error = (
+            f"not run: the iteration's {meter.ceiling:g}s ceiling was spent "
+            f"after {meter.spent:.1f}s")
+        return False
 
     def _brief(self, role: str, iteration: Iteration, **extra) -> str:
         """Everything a role needs, assembled once. The knowledge guides are
@@ -258,7 +311,7 @@ class Coordinator:
                 existing.add(entry.title.strip().lower())
                 phase.detail.append(entry.id)
                 phase.did += 1
-            it.cost_usd += reply.cost_usd
+            self._charge(it, reply)
         phase.seconds = time.time() - start
         return phase
 
@@ -286,7 +339,11 @@ class Coordinator:
         phase = it.phase("rank")
         start = time.time()
         entries = self.store.all()
-        remaining = self.domain_budget["runs"].remaining()
+        # An entry costing more runs than the campaign has left is unaffordable;
+        # so is one costing more than a single iteration may spend. Both meters
+        # were declared, only the first was ever read.
+        remaining = min(self.domain_budget["runs"].remaining(),
+                        budget["runs"].remaining())
         ranking = rank_mod.rank(entries, self.config, host=self.host,
                                 budget_ok=lambda e: e.cost <= remaining)
         phase.read = len(entries)
@@ -305,7 +362,7 @@ class Coordinator:
                              "action: promote|demote|drop, justification}. "
                              "Return [] if the ordering is right. You may not "
                              "veto an excluded entry.")))
-            it.cost_usd += reply.cost_usd
+            self._charge(it, reply)
             vetoes = [rank_mod.Veto(v["entry_id"], v["action"], v.get("justification", ""))
                       for v in (reply.data or []) if isinstance(v, dict)]
             if vetoes:
@@ -330,6 +387,11 @@ class Coordinator:
             try:
                 budget.spend("fanout", note=card.entry_id)
                 budget.spend("spawns", note=f"worker {card.entry_id}")
+                # Allocated from the pool before the worker starts, on the
+                # entry's declared cost. Charged after the fact it would bound
+                # nothing: every card is dispatched before any of them reports.
+                budget.spend("runs", card.terms.get("cost", 1.0),
+                             note=card.entry_id)
             except BudgetExceeded as exc:
                 phase.detail.append(str(exc))
                 break
@@ -357,7 +419,8 @@ class Coordinator:
                         "{verdict: confirmed|refuted|blocked|inconclusive, memo: "
                         "path relative to the domain root, summary, closure_kind: "
                         "mechanism|slope|cell (refutations only), "
-                        "reopen_condition (required for slope/cell), runs: int}."))
+                        "reopen_condition (required for slope/cell), runs: int, "
+                        "gpu_hours: float}."))
                 return self.brain.ask(Role.WORKER, brief, workspace=slot.path)
             finally:
                 pool.release(slot.name)
@@ -372,11 +435,12 @@ class Coordinator:
                     pass
                 phase.did += 1
                 continue
-            it.cost_usd += getattr(value, "cost_usd", 0.0)
+            self._charge(it, value)
             report = value.data if isinstance(value.data, dict) else {}
             verdict = self._apply_verdict(entry_id, report, phase)
             it.verdicts[entry_id] = verdict
-            self.domain_budget["runs"].spent += float(report.get("runs", 0) or 0)
+            self._charge_runs(it, float(report.get("runs", 0) or 0),
+                               float(report.get("gpu_hours", 0) or 0))
             phase.did += 1
         phase.seconds = time.time() - start
         return phase
@@ -445,7 +509,7 @@ class Coordinator:
                              "Return JSON: {reprice: [{entry_id, confidence, "
                              "impact, cost, why}], notes: [str]}. Reprice only "
                              "entries this iteration's results actually move.")))
-            it.cost_usd += reply.cost_usd
+            self._charge(it, reply)
             data = reply.data if isinstance(reply.data, dict) else {}
             for change in data.get("reprice", []):
                 try:
@@ -469,7 +533,7 @@ class Coordinator:
         phase.seconds = time.time() - start
         return phase
 
-    def qc(self, it: Iteration) -> Phase:
+    def qc(self, it: Iteration, budget) -> Phase:
         """Mechanical checks first. A check that is really a grep costs no token."""
         phase = it.phase("qc")
         start = time.time()
@@ -496,8 +560,12 @@ class Coordinator:
             if entry.claim and entry.claim.session == self.session:
                 problems.append(
                     f"{entry_id}: still claimed by the coordinator after dispatch")
-        # Only now is a model asked, and only about what code cannot check.
+        # Only now is a model asked, and only about what code cannot check --
+        # and that ask comes out of the same spawn pool as every other role. It
+        # did not, so the meter that makes a runaway iteration structurally
+        # impossible undercounted by one every iteration.
         try:
+            budget.spend("spawns", note="qc")
             reply = self.brain.ask(Role.QC, self._brief(
                 Role.QC, it,
                 mechanical_problems=problems,
@@ -506,7 +574,7 @@ class Coordinator:
                 instruction=("Verify the iteration happened. Return JSON: "
                              "{problems: [str], harness_debt: [{title, "
                              "hypothesis}], verdict: clean|problems}.")))
-            it.cost_usd += reply.cost_usd
+            self._charge(it, reply)
             data = reply.data if isinstance(reply.data, dict) else {}
             problems += [f"qc: {p}" for p in data.get("problems", [])]
             # A defect in the scaffolding is filed against the harness track, not
@@ -518,7 +586,7 @@ class Coordinator:
                 if harness_track and isinstance(debt, dict) and debt.get("title"):
                     entry = self._file({**debt, "track": harness_track.id})
                     phase.detail.append(f"filed {entry.id} (harness debt)")
-        except (AutoresearchError, KeyError, TypeError) as exc:
+        except (BudgetExceeded, AutoresearchError, KeyError, TypeError) as exc:
             problems.append(f"qc role skipped: {exc}")
 
         phase.did = len(problems)
@@ -565,20 +633,28 @@ class Coordinator:
         pool = Pool(self.config, f"{self.session}-it{n}")
         try:
             self.orient(it)
-            self.generate(it, budget)
-            _, shortlist = self.rank(it, budget)
-            self.dispatch(it, shortlist, budget, pool)
+            shortlist = []
+            # Wall clock gates the phases that start new work; curate and qc
+            # always run, because an iteration that is not recorded did not
+            # happen as far as the next agent is concerned.
+            if self._time_left(it, budget, "generate"):
+                self.generate(it, budget)
+            if self._time_left(it, budget, "rank"):
+                _, shortlist = self.rank(it, budget)
+            if self._time_left(it, budget, "dispatch"):
+                self.dispatch(it, shortlist, budget, pool)
             self.curate(it, budget)
-            self.qc(it)
+            self.qc(it, budget)
         finally:
             # H91: teardown documented in a runbook and wired into no loop left
             # 64 of 64 merged worktrees on disk.
             pool.release_all()
 
+        self._charge_seconds(budget)
         best = self._best()
         decision = budget_mod.should_stop(
             self.config,
-            measurements=best[1] if best else None,
+            measurements=best[1].metrics if best else None,
             target=it.target,
             verdicts_per_iteration=[i.confirmed for i in self.history] + [it.confirmed],
             budgets=[self.domain_budget])
@@ -594,8 +670,22 @@ class Coordinator:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(dataclasses.asdict(it), indent=2, default=str))
 
+    def _last_recorded_n(self) -> int:
+        """The highest iteration number already on disk.
+
+        Numbering from zero in each process overwrote `0001.json` on every new
+        `ar loop`, which threw away that record's spend -- so the money ceiling
+        it feeds silently reset, which is the whole failure `recorded_usage`
+        exists to close.
+        """
+        highest = 0
+        for path in self.config.paths.iterations.glob("*.json"):
+            if path.stem.isdigit():
+                highest = max(highest, int(path.stem))
+        return highest
+
     def run(self, max_iterations: int = 10, on_iteration=None) -> list[Iteration]:
-        start = len(self.history)
+        start = max(len(self.history), self._last_recorded_n())
         for i in range(max_iterations):
             it = self.run_iteration(start + i + 1)
             if on_iteration:
