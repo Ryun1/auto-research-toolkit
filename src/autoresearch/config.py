@@ -20,6 +20,7 @@ misconfigured domain fails *before* an iteration is spent, not during one.
 from __future__ import annotations
 
 import pathlib
+import re
 import tomllib
 from dataclasses import dataclass, field
 
@@ -33,6 +34,10 @@ from .lanes import Lanes
 from .policy import Policy
 from .rank import EXPLORE_FRACTION
 from .states import StateMachine, default_machine
+
+#: Placeholders a `[brain]` command may carry. Validated at load: a misspelled
+#: placeholder discovered mid-iteration is a scout that ran without its prompt.
+BRAIN_PLACEHOLDERS = {"role", "prompt_file", "workspace", "cost_file"}
 
 CONFIG_NAME = "domain.toml"
 
@@ -133,6 +138,11 @@ class DomainConfig:
     #: absent directory reads as zero skills, never as an error.
     skills: Skills = field(default_factory=Skills)
     coordinator: dict = field(default_factory=dict)
+    #: which backend serves each role. `"claude"` names the built-in SDK brain;
+    #: a list of strings is a command run per the ProcessBrain contract in
+    #: `driver/brain.py`. Validated at load -- an unknown role or placeholder
+    #: here is a loop that cannot start, so say so before anything spends.
+    brain: dict = field(default_factory=dict)
     #: share of each shortlist reserved for the largest `impact`, ignoring
     #: confidence and cost. Typed rather than left in the `coordinator` dict
     #: because it is a risk appetite -- how much of an iteration a domain will
@@ -295,12 +305,47 @@ class DomainConfig:
             knowledge=list(data.get("knowledge") or []),
             skills=Skills.from_dict(dict(data.get("skills") or {})),
             coordinator=coordinator,
+            brain=_brain_spec(data.get("brain")),
             explore_fraction=_explore_fraction(coordinator),
             distil_every=_distil_every(coordinator),
             hardware={name: Requirement.from_dict(name, spec)
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)
                     for spec in (data.get("remote") or [])])
+
+
+def _brain_spec(data) -> dict:
+    """Read and check the top-level `brain` table.
+
+    Keys are `default` or a role name; values are `"claude"` (the built-in SDK
+    brain) or a non-empty list of strings, the command the ProcessBrain
+    contract runs. Absent table means every role on the default backend.
+    """
+    from .driver.brain import Role
+
+    spec = {}
+    for key, value in dict(data or {}).items():
+        if key != "default" and key not in Role.ALL:
+            raise ConfigError(
+                f"brain.{key}: not a role; keys are 'default' or one of "
+                f"{', '.join(Role.ALL)}")
+        if value == "claude":
+            spec[key] = value
+            continue
+        if (not isinstance(value, list) or not value
+                or not all(isinstance(part, str) for part in value)):
+            raise ConfigError(
+                f"brain.{key}: must be \"claude\" or a non-empty list of "
+                f"strings, got {value!r}")
+        unknown = ({match for part in value
+                    for match in re.findall(r"\{(\w+)\}", part)}
+                   - BRAIN_PLACEHOLDERS)
+        if unknown:
+            raise ConfigError(
+                f"brain.{key}: unknown placeholder(s) {sorted(unknown)}; "
+                f"allowed: {sorted(BRAIN_PLACEHOLDERS)}")
+        spec[key] = [str(part) for part in value]
+    return spec
 
 
 def _explore_fraction(coordinator: dict) -> float:

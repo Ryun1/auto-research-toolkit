@@ -201,6 +201,7 @@ ar release     hand a claim back, with a reason
 ar reap        free ONE abandoned claim past the TTL
 ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
+ar research    spin up targeted research agents; their ideas land in the record
 ar migrate     convert an existing prose corpus into records (one way)
 ar render      write the generated queue views
 ar validate    check records, views, runs and policy
@@ -466,17 +467,54 @@ Three things it deliberately does not do:
 entries hold reserved slots, because an explore pick sits low on score *by
 construction* and a judge shown one unlabelled reads the ranking as broken.
 
+## The brain is a command, not a vendor
+
+Every role is judgement delegated through one seam, and the seam does not know
+what an agent is. By default roles run on the built-in SDK brain; a domain can
+route any role to any agent that can take a prompt and print a reply:
+
+```yaml
+# goal.yaml
+brain:
+  default: claude                 # the built-in SDK brain
+  curator: ["pi", "-p"]           # any command
+  scout:   ["bin/my-researcher"]
+```
+
+The command contract (`ProcessBrain` in `driver/brain.py`) mirrors the measure
+command's: the brief arrives on **stdin**, `{role}`, `{prompt_file}` (the
+core-owned role prompt), `{workspace}` and `{cost_file}` are substituted into
+argv, the reply is stdout (JSON parsed by the same tolerant reader as every
+other role), and the backend *may* write a number into `{cost_file}` to be
+metered. A backend that does not meter runs free as far as the ceiling knows,
+and its record rows say `cost_usd=0` saying exactly that. Every backend shares
+one money ceiling, so two spenders halve it rather than each holding a copy.
+
 ## Roles
 
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:
-`generator`, `judge`, `worker`, `curator`, `librarian`, `qc`. The brain is swappable —
-`SDKBrain` runs them through the Claude Agent SDK; `ScriptedBrain` runs the whole
-loop with no model, which is what makes `ar loop` a unit test rather than a bill. `docs/ARCHITECTURE.md` diagrams what each role reads, what it
-may return, and where the coordinator refuses it.
+`generator`, `judge`, `worker`, `curator`, `librarian`, `qc`, `scout`. The brain
+is swappable -- `SDKBrain` runs them through the Claude Agent SDK,
+`ProcessBrain` runs them through any command (see above), and `ScriptedBrain`
+runs the whole loop with no model, which is what makes `ar loop` a unit test
+rather than a bill. `docs/ARCHITECTURE.md` diagrams what each role reads, what
+it may return, and where the coordinator refuses it.
+
+### The scout: research the loop did not ask for
+
+`ar research "<question>" [--count N]` spins up N scouts in parallel, each
+briefed with one targeted question plus the whole board (open entries, closed
+directions, skills, budget). A scout looks outside the record -- sources,
+papers, implementations -- and returns idea proposals, which the coordinator
+files as ordinary entries through the same path a generator's take. That means
+a scout's idea is priced by the next `ar rank`, claimable by the next `ar loop`,
+and subject to the same dedup (H60) and closed-direction rules. A scout that
+raised is attributed on the record rather than silently dropped, and each scout
+spends the spawn meter, so researchers cannot flood what generators could not.
 
 ## Status
 
-The core is complete and tested (255 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (342 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.

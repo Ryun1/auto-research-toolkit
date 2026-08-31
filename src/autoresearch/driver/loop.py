@@ -636,6 +636,71 @@ class Coordinator:
         phase.seconds = time.time() - start
         return phase
 
+    def research(self, it: Iteration, budget, question: str,
+                 count: int = 1) -> Phase:
+        """Spin up targeted research scouts and file what they bring back.
+
+        Scouts answer one question the loop did not ask, looking outside the
+        board; their ideas land through the same `_file` path a generator's
+        do, so the next `rank` prices them and the next loop can claim them.
+        The record keeps which backend each scout ran on, and a scout that
+        raised is attributed rather than dropped -- `_fan_out` substitutes
+        silence for failure, and a silent scout is indistinguishable from a
+        question that opened nothing.
+        """
+        phase = it.phase("research")
+        start = time.time()
+        briefs = []
+        for i in range(max(0, count)):
+            try:
+                budget.spend("spawns", note=f"scout {i}")
+            except BudgetExceeded as exc:
+                phase.detail.append(str(exc))
+                break
+            briefs.append(self._brief(
+                Role.SCOUT, it, scout_index=i, scouts=count,
+                question=str(question),
+                instruction=("Research this question against the board and "
+                             "return a JSON list of proposals with keys: "
+                             "title, hypothesis, prediction, bar, confidence "
+                             "(0-1), impact (fractional move on the "
+                             "objective), cost (in run-units), mechanisms "
+                             "(list of tags), sources (list of citations or "
+                             "URLs), why_filed. File only what the question "
+                             "opens; never re-propose an open entry or a "
+                             "closed direction. Return [] if it opens "
+                             "nothing.")))
+        phase.read = len(briefs)
+        existing = {e.title.strip().lower() for e in self.store.all()}
+
+        def scout(numbered_brief):
+            i, brief = numbered_brief
+            return i, self.brain.ask(Role.SCOUT, brief)
+
+        for item, ok, value in self._map(scout, list(enumerate(briefs))):
+            i = item[0]
+            if not ok:
+                phase.detail.append(f"scout {i} raised {value!r}")
+                continue
+            reply = value[1]
+            self._charge(it, reply)
+            proposals = reply.data if isinstance(reply.data, list) else []
+            filed = 0
+            for proposal in proposals:
+                if not isinstance(proposal, dict) or not proposal.get("title"):
+                    continue
+                if str(proposal["title"]).strip().lower() in existing:
+                    continue          # two agents proposing one idea (H60)
+                entry = self._file(proposal)
+                existing.add(entry.title.strip().lower())
+                filed += 1
+                phase.did += 1
+            phase.detail.append(
+                f"scout {i} [{reply.backend or 'unlisted'}]: "
+                f"{len(proposals)} idea(s), {filed} filed")
+        phase.seconds = time.time() - start
+        return phase
+
     def distil(self, it: Iteration, budget, force: bool = False) -> Phase:
         """Promote closed work into skills the next agent reads.
 

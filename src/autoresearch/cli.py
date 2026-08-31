@@ -434,11 +434,11 @@ def cmd_budget(args):
 
 def cmd_loop(args):
     """Run the coordinator. The unattended entry point."""
-    from .driver.brain import SDKBrain
+    from .driver.brain import build_brain
     from .driver.loop import Coordinator
 
     config = _load(args)
-    brain = SDKBrain(config, model=args.model, max_budget_usd=args.max_usd)
+    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd)
 
     def probe(command):
         result = subprocess.run(command.split(), cwd=config.paths.root,
@@ -635,7 +635,7 @@ def cmd_skill_distil(args):
     distillation is -- a second one here would be the copy that drifts.
     """
     from . import budget as _budget
-    from .driver.brain import SDKBrain
+    from .driver.brain import build_brain
     from .driver.loop import Coordinator, Iteration, _iso
 
     config = _load(args)
@@ -653,7 +653,7 @@ def cmd_skill_distil(args):
             print(f"  {name}: {'; '.join(reasons)}")
         print("\nnothing was written (--dry-run)")
         return 0
-    brain = SDKBrain(config, model=args.model, max_budget_usd=args.max_usd)
+    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd)
     coordinator = Coordinator(config, brain, session=args.session)
     it = Iteration(n=coordinator._last_recorded_n() + 1, kind="out-of-band")
     it.target = coordinator._target()
@@ -669,6 +669,40 @@ def cmd_skill_distil(args):
         it.finished = _iso()
         coordinator._record(it)
     print(phase.name, f"read {phase.read}, did {phase.did}")
+    for line in phase.detail:
+        print(f"  {line}")
+    print(f"cost: ${it.cost_usd:.2f}  "
+          f"(recorded as iteration {it.n:04d}, out-of-band)")
+    return 0
+
+
+def cmd_research(args):
+    """Spin up targeted research scouts; their ideas land in the record.
+
+    Out-of-band like `ar skill distil`: one phase, run by hand, recorded and
+    charged -- a scout ask that spends and is not written here is spend the
+    next `ar loop` cannot see. Ideas are filed as ordinary entries, so the
+    next `ar rank` prices them and the next `ar loop` can claim them.
+    """
+    from . import budget as _budget
+    from .driver.brain import build_brain
+    from .driver.loop import Coordinator, Iteration, _iso
+
+    config = _load(args)
+    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd)
+    coordinator = Coordinator(config, brain, session=args.session)
+    it = Iteration(n=coordinator._last_recorded_n() + 1, kind="out-of-band")
+    it.target = coordinator._target()
+    try:
+        phase = coordinator.research(it, _budget.iteration_budget(config),
+                                     question=" ".join(args.question),
+                                     count=args.count)
+    finally:
+        # Recorded even when the phase raised, for the same reason the distil
+        # record is: spend the record does not show is a ceiling that hides it.
+        it.finished = _iso()
+        coordinator._record(it)
+    print(phase.name, f"scouts {phase.read}, filed {phase.did}")
     for line in phase.detail:
         print(f"  {line}")
     print(f"cost: ${it.cost_usd:.2f}  "
@@ -795,6 +829,18 @@ def build_parser() -> argparse.ArgumentParser:
     loop.add_argument("--max-usd", type=float, dest="max_usd",
                       help="hard ceiling on model spend; defaults to policy.spend_ceiling")
     loop.set_defaults(func=cmd_loop)
+
+    research = sub.add_parser(
+        "research", help="spin up targeted research agents; "
+                         "their ideas land in the record as entries")
+    research.add_argument("question", nargs="+",
+                          help="the targeted question the scouts answer")
+    research.add_argument("--count", type=int, default=1,
+                          help="how many scouts to run in parallel (default 1)")
+    research.add_argument("--model")
+    research.add_argument("--max-usd", type=float, dest="max_usd",
+                          help="hard ceiling on model spend; defaults to policy.spend_ceiling")
+    research.set_defaults(func=cmd_research)
 
     entry = sub.add_parser("entry", help="file, show and list entries")
     esub = entry.add_subparsers(dest="entry_cmd", required=True)
