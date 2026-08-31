@@ -104,6 +104,12 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         workers_per_iteration    = 3
         generators_per_iteration = 2
         max_parallel             = 3
+        # Share of each shortlist reserved for the largest `impact`, ignoring
+        # confidence and cost. The score is expected value per unit cost, which
+        # is risk-neutral, so without a reserve a cheap certain increment always
+        # beats an honest long shot and the loop never attempts a big swing.
+        # Raise it while the frontier is moving; 0 disables it entirely.
+        explore_fraction         = 0.2
         ''').replace("{metric_block}", metric_block)
 
 

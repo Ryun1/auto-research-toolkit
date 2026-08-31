@@ -400,8 +400,15 @@ class Coordinator:
         remaining = min(self.domain_budget["runs"].remaining(),
                         budget["runs"].remaining())
         ranking = rank_mod.rank(entries, self.config, host=self.host,
-                                budget_ok=lambda e: e.cost <= remaining)
+                                budget_ok=lambda e: e.cost <= remaining,
+                                explore_fraction=self.config.explore_fraction)
         phase.read = len(entries)
+        k = int(budget["fanout"].remaining())
+        # Computed before the judge so the brief can name the entries the
+        # reserve would take. An explore pick sits low on score by
+        # construction, and a judge shown it unlabelled reads the ranking as
+        # broken and vetoes the one slot aimed at a big swing.
+        reserve = [c.entry_id for c in ranking.shortlist(k) if c.explore]
 
         # The judge may reorder within the shortlist; it may not overrule a
         # hard filter, and apply_veto refuses that outright.
@@ -413,10 +420,14 @@ class Coordinator:
                           "title": s.title} for s in ranking.scored],
                 excluded=[{"id": s.entry_id, "why": s.excluded}
                           for s in ranking.excluded],
+                explore_reserve=reserve,
                 instruction=("Return a JSON list of vetoes, each {entry_id, "
                              "action: promote|demote|drop, justification}. "
                              "Return [] if the ordering is right. You may not "
-                             "veto an excluded entry.")))
+                             "veto an excluded entry. `explore_reserve` names "
+                             "the entries taking the reserved slots, ranked on "
+                             "impact alone -- they sit low on score by design, "
+                             "which is not a reason to veto them.")))
             self._charge(it, reply)
             vetoes = [rank_mod.Veto(v["entry_id"], v["action"], v.get("justification", ""))
                       for v in (reply.data or []) if isinstance(v, dict)]
@@ -426,11 +437,13 @@ class Coordinator:
         except (BudgetExceeded, AutoresearchError, ValueError, KeyError) as exc:
             phase.detail.append(f"judge skipped: {exc}")
 
-        k = int(budget["fanout"].remaining())
         shortlist = ranking.shortlist(k)
         it.shortlist = [s.entry_id for s in shortlist]
         phase.did = len(shortlist)
         phase.detail.append(f"{len(ranking.excluded)} excluded by hard filters")
+        taken = [c.entry_id for c in shortlist if c.explore]
+        if taken:
+            phase.detail.append(f"explore reserve: {', '.join(taken)}")
         phase.seconds = time.time() - start
         return phase, shortlist
 
