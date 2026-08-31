@@ -1,8 +1,7 @@
-from conftest import make_entry
-
 from autoresearch import render
 from autoresearch.entries import Result
 from autoresearch.states import default_machine
+from conftest import make_entry
 
 
 def close(store, entry, **over):

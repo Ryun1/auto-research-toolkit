@@ -299,7 +299,7 @@ class Throughput:
                 + ("  LOWER BOUND (still climbing when capped)"
                    if self.lower_bound else ""))
 
-    def ratio_to(self, other: "Throughput", allow_mismatch: bool = False) -> float:
+    def ratio_to(self, other: Throughput, allow_mismatch: bool = False) -> float:
         """`self / other`, refusing the comparison that produced a retired figure."""
         if not allow_mismatch:
             if self.concurrency != other.concurrency:
@@ -334,7 +334,7 @@ class Requirement:
     min_gpu_memory_gb: float = 0.0
 
     @classmethod
-    def from_dict(cls, name: str, spec: dict) -> "Requirement":
+    def from_dict(cls, name: str, spec: dict) -> Requirement:
         known = {f.name for f in dataclasses.fields(cls)} - {"name"}
         unknown = set(spec) - known
         if unknown:

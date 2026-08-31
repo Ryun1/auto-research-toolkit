@@ -56,7 +56,7 @@ class RemoteClass:
     notes: str = ""
 
     @classmethod
-    def from_dict(cls, spec: dict) -> "RemoteClass":
+    def from_dict(cls, spec: dict) -> RemoteClass:
         try:
             return cls(name=spec["name"], usd_per_hour=float(spec["usd_per_hour"]),
                        measured_ratio=(None if spec.get("measured_ratio") is None

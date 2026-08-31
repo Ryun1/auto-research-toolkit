@@ -38,14 +38,14 @@ from .errors import ClaimError
 
 
 def _now_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
 
 def _age_hours(iso: str) -> float:
     then = dt.datetime.fromisoformat(iso)
     if then.tzinfo is None:
-        then = then.replace(tzinfo=dt.timezone.utc)
-    return (dt.datetime.now(dt.timezone.utc) - then).total_seconds() / 3600.0
+        then = then.replace(tzinfo=dt.UTC)
+    return (dt.datetime.now(dt.UTC) - then).total_seconds() / 3600.0
 
 
 @dataclass
@@ -83,7 +83,7 @@ class Lock:
         except (OSError, ValueError, TypeError):
             return None
 
-    def acquire(self) -> "Lock":
+    def acquire(self) -> Lock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.time() + self.timeout
         payload = json.dumps({"holder": self.holder, "pid": os.getpid(),
@@ -105,7 +105,7 @@ class Lock:
                     raise ClaimError(
                         f"lock {self.path.name} held by {held_by} for "
                         f"{current.age_hours * 3600:.0f}s; waited {self.timeout:.0f}s. "
-                        f"It becomes stealable after {self.stale_after:.0f}s.")
+                        f"It becomes stealable after {self.stale_after:.0f}s.") from None
                 time.sleep(0.05)
 
     def release(self) -> None:

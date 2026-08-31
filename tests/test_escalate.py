@@ -1,9 +1,18 @@
 """Renting compute: two gates, no invented speedups, and money stays human."""
 import pytest
 
-from autoresearch.escalate import (CAPACITY, GO, NEEDS_MEASUREMENT,
-                                   NOT_TRIGGERED, REFUSE, STALLED, TOO_SLOW,
-                                   RemoteClass, recommend, triggered)
+from autoresearch.escalate import (
+    CAPACITY,
+    GO,
+    NEEDS_MEASUREMENT,
+    NOT_TRIGGERED,
+    REFUSE,
+    STALLED,
+    TOO_SLOW,
+    RemoteClass,
+    recommend,
+    triggered,
+)
 from autoresearch.hardware import Capability, Throughput
 
 LOCAL = Throughput(2.22, "candidates", "Apple-M2/8t/16g", 8, workload="screen")

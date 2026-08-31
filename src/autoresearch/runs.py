@@ -107,7 +107,7 @@ class RunRecord:
         return dataclasses.asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "RunRecord":
+    def from_dict(cls, data: dict) -> RunRecord:
         known = {f.name for f in dataclasses.fields(cls)}
         unknown = set(data) - known
         if unknown:

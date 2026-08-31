@@ -1,10 +1,10 @@
 import time
 
 import pytest
-from conftest import make_entry
 
 from autoresearch.claims import Claims, Lock
 from autoresearch.errors import ClaimError
+from conftest import make_entry
 
 
 def test_lock_names_its_holder(sandbox, tmp_path):

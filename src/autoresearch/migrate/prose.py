@@ -129,7 +129,7 @@ def _parse_status(raw: str) -> tuple[str, str | None, str | None]:
 
 def _iso(date: str | None) -> str:
     if not date:
-        return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
     return f"{date}T00:00:00+00:00"
 
 

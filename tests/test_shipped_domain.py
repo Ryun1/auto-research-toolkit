@@ -40,9 +40,9 @@ def test_shipped_toy_domain_ships_no_walkthrough_debris():
 
 def test_shipped_generated_views_match_their_records():
     """Invariant 1, checked against what is committed rather than a copy."""
+    from autoresearch import render
     from autoresearch.config import DomainConfig
     from autoresearch.entries import Store
-    from autoresearch import render
     config = DomainConfig.load(TOY)
     assert render.check_views(config, Store(config.paths.entries).all()) == []
 

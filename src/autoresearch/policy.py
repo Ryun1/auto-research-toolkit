@@ -178,7 +178,7 @@ class Policy:
     # -- construction ----------------------------------------------------
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Policy":
+    def from_dict(cls, data: dict) -> Policy:
         def rules(key):
             out = []
             for spec in data.get(key) or []:

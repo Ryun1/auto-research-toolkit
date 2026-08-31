@@ -3,9 +3,8 @@
 Exit codes matter here: `check` is a gate, and `list` is the screen someone
 looks at before deciding whether to spend an iteration distilling.
 """
-from conftest import close, make_entry, make_skill
-
 from autoresearch import cli
+from conftest import close, make_entry, make_skill
 
 
 def _ar(sandbox, *args):

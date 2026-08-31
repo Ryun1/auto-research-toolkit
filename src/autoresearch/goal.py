@@ -210,7 +210,7 @@ class Goal:
     # -- construction ----------------------------------------------------
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Goal":
+    def from_dict(cls, data: dict) -> Goal:
         if "goal" in data:
             data = data["goal"]
         try:

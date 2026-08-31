@@ -1,7 +1,6 @@
 """`ar rank` — the human's view of the ranking, including the explore reserve."""
-from conftest import make_entry
-
 from autoresearch import cli
+from conftest import make_entry
 
 
 def _queue(store):

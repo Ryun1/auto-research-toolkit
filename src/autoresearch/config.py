@@ -90,7 +90,7 @@ class Skills:
     max_lines: int = 500
 
     @classmethod
-    def from_dict(cls, spec: dict) -> "Skills":
+    def from_dict(cls, spec: dict) -> Skills:
         unknown = set(spec) - {"dir", "max_lines"}
         if unknown:
             raise ConfigError(
@@ -216,7 +216,7 @@ class DomainConfig:
     # -- construction -----------------------------------------------------
 
     @classmethod
-    def load(cls, root) -> "DomainConfig":
+    def load(cls, root) -> DomainConfig:
         root = pathlib.Path(root).resolve()
         config_path = root / CONFIG_NAME
         if not config_path.exists():

@@ -147,7 +147,7 @@ class StateMachine:
     # -- construction ----------------------------------------------------
 
     @classmethod
-    def from_dict(cls, data: dict) -> "StateMachine":
+    def from_dict(cls, data: dict) -> StateMachine:
         raw = data.get("statuses")
         if not raw:
             raise ConfigError("a track's state machine declares no statuses")

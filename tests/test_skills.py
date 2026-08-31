@@ -8,7 +8,7 @@ import pytest
 
 from autoresearch import skills as skills_mod
 from autoresearch.errors import SchemaError
-from conftest import close, make_entry, make_skill, memo
+from conftest import close, make_entry, make_skill
 
 
 def _entries(sandbox, store, *ids, **over):

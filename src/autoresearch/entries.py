@@ -48,7 +48,7 @@ ID_RE = re.compile(r"^([A-Z]+)(\d+)$")
 
 
 def _now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -235,7 +235,7 @@ class Entry:
         return {k: v for k, v in data.items() if v not in (None, [], "")}
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Entry":
+    def from_dict(cls, data: dict) -> Entry:
         known = {f.name for f in dataclasses.fields(cls)}
         unknown = set(data) - known
         if unknown:

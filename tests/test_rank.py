@@ -1,8 +1,8 @@
 import pytest
-from conftest import make_entry
 
 from autoresearch.entries import Claim, Result
 from autoresearch.rank import Veto, apply_veto, rank
+from conftest import make_entry
 
 
 def close(store, entry_id, verdict, kind=None, mechanisms=(), reopen=""):

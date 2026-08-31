@@ -1,8 +1,7 @@
 import pytest
 
 from autoresearch.errors import ConfigError, TransitionError
-from autoresearch.states import (CLOSURE_KINDS, StateMachine, Status, Transition,
-                                 default_machine)
+from autoresearch.states import CLOSURE_KINDS, StateMachine, Status, Transition, default_machine
 
 
 def test_default_machine_is_total():

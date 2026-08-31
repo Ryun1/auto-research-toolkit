@@ -1,15 +1,25 @@
 import pytest
-from conftest import make_entry
 
-from autoresearch.budget import (BUDGET, MET, RUNNING, YIELD, Budget, Meter,
-                                 domain_budget, iteration_budget, should_stop)
+from autoresearch.budget import (
+    BUDGET,
+    MET,
+    RUNNING,
+    YIELD,
+    Budget,
+    Meter,
+    domain_budget,
+    iteration_budget,
+    should_stop,
+)
 from autoresearch.errors import BudgetExceeded
+from conftest import make_entry
 
 
 def test_meter_raises_rather_than_warning():
     """H138: a warning nobody can act on is worse than nothing. Meters refuse."""
     m = Meter("runs", 2, unit="runs")
-    m.spend(); m.spend()
+    m.spend()
+    m.spend()
     with pytest.raises(BudgetExceeded) as exc:
         m.spend()
     assert exc.value.meter == "runs" and "Checkpoint" in str(exc.value)

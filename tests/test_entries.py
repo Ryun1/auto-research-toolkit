@@ -1,9 +1,9 @@
 import pytest
-from conftest import make_entry
 
 from autoresearch.entries import Entry, Result
 from autoresearch.errors import SchemaError, TransitionError
 from autoresearch.states import default_machine
+from conftest import make_entry
 
 
 def result(**over):
@@ -130,4 +130,4 @@ def test_unknown_field_is_refused(store):
 
 def test_malformed_id_is_reported(store):
     with pytest.raises(SchemaError, match="not <PREFIX><digits>"):
-        Entry(id="nope", track="r", title="t").number
+        _ = Entry(id="nope", track="r", title="t").number  # noqa: B018 -- property raises

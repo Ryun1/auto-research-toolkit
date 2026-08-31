@@ -17,7 +17,6 @@ records, and "it seemed empty" is not a check.
 from __future__ import annotations
 
 import pathlib
-import shutil
 import textwrap
 
 from .errors import ConfigError

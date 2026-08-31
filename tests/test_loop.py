@@ -2,13 +2,13 @@
 import json
 
 import pytest
-from conftest import make_entry
-from toy_brain import ToyBrain
 
 from autoresearch.budget import BUDGET, MET, recorded_usage
 from autoresearch.driver.brain import Reply, Role, ScriptedBrain, extract_json
 from autoresearch.driver.loop import Coordinator, Iteration
 from autoresearch.errors import AutoresearchError
+from conftest import make_entry
+from toy_brain import ToyBrain
 
 
 @pytest.fixture
@@ -354,7 +354,7 @@ def test_the_yield_floor_counts_iterations_from_earlier_sessions(sandbox):
     """
     from autoresearch.driver import loop as loop_mod
 
-    for n in range(1, 4):
+    for _ in range(1, 4):
         Coordinator(sandbox, ToyBrain(sandbox)).run(max_iterations=1)
 
     seen = []
@@ -523,7 +523,7 @@ def test_distil_writes_a_skill_the_next_brief_carries(sandbox, store):
     """The loop's own output becomes the next agent's index -- which is the
     whole reason the phase exists."""
     from conftest import close, make_entry
-    entry = close(sandbox, store, make_entry(store, "Q1"))
+    close(sandbox, store, make_entry(store, "Q1"))
     sandbox.distil_every = 1
     brain = _librarian(write=[{
         "name": "one-lesson",

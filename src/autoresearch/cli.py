@@ -14,12 +14,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import textwrap
 import pathlib
 import subprocess
 import sys
+import textwrap
 
-from . import budget as budget_mod, escalate as escalate_mod, hardware as hw, rank as rank_mod, render, runs as runs_mod, skills as skills_mod
+from . import budget as budget_mod
+from . import escalate as escalate_mod
+from . import hardware as hw
+from . import rank as rank_mod
+from . import render
+from . import runs as runs_mod
+from . import skills as skills_mod
 from .claims import Claims
 from .config import DomainConfig, discover
 from .entries import Entry, Result, Store
@@ -628,9 +634,9 @@ def cmd_skill_distil(args):
     The same phase the loop runs, so there is one implementation of what a
     distillation is -- a second one here would be the copy that drifts.
     """
+    from . import budget as _budget
     from .driver.brain import SDKBrain
     from .driver.loop import Coordinator, Iteration, _iso
-    from . import budget as _budget
 
     config = _load(args)
     if args.dry_run:
@@ -682,7 +688,7 @@ def cmd_policy(args):
 
 def _iso():
     import datetime as dt
-    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
 
 def _env():
@@ -807,7 +813,9 @@ def build_parser() -> argparse.ArgumentParser:
     new.add_argument("--mechanism", action="append")
     new.add_argument("--source", action="append")
     new.set_defaults(func=cmd_entry_new)
-    show = esub.add_parser("show"); show.add_argument("id"); show.set_defaults(func=cmd_entry_show)
+    show = esub.add_parser("show")
+    show.add_argument("id")
+    show.set_defaults(func=cmd_entry_show)
     lst = esub.add_parser("list")
     lst.add_argument("--status", action="append")
     lst.add_argument("--track")
@@ -817,7 +825,8 @@ def build_parser() -> argparse.ArgumentParser:
     ssub = skill.add_subparsers(dest="skill_cmd", required=True)
     ssub.add_parser("list", help="every skill, its citations and its staleness"
                     ).set_defaults(func=cmd_skill_list)
-    sshow = ssub.add_parser("show"); sshow.add_argument("name")
+    sshow = ssub.add_parser("show")
+    sshow.add_argument("name")
     sshow.set_defaults(func=cmd_skill_show)
     ssub.add_parser("check", help="validate every skill against the record"
                     ).set_defaults(func=cmd_skill_check)
@@ -827,7 +836,8 @@ def build_parser() -> argparse.ArgumentParser:
     sdistil.add_argument("--model")
     sdistil.add_argument("--max-usd", type=float, dest="max_usd")
     sdistil.set_defaults(func=cmd_skill_distil)
-    sretire = ssub.add_parser("retire"); sretire.add_argument("name")
+    sretire = ssub.add_parser("retire")
+    sretire.add_argument("name")
     sretire.add_argument("--why", required=True,
                          help="a skill removed without a reason is a skill that "
                               "will be written again")
@@ -842,7 +852,8 @@ def build_parser() -> argparse.ArgumentParser:
     claim.set_defaults(func=cmd_claim)
 
     rel = sub.add_parser("release", help="hand a claim back, with a reason")
-    rel.add_argument("id"); rel.add_argument("--why", required=True)
+    rel.add_argument("id")
+    rel.add_argument("--why", required=True)
     rel.set_defaults(func=cmd_release)
 
     reap = sub.add_parser("reap", help="free ONE abandoned claim past the TTL")

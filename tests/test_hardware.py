@@ -3,8 +3,7 @@ invent a speedup."""
 import pytest
 
 from autoresearch.errors import ConfigError
-from autoresearch.hardware import (GPU, Host, Requirement, Throughput, check,
-                                   detect)
+from autoresearch.hardware import GPU, Host, Requirement, Throughput, check, detect
 
 
 def m2(**over):
@@ -119,8 +118,8 @@ def test_label_names_both_facts_and_marks_a_lower_bound():
 
 def test_ranking_excludes_an_entry_the_host_cannot_run(sandbox, store):
     """Refuse before claiming, not after measuring."""
-    from conftest import make_entry
     from autoresearch.rank import rank
+    from conftest import make_entry
     sandbox.hardware["wide"] = Requirement(name="wide", min_memory_gb=1024)
     make_entry(store, "Q1", impact=1.0, hardware="wide")
     make_entry(store, "Q2", impact=0.1)
@@ -130,8 +129,8 @@ def test_ranking_excludes_an_entry_the_host_cannot_run(sandbox, store):
 
 
 def test_ranking_keeps_an_entry_the_host_can_run(sandbox, store):
-    from conftest import make_entry
     from autoresearch.rank import rank
+    from conftest import make_entry
     sandbox.hardware["ok"] = Requirement(name="ok", min_memory_gb=1)
     make_entry(store, "Q1", impact=1.0, hardware="ok")
     assert [s.entry_id for s in rank(store.all(), sandbox, host=m2()).scored] == ["Q1"]
@@ -140,8 +139,8 @@ def test_ranking_keeps_an_entry_the_host_can_run(sandbox, store):
 def test_an_unknown_hardware_class_does_not_silently_exclude(sandbox, store):
     """A typo in `hardware:` must not read as 'this machine cannot run it' --
     that would quietly remove an entry from every future iteration."""
-    from conftest import make_entry
     from autoresearch.rank import rank
+    from conftest import make_entry
     make_entry(store, "Q1", impact=1.0, hardware="typo-not-declared")
     assert [s.entry_id for s in rank(store.all(), sandbox, host=m2()).scored] == ["Q1"]
 
@@ -150,9 +149,11 @@ def test_validate_catches_an_undeclared_hardware_class(sandbox, store):
     """Ranking treats an unknown class as no-requirement -- the permissive
     direction -- so the typo has to be caught here or the gate silently does
     not exist."""
-    import subprocess, sys
-    from conftest import ROOT, make_entry
+    import subprocess
+    import sys
+
     from autoresearch import render
+    from conftest import ROOT, make_entry
     make_entry(store, "Q1", hardware="typo")
     render.write_views(sandbox, store.all())
     out = subprocess.run(

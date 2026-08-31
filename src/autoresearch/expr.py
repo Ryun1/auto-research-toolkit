@@ -99,7 +99,7 @@ def _eval(node, ns, source):
 
     if isinstance(node, ast.Compare):
         left = _eval(node.left, ns, source)
-        for op_node, right_node in zip(node.ops, node.comparators):
+        for op_node, right_node in zip(node.ops, node.comparators, strict=True):
             op = _COMPARE.get(type(op_node))
             if op is None:
                 raise GoalError(f"unsupported comparison in {source!r}")

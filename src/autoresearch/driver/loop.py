@@ -47,7 +47,9 @@ from dataclasses import dataclass, field
 from .. import budget as budget_mod
 from .. import hardware as hw
 from .. import rank as rank_mod
-from .. import render, runs as runs_mod, skills as skills_mod
+from .. import render
+from .. import runs as runs_mod
+from .. import skills as skills_mod
 from ..claims import Claims
 from ..entries import Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
@@ -56,7 +58,7 @@ from .brain import Role
 
 
 def _iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -105,7 +107,7 @@ class Iteration:
         return p
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Iteration":
+    def from_dict(cls, data: dict) -> Iteration:
         data = dict(data)
         data["phases"] = [Phase(**p) if isinstance(p, dict) else p
                           for p in data.get("phases", [])]

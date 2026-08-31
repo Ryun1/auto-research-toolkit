@@ -2,8 +2,7 @@ import pytest
 
 from autoresearch.errors import SchemaError
 from autoresearch.goal import Goal
-from autoresearch.runs import (OK, RunRecord, append, best_run,
-                               read_all)
+from autoresearch.runs import OK, RunRecord, append, best_run, read_all
 
 GOAL = Goal.from_dict({"goal": {
     "id": "g", "objective": "ops * peak",
