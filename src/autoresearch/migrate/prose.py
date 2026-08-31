@@ -133,6 +133,27 @@ def _iso(date: str | None) -> str:
     return f"{date}T00:00:00+00:00"
 
 
+REFERENCE = re.compile(
+    r"(?:(?:inbox|docs|guides|bin|data|state|schemas|src|scripts|tests)/[\w./+-]+"
+    r"|\b[QH]\d{1,3}\b)")
+
+
+def _references(text: str) -> list[str]:
+    """Paths and entry ids named in a prose field, in order, deduplicated.
+
+    Deliberately conservative: a reference this misses is still in `body`, but a
+    fragment of a sentence in a typed field is worse than nothing -- it looks
+    like a path and is not one.
+    """
+    seen, out = set(), []
+    for match in REFERENCE.finditer(text):
+        value = match.group(0).rstrip(".,;:`)")
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out[:12]
+
+
 def _verdict_token(raw, terminal) -> str | None:
     """The status a claim record's `verdict` asserts, or None if it asserts none.
 
@@ -230,15 +251,24 @@ def migrate(queue_path, closed_status_map=None, *, track: str,
         if "Null-check requirement" in fields:
             entry.null_checks = [fields["Null-check requirement"]]
         if "Source" in fields:
-            entry.sources = [s.strip(" `") for s in
-                             re.split(r"[;,]\s*(?=[`\w])", fields["Source"])
-                             if s.strip(" `")][:8]
+            # Extract the REFERENCES, not the prose. A first version split the
+            # Source line on commas and semicolons, which inside a sentence like
+            # "`inbox/mined/x.md` (the grid laws, the per-bit rates, the
+            # multipliers)" produced eight fragments of English and no usable
+            # path. The raw line survives verbatim in `body`; what belongs in a
+            # typed field is what a tool can follow.
+            entry.sources = _references(fields["Source"])
         # `Lane:` is the one genuinely structured classifier in the prose, so it
-        # becomes a mechanism tag. Nothing else is inferred.
+        # becomes a **tag**. It must NOT become a mechanism: mechanisms are the
+        # exclusion vocabulary, and a first version put the lane there -- so a
+        # single `mechanism`-kind refutation in lane C hard-excluded every
+        # queued entry in lane C, which on the real corpus left the whole
+        # research queue unrankable. A lane is a category; a refutation does not
+        # close a category. `mechanisms` stays empty and is reported as unpriced.
         if "Lane" in fields:
             lane = fields["Lane"].split()[0].strip("*:").lower()
             if lane:
-                entry.mechanisms = [f"lane:{lane}"]
+                entry.tags = [f"lane:{lane}"]
 
         if state in terminal:
             evidence = (row or {}).get("evidence", "")

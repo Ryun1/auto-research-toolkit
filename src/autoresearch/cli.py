@@ -53,7 +53,7 @@ def cmd_board(args):
     config = _load(args)
     store = _store(config)
     entries = store.all()
-    all_runs = runs_mod.read_all(config.paths.runs)
+    all_runs, skipped = runs_mod.read_with_skipped(config.paths.runs)
     try:
         target = _probe_target(config)
     except AutoresearchError as exc:
@@ -69,7 +69,7 @@ def cmd_board(args):
             continue
         if best is None or value < best[0]:
             best = (value, record.entry or record.id)
-    print(render.board(config, entries, all_runs, target, best))
+    print(render.board(config, entries, all_runs, target, best, skipped))
     return 0
 
 
@@ -327,10 +327,13 @@ def cmd_migrate(args):
     store = _store(config)
     total, problems = 0, []
     for track in config.tracks.values():
+        if args.track and track.id != args.track:
+            continue
         source = pathlib.Path(args.source or config.paths.root) / (
-            args.view or track.view)
+            args.view or track.migrate_from or track.view)
         if not source.exists():
-            print(f"{track.id}: no source document at {source}, skipping")
+            print(f"{track.id}: no source document at {source}, skipping "
+                  "(set `migrate_from` on the track to name it)")
             continue
         result = migrate_prose(
             source, track=track.id,
@@ -381,13 +384,18 @@ def cmd_validate(args):
             problems.append(
                 f"{entry.id}: open status {entry.status!r} carries a stale "
                 f"result ({entry.result.verdict}) -- H137")
+    skipped_runs = 0
     try:
-        for record in runs_mod.read_all(config.paths.runs):
+        rows, skipped_runs = runs_mod.read_with_skipped(config.paths.runs)
+        for record in rows:
             problems += [f"run {record.id}: {p}"
                          for p in record.problems(config.goal)]
     except AutoresearchError as exc:
         problems.append(str(exc))
 
+    if skipped_runs:
+        print(f"note: {skipped_runs} run row(s) predate adoption of this schema "
+              f"and were not checked")
     print(f"checked {len(entries)} entries, {len(config.tracks)} tracks, "
           f"{len(config.policy.forbidden_paths + config.policy.human_only + config.policy.never_push_remotes)} "
           f"policy rules")
@@ -448,7 +456,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     mig = sub.add_parser("migrate", help="convert a prose corpus into records (one way)")
     mig.add_argument("--source", help="root the documents live under")
-    mig.add_argument("--view", help="one document, instead of each track's view")
+    mig.add_argument("--track", help="migrate only this track")
+    mig.add_argument("--view", help="one document, overriding the track's migrate_from")
     mig.add_argument("--dry-run", action="store_true", dest="dry_run")
     mig.set_defaults(func=cmd_migrate)
 

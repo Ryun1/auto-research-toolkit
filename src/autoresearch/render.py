@@ -99,6 +99,8 @@ def _entry_section(e) -> list[str]:
         rows.append(("Gate", e.gate))
     if e.mechanisms:
         rows.append(("Mechanisms", ", ".join(f"`{m}`" for m in e.mechanisms)))
+    if e.tags:
+        rows.append(("Tags", ", ".join(f"`{t}`" for t in e.tags)))
     for label, value in rows:
         out.append(f"- **{label}:** {value}")
     for label, value in (("Hypothesis", e.hypothesis), ("Prediction", e.prediction),
@@ -117,7 +119,7 @@ def _entry_section(e) -> list[str]:
     return out
 
 
-def board(config, entries, runs, target=None, best=None) -> str:
+def board(config, entries, runs, target=None, best=None, skipped_runs=0) -> str:
     """One screen answering what is currently true.
 
     Modelled on the source harness's `bin/board`, which existed because a cold
@@ -168,7 +170,9 @@ def board(config, entries, runs, target=None, best=None) -> str:
         out.append("")
 
     ok = [r for r in runs if r.status == "ok"]
-    out.append(f"## Measurements — {len(runs)} rows read, {len(ok)} valid")
+    out.append(f"## Measurements — {len(runs)} rows read, {len(ok)} valid"
+               + (f", {skipped_runs} foreign rows skipped (pre-adoption schema)"
+                  if skipped_runs else ""))
     for r in sorted(runs, key=lambda r: r.started)[-3:]:
         metrics = " ".join(f"{k}={_fmt(v)}" for k, v in sorted(r.metrics.items()))
         out.append(f"  {r.id}  {r.status:8} {r.entry or '—':6} {metrics}")

@@ -48,6 +48,10 @@ class Track:
     view: str
     machine: StateMachine
     description: str = ""
+    #: the prose document this track's records were (or will be) migrated from.
+    #: Distinct from `view` so a staged cutover can render beside the live
+    #: document instead of over it.
+    migrate_from: str = ""
 
     def is_id(self, entry_id: str) -> bool:
         return entry_id.startswith(self.prefix) and entry_id[len(self.prefix):].isdigit()
@@ -192,7 +196,8 @@ class DomainConfig:
                 title=spec.get("title", tid),
                 view=spec.get("view", f"docs/{tid}.md"),
                 machine=machine,
-                description=spec.get("description", ""))
+                description=spec.get("description", ""),
+                migrate_from=spec.get("migrate_from", ""))
 
         lanes_spec = data.get("lanes") or {}
         if "findings" not in lanes_spec:

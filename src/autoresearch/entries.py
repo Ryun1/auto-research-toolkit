@@ -104,7 +104,15 @@ class Entry:
     confidence: float = 0.5             # P(confirm), 0..1
     impact: float = 0.0                 # expected fractional move on the objective
     cost: float = 1.0                   # in domain run-units
+    #: The EXCLUSION vocabulary: what would have to be true for this to work.
+    #: A `mechanism`-kind refutation on a shared tag hard-excludes an entry, so
+    #: these must name a mechanism, never a category. Migration deliberately
+    #: leaves this empty rather than guessing -- mapping a category (a "Lane")
+    #: in here made one refutation close an entire lane of the corpus.
     mechanisms: list[str] = field(default_factory=list)
+    #: Free classification. Read by humans and by ranking's explanations; never
+    #: used to exclude anything.
+    tags: list[str] = field(default_factory=list)
     #: a precondition on SHIPPABILITY, not on investigating. Typed, so ranking
     #: can filter on it rather than an agent rediscovering it (H09).
     gate: str = ""

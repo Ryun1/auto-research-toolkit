@@ -294,3 +294,71 @@ everything in section 4 is on the kill list because it was *compensating* for pr
 the system of record — and a harness that filed 143 defects against itself in eight days,
 with dated evidence and honest `wontfix`es, is one whose authors were paying attention.
 The core's job is to keep the judgement and delete the compensation.
+
+---
+
+## Appendix: what building the core found
+
+Written after the fact. Four things only became visible once the design was run
+against the real corpus rather than reasoned about, and they are worth recording
+because three of them are the *same failure classes this document catalogues*,
+reproduced by someone who had just finished cataloguing them.
+
+**1. My own policy selftest produced a false alarm — the H138 shape exactly.**
+The selftest synthesises a probe from each rule's pattern by replacing `*` with
+`x`. For a glob that works. For the ECDSA domain's `human_only` rule, whose
+pattern is the regex `ecdsafail\s+submit`, the synthesised probe was a literal
+string the rule could not match — so a **working** rule was reported as refusing
+nothing. A guard that cries wolf trains the reader to skip the real ones, which
+is precisely why H138's "4 constants rows are unpoliced" warning was read as
+noise while a retired number went through underneath it. Fixed by trying several
+probe shapes and letting a rule declare the `example` it must refuse.
+
+**2. Mapping `Lane:` into `mechanisms` silently killed the research queue.**
+`mechanisms` is the exclusion vocabulary: a `mechanism`-kind refutation sharing a
+tag hard-excludes an entry. Migration mapped each entry's `Lane:` there, because
+it was the one structured classifier in the prose. The result was that a single
+`mechanism`-kind refutation in lane A excluded **every queued entry in lane A**,
+and the real corpus ranked five harness entries and zero hypotheses. A lane is a
+category; a refutation does not close a category. Fixed by separating `tags`
+(classification, never excludes) from `mechanisms` (exclusion vocabulary,
+deliberately left empty by migration). The failure was silent — the ranking
+looked plausible — which is the whole argument for testing against real data.
+
+**3. The staleness term was a constant factor wearing a penalty's name.** It
+counted total closed entries; against a corpus with 400 verdicts that put every
+entry at 0.048 and ordered nothing. A penalty applied equally to everything is
+not a penalty. Fixed to count verdicts landing since the entry was last priced.
+
+**4. `_map`'s failure path lost which item failed** — in a function whose
+docstring said it never loses a failure silently. A worker exception was replaced
+by a generic "worker failed" reply with no entry id, so eight tests failed with
+one indistinguishable message and the actual cause (a bad path) took a separate
+run to find. A failure that reads as a result, in the code written to prevent
+failures that read as results.
+
+None of these were caught by reasoning. All four were caught by running the
+thing against 412 real entries and 9,443 real rows.
+
+### What the migration says about the source corpus
+
+The migration is also an audit, and the source harness comes out of it well:
+
+| | |
+|---|---|
+| Entries migrated | 412 (270 hypotheses, 142 harness-debt) |
+| Disagreements between section, Closed table and claim record | **0** |
+| Closed entries whose evidence memo is missing from disk | **0** |
+| Open entries needing a price before ranking | 11 |
+
+Zero missing evidence across 401 closed entries is the strongest single
+statement in this document about the discipline of that harness. The rule that
+`bin/close` refuses to close anything whose memo does not exist was worth every
+line it cost, and it is ported unchanged.
+
+The one apparent contradiction — Q241's section reading `refuted` against a claim
+record reading `confirmed` — turned out to be an ordinary history: confirmed,
+reopened on a discharged premise, re-closed refuted, with the claim record
+keeping its pre-reopen verdict. A first version of the migration reported it as a
+conflict. It is now preserved as a reopen event, which is where that reasoning
+belonged; it existed nowhere else.

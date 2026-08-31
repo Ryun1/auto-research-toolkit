@@ -116,8 +116,15 @@ def rank(entries, config, *, prior_weight: float = 3.0,
     machine_for = lambda eid: config.track_for(eid).machine   # noqa: E731
     calibration = calibrate(entries, machine_for)
     hard_dead, soft_dead = _dead_mechanisms(entries, machine_for)
-    terminal_count = sum(
-        1 for e in entries if machine_for(e.id).status(e.status).terminal)
+    # Closure dates, so staleness can ask "what has the board learned since this
+    # entry was last priced" rather than "how much has it ever learned". The
+    # first version compared against the total closed count, which on a corpus
+    # with 400 verdicts crushed every entry's staleness to 0.05 and made the
+    # term meaningless -- a penalty that applies equally to everything is not a
+    # penalty, it is a constant factor.
+    closure_dates = sorted(
+        e.result.at for e in entries
+        if e.result is not None and getattr(e.result, "at", None))
 
     scored, excluded = [], []
     for entry in entries:
@@ -166,7 +173,7 @@ def rank(entries, config, *, prior_weight: float = 3.0,
         # in an hour is. `verdicts_since` is injected so the caller decides how
         # to count them.
         learned = (verdicts_since(entry) if verdicts_since
-                   else max(0, terminal_count - len(entry.history)))
+                   else sum(1 for at in closure_dates if at > entry.updated))
         staleness = 1.0 / (1.0 + 0.05 * max(0, learned))
 
         # Soft overlap: a slope/cell refutation touching this mechanism means

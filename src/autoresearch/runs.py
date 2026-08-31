@@ -126,23 +126,43 @@ def append(path, record: RunRecord) -> pathlib.Path:
     return path
 
 
-def read_all(directory) -> list[RunRecord]:
-    """Every record under `directory`, with the file and line named on failure.
+def read_all(directory, strict: bool = False) -> list[RunRecord]:
+    """Every core record under `directory`.
 
     A corpus reader that skips a malformed row silently is how a corpus grows
-    rows nobody can explain.
+    rows nobody can explain -- so `strict=True` raises with the file and line
+    named. But a domain adopting this core arrives with a corpus written to its
+    own older schema (this one had 9,443 such rows), and refusing to start until
+    every historical row is rewritten is not a real option. So the default is to
+    read what is ours and **report what was not**: use `read_with_skipped` when
+    the count matters, which is anywhere it is displayed.
     """
+    return read_with_skipped(directory, strict)[0]
+
+
+def read_with_skipped(directory, strict: bool = False) -> tuple[list, int]:
+    """`(records, skipped)`. The count is never dropped on the floor: a reader
+    that says "12 rows" when it saw 9,455 is the ambiguity H81/H96 are about."""
     directory = pathlib.Path(directory)
     if not directory.exists():
-        return []
-    out = []
+        return [], 0
+    out, skipped = [], 0
     for path in sorted(directory.glob("*.jsonl")):
         for lineno, line in enumerate(path.read_text().splitlines(), 1):
             line = line.strip()
             if not line:
                 continue
             try:
-                out.append(RunRecord.from_dict(json.loads(line)))
-            except (json.JSONDecodeError, SchemaError, TypeError) as exc:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
                 raise SchemaError(f"{path}:{lineno}: {exc}") from exc
-    return out
+            if not strict and payload.get("schema") != SCHEMA:
+                skipped += 1        # a foreign row: not ours to interpret
+                continue
+            try:
+                out.append(RunRecord.from_dict(payload))
+            except (SchemaError, TypeError) as exc:
+                if strict:
+                    raise SchemaError(f"{path}:{lineno}: {exc}") from exc
+                skipped += 1
+    return out, skipped

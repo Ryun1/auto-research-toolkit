@@ -72,6 +72,14 @@ def test_evidence_comes_from_the_closed_table(corpus):
     assert e.result.memo == "inbox/q02.md"
 
 
+def test_sources_extract_references_not_prose_fragments(corpus):
+    """Splitting the Source line on punctuation turned one sentence into eight
+    fragments of English and no usable path. A typed field carries what a tool
+    can follow; the raw line survives in `body`."""
+    e = {x.id: x for x in result(corpus).entries}["Q01"]
+    assert e.sources == ["inbox/prior.md", "Q00"]   # paths and entry ids, both followable
+
+
 def test_registered_bar_is_lifted_out_of_the_prediction(corpus):
     """The bar was registered inside prose; lifting it into its own field is why
     a worker can be told not to move it."""
@@ -79,11 +87,20 @@ def test_registered_bar_is_lifted_out_of_the_prediction(corpus):
     assert "Confirmed if" in e.bar and "refuted if" in e.bar
 
 
-def test_lane_becomes_a_mechanism_tag_and_nothing_else_is_inferred(corpus):
+def test_lane_becomes_a_tag_never_a_mechanism(corpus):
+    """`mechanisms` is the EXCLUSION vocabulary: a `mechanism`-kind refutation
+    sharing a tag hard-excludes an entry. Putting the lane there made a single
+    refutation close an entire lane of the real corpus and left the research
+    queue unrankable. A lane is a category; a refutation does not close one."""
     entries = {x.id: x for x in result(corpus).entries}
-    assert entries["Q01"].mechanisms == ["lane:a"]
-    assert entries["Q02"].mechanisms == []          # no Lane line, no guess
-    assert entries["Q01"].confidence == 0.5 and entries["Q01"].impact == 0.0
+    assert entries["Q01"].tags == ["lane:a"]
+    assert entries["Q01"].mechanisms == []
+    assert entries["Q02"].tags == []                # no Lane line, no guess
+
+
+def test_nothing_that_ranking_sorts_on_is_inferred(corpus):
+    e = {x.id: x for x in result(corpus).entries}["Q01"]
+    assert (e.confidence, e.impact, e.cost, e.mechanisms) == (0.5, 0.0, 1.0, [])
 
 
 def test_the_whole_prose_section_is_preserved_verbatim(corpus):

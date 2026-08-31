@@ -37,6 +37,29 @@ class Rule:
     kind: str
     pattern: str
     reason: str
+    #: an input this rule MUST refuse. Optional, but the honest way to make a
+    #: rule testable: a synthesised probe cannot always be derived from a
+    #: pattern that is a regex, a glob, or both at once.
+    example: str = ""
+
+    def probes(self) -> tuple:
+        """Inputs the selftest tries. The first that is refused proves the rule
+        does something; if none is, the rule refuses nothing and is reported.
+
+        An earlier version synthesised exactly one probe by replacing `*` with
+        `x`, which for a regex pattern like `ecdsafail\\s+submit` produced a
+        probe the rule could not match -- and reported a WORKING rule as broken.
+        That is the H138 shape in miniature: a false alarm trains the reader to
+        skip the real ones. Declare `example` when in doubt."""
+        if self.example:
+            return (self.example,)
+        pattern = self.pattern
+        return tuple(dict.fromkeys([
+            pattern,
+            pattern.replace("*", "x"),
+            pattern.replace(r"\s+", " ").replace(r"\s*", "").replace("*", "x"),
+            re.sub(r"\\[sdw][+*?]?", " ", pattern).replace("*", "x").strip(),
+        ]))
 
     def describe(self) -> str:
         return f"[{self.kind}] {self.pattern} -- {self.reason}"
@@ -116,26 +139,31 @@ class Policy:
         its pattern is wrong, or because its enforcement was deleted -- reports
         here rather than passing quietly.
         """
+        def refuses(rule, check):
+            for probe in rule.probes():
+                if not probe:
+                    continue
+                try:
+                    check(probe)
+                except PolicyError:
+                    return True
+            return False
+
         failures = []
         for rule in self.forbidden_paths:
-            probe = rule.pattern.replace("*", "x") or "x"
-            try:
-                self.check_paths([probe])
-                failures.append(f"forbidden_paths rule refuses nothing: {rule.describe()}")
-            except PolicyError:
-                pass
+            if not refuses(rule, lambda p: self.check_paths([p])):
+                failures.append(
+                    f"forbidden_paths rule refuses nothing: {rule.describe()}"
+                    "  (declare `example` if the pattern is a regex)")
         for rule in self.never_push_remotes:
-            try:
-                self.check_push(rule.pattern.replace("*", "x"))
-                failures.append(f"never_push_remotes rule refuses nothing: {rule.describe()}")
-            except PolicyError:
-                pass
+            if not refuses(rule, self.check_push):
+                failures.append(
+                    f"never_push_remotes rule refuses nothing: {rule.describe()}")
         for rule in self.human_only:
-            try:
-                self.check_command(rule.pattern.replace("*", "x"))
-                failures.append(f"human_only rule refuses nothing: {rule.describe()}")
-            except PolicyError:
-                pass
+            if not refuses(rule, self.check_command):
+                failures.append(
+                    f"human_only rule refuses nothing: {rule.describe()}"
+                    "  (declare `example` if the pattern is a regex)")
         return failures
 
     def describe(self) -> str:
@@ -171,7 +199,8 @@ class Policy:
                     raise ConfigError(
                         f"policy.{key} entry has an empty pattern, which matches "
                         f"every input rather than none: {spec!r}")
-                out.append(Rule(kind=key, pattern=pattern, reason=reason))
+                out.append(Rule(kind=key, pattern=pattern, reason=reason,
+                                example=str(spec.get("example", ""))))
             return out
 
         ceiling = data.get("spend_ceiling")
