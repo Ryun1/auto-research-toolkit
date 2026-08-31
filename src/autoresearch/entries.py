@@ -116,6 +116,10 @@ class Entry:
     #: a precondition on SHIPPABILITY, not on investigating. Typed, so ranking
     #: can filter on it rather than an agent rediscovering it (H09).
     gate: str = ""
+    #: names a [hardware.<class>] requirement. The host is checked against it
+    #: BEFORE the entry is claimed, so an experiment this machine cannot run is
+    #: refused with a reason instead of dispatched and discovered.
+    hardware: str = ""
 
     sources: list[str] = field(default_factory=list)
     supersedes: list[str] = field(default_factory=list)

@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import textwrap
 import pathlib
 import subprocess
 import sys
 
-from . import budget as budget_mod, rank as rank_mod, render, runs as runs_mod
+from . import budget as budget_mod, escalate as escalate_mod, hardware as hw, rank as rank_mod, render, runs as runs_mod
 from .claims import Claims
 from .config import DomainConfig, discover
 from .entries import Entry, Result, Store
@@ -48,6 +49,65 @@ def _probe_target(config):
 
 
 # -- verbs ----------------------------------------------------------------
+
+def cmd_init(args):
+    """Scaffold a new domain that is valid and runnable before you edit it."""
+    from .scaffold import init
+
+    root = pathlib.Path(args.path).resolve()
+    written = init(root, name=args.name or root.name,
+                   objective=args.objective, metrics=args.metric or ["cost"],
+                   target=args.target, force=args.force)
+    print(f"scaffolded domain {args.name or root.name!r} in {root}")
+    for path in written:
+        print(f"  {path.relative_to(root)}")
+
+    config = DomainConfig.load(root)
+    problems = config.check()
+    print(f"\nvalidate: {'clean' if not problems else problems}")
+    print(textwrap.dedent(f"""
+        Next:
+          1. edit  bin/measure   -- replace evaluate() with your real experiment
+          2. edit  goal.yaml     -- the metrics it returns, and what winning means
+          3. edit  guides/landscape.md -- what an agent needs to know to guess well
+          4. run   ar --domain {root} board
+          5. run   ar --domain {root} hardware   -- what this machine can do
+        """).rstrip())
+    return 0
+
+
+def cmd_hardware(args):
+    """What this machine is, what it can run, and what it cannot."""
+    config = _load(args)
+    host = hw.detect()
+    print(host.describe())
+
+    print(f"\nrequirements declared: {len(config.hardware)}")
+    blocked = 0
+    for requirement in config.hardware.values():
+        capability = hw.check(host, requirement)
+        blocked += 0 if capability.ok else 1
+        print("  " + capability.report().replace("\n", "\n  "))
+    if not config.hardware:
+        print("  (none — declare [hardware.<class>] so a capacity limit "
+              "surfaces as a refusal rather than as a truncated measurement)")
+
+    print(f"\nrentable classes declared: {len(config.remote)}")
+    for cls in config.remote:
+        if cls.measured_ratio:
+            print(f"  {cls.name:22} ${cls.usd_per_hour:.2f}/h   "
+                  f"{cls.measured_ratio:.2f}x"
+                  + (f" @ {cls.measured_at_concurrency}-way"
+                     if cls.measured_at_concurrency else "")
+                  + (f"   {cls.measured_on}" if cls.measured_on else ""))
+        else:
+            print(f"  {cls.name:22} ${cls.usd_per_hour:.2f}/h   "
+                  f"NO MEASURED RATIO — cannot be costed, and a spec sheet is "
+                  f"not a measurement")
+    if not config.remote:
+        print("  (none declared)")
+    return 1 if blocked else 0
+
 
 def cmd_board(args):
     config = _load(args)
@@ -215,6 +275,10 @@ def cmd_measure(args):
             f"got: {proc.stdout[:300]!r}") from exc
     record = runs_mod.RunRecord.from_dict(payload)
     record.session = args.session
+    # A throughput figure that does not name its machine is not a measurement,
+    # and two rows from different machines are not comparable without saying so.
+    # The domain does not have to remember to record this; core does it.
+    record.provenance.setdefault("host", hw.detect().to_dict())
     if args.entry:
         record.entry = args.entry
     record.validate(config.goal)
@@ -384,6 +448,13 @@ def cmd_validate(args):
             problems.append(
                 f"{entry.id}: open status {entry.status!r} carries a stale "
                 f"result ({entry.result.verdict}) -- H137")
+        if entry.hardware and entry.hardware not in config.hardware:
+            # Ranking treats an unknown class as "no requirement", which is the
+            # permissive direction -- so a typo must be caught here or it means
+            # the gate silently does not exist.
+            problems.append(
+                f"{entry.id}: hardware class {entry.hardware!r} is not declared; "
+                f"declared: {sorted(config.hardware) or '(none)'}")
     skipped_runs = 0
     try:
         rows, skipped_runs = runs_mod.read_with_skipped(config.paths.runs)
@@ -437,6 +508,21 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--session", default="cli",
                     help="who is acting; recorded on every state change")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    ini = sub.add_parser("init", help="scaffold a new domain")
+    ini.add_argument("path", help="directory for the new domain")
+    ini.add_argument("--name", help="domain name (default: the directory name)")
+    ini.add_argument("--objective", default="cost",
+                     help="expression over your metrics, e.g. \"round(T) * Q\"")
+    ini.add_argument("--metric", action="append",
+                     help="a metric name; repeatable (default: cost)")
+    ini.add_argument("--target", type=float, default=100.0)
+    ini.add_argument("--force", action="store_true",
+                     help="scaffold over an existing domain.toml (destructive)")
+    ini.set_defaults(func=cmd_init)
+
+    sub.add_parser("hardware", help="what this machine is and what it can run"
+                   ).set_defaults(func=cmd_hardware)
 
     sub.add_parser("board", help="one screen: goal, queues, claims, measurements"
                    ).set_defaults(func=cmd_board)

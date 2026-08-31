@@ -63,3 +63,31 @@ probe_target = "bin/probe-target"
 [coordinator]
 workers_per_iteration = 3
 generators_per_iteration = 2
+
+# What each experiment class needs of the machine. Declared so a capacity limit
+# surfaces as a REFUSAL before the run, rather than as a truncated measurement
+# afterwards -- a run that silently caps its concurrency reports a throughput
+# for a configuration nobody chose.
+[hardware.cheap-sweep]
+min_threads = 2
+min_memory_gb = 1.0
+
+[hardware.wide-sweep]
+min_threads = 4
+gb_per_unit = 0.0076     # memory cost of one concurrent unit
+needs_gpu = "any"
+
+# Rentable classes. `measured_ratio` is throughput on that class over throughput
+# on the local host, FOR THIS WORKLOAD, at a stated concurrency. Leave it out
+# until someone has measured it: a speedup cannot be read off a spec sheet.
+[[remote]]
+name = "toy-cpu-16core"
+usd_per_hour = 0.35
+measured_ratio = 2.5
+measured_at_concurrency = 8
+measured_on = "toy calibration, 2026-08-31"
+
+[[remote]]
+name = "toy-gpu-unmeasured"
+usd_per_hour = 0.90
+notes = "no ratio measured for this workload; cannot be costed"

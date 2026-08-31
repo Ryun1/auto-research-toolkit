@@ -1,6 +1,6 @@
 # Evaluating the auto-research harness
 
-*What to port into `auto-research-core`, what to leave behind, and what the record
+*What to port into `auto-research-toolkit`, what to leave behind, and what the record
 says about why.*
 
 Method: read every tool in `bin/` (24 executables, 7,165 lines), the two work queues,

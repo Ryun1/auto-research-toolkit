@@ -25,7 +25,9 @@ from dataclasses import dataclass, field
 import yaml
 
 from .errors import ConfigError
+from .escalate import RemoteClass
 from .goal import Goal
+from .hardware import Requirement
 from .lanes import Lanes
 from .policy import Policy
 from .states import StateMachine, default_machine
@@ -33,7 +35,7 @@ from .states import StateMachine, default_machine
 CONFIG_NAME = "domain.toml"
 
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
-              "commands", "knowledge", "coordinator"}
+              "commands", "knowledge", "coordinator", "hardware", "remote"}
 
 
 @dataclass
@@ -80,6 +82,10 @@ class DomainConfig:
     budgets: dict[str, float]
     knowledge: list[str] = field(default_factory=list)
     coordinator: dict = field(default_factory=dict)
+    #: what each experiment class needs of the machine, checked before it runs
+    hardware: dict = field(default_factory=dict)
+    #: rentable classes, each costed only if someone measured its ratio
+    remote: list = field(default_factory=list)
     description: str = ""
 
     # -- lookup -----------------------------------------------------------
@@ -217,7 +223,11 @@ class DomainConfig:
             commands=dict(data.get("commands") or {}),
             budgets={k: float(v) for k, v in (data.get("budgets") or {}).items()},
             knowledge=list(data.get("knowledge") or []),
-            coordinator=dict(data.get("coordinator") or {}))
+            coordinator=dict(data.get("coordinator") or {}),
+            hardware={name: Requirement.from_dict(name, spec)
+                      for name, spec in (data.get("hardware") or {}).items()},
+            remote=[RemoteClass.from_dict(spec)
+                    for spec in (data.get("remote") or [])])
 
 
 def discover(start=None) -> pathlib.Path:

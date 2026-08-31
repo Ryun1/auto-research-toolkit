@@ -1,0 +1,278 @@
+"""`ar init` -- scaffold a new research domain.
+
+The four things a domain owes the core are easy to describe and fiddly to write
+from scratch, and a half-written domain fails at load rather than at use. So
+this writes a complete, *valid, immediately runnable* domain: `ar validate`
+passes on it, `ar board` runs, and the measurement command works before you have
+edited anything.
+
+That last property is the point. A scaffold whose first act is to fail is a
+scaffold that teaches you to ignore the validator. The generated `bin/measure`
+measures something real but trivial, so the loop is exercisable from minute one
+and you replace it with the real experiment when you have one.
+
+It also refuses to overwrite. Scaffolding over a live domain would destroy the
+records, and "it seemed empty" is not a check.
+"""
+from __future__ import annotations
+
+import pathlib
+import shutil
+import textwrap
+
+from .errors import ConfigError
+
+DIRS = ("bin", "guides", "docs/log", "inbox",
+        "state/entries", "state/claims", "state/iterations", "data/runs")
+
+
+def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
+    metric_block = "\n".join(
+        f'  {m}:\n    field: {m}\n    direction: minimise' for m in metrics)
+    return textwrap.dedent(f'''\
+        # {name} -- an `autoresearch` domain.
+        #
+        # A domain supplies four things and the core owns the rest:
+        #   1. measurement      bin/measure
+        #   2. goal + constants goal.yaml
+        #   3. safety policy    [policy] below
+        #   4. knowledge        guides/, listed in `knowledge`
+
+        knowledge = ["guides/landscape.md"]
+
+        [domain]
+        name = "{name}"
+        description = "TODO: one line on what winning looks like."
+        goal = "goal.yaml"
+
+        [state]
+        entries    = "state/entries"
+        claims     = "state/claims"
+        runs       = "data/runs"
+        memos      = "inbox"
+        iterations = "state/iterations"
+
+        [[tracks]]
+        id     = "research"
+        prefix = "Q"
+        title  = "Hypothesis Queue"
+        view   = "docs/log/Hypothesis Queue.md"
+        description = "Leads on the score. Nothing here is about the harness."
+
+        [[tracks]]
+        id     = "harness"
+        prefix = "H"
+        title  = "Harness Debt"
+        view   = "docs/log/Harness Debt.md"
+        description = "The scaffolding's own defects, kept separate so an agent booting into research never reads them as a lead on the score."
+        [tracks.terminal]
+        fixed   = {{ requires_evidence = true }}
+        wontfix = {{ requires_evidence = true }}
+        refuted = {{ requires_evidence = true, requires_closure_kind = true }}
+
+        [lanes]
+        # Default-deny: anything not matching is scaffolding and takes review.
+        findings = "^(data/runs|data/artifacts|inbox|docs|state)/"
+
+        [policy]
+        # Above this, a person approves. Rented compute is charged here.
+        spend_ceiling = 0.0
+        currency = "USD"
+
+        # Declare anything an agent must never do. Every rule states WHY, and
+        # `ar policy` proves each one refuses something -- a rule whose
+        # enforcement can be deleted without a test failing is a comment.
+        # [[policy.human_only]]
+        # pattern = "mytool submit"
+        # reason  = "irreversible and public; an agent may prepare it, never run it"
+        # example = "mytool submit"
+
+        [budgets]
+        claim_wall_clock_hours = 4
+        claim_max_runs         = 12
+        claim_ttl_hours        = 6
+        iteration_fanout       = 3
+        iteration_max_spawns   = 10
+        iteration_max_seconds  = 3600
+        domain_max_runs        = 500
+
+        [commands]
+        measure = "bin/measure"
+        # probe_target = "bin/probe-target"   # only if your target moves
+
+        [coordinator]
+        workers_per_iteration    = 3
+        generators_per_iteration = 2
+        max_parallel             = 3
+        ''').replace("{metric_block}", metric_block)
+
+
+GOAL_TEMPLATE = """# The goal, typed. Derived values are EXPRESSIONS, never stored numbers:
+# a stored copy goes stale and nothing notices.
+goal:
+  id: beat-baseline
+  description: >
+    TODO: what winning means for __NAME__, in one or two sentences.
+  direction: minimise
+
+  metrics:
+__METRICS__
+
+  objective: "__OBJECTIVE__"
+
+  # derived:
+  #   ratio: "__FIRST__ / __LAST__"
+
+  target:
+    value: __TARGET__
+    # Or, if your target moves (a leaderboard, a competitor, a frontier):
+    # source: bin/probe-target
+    # moving: true
+    # refresh_seconds: 1800
+
+  stop_when: "objective < target"
+
+  # The third exit: stop when the loop stops learning, not only when a human
+  # notices.
+  yield_floor:
+    confirmed_per_iteration: 0.15
+    over_iterations: 10
+"""
+
+
+def _goal_yaml(name: str, objective: str, metrics: list[str], target: float) -> str:
+    """Fill the template by substitution, never by f-string interpolation into
+    an indented block.
+
+    An f-string indents only the FIRST line of a multi-line substitution, so
+    interpolating a metric block into an indented template silently produces
+    invalid YAML from line two onward. The first version of this did exactly
+    that, and `ar init` shipped a domain that could not be loaded -- the one
+    thing a scaffold must never do."""
+    block = "\n".join(
+        f"    {m}:\n      field: {m}\n      direction: minimise" for m in metrics)
+    return (GOAL_TEMPLATE
+            .replace("__NAME__", name)
+            .replace("__METRICS__", block)
+            .replace("__OBJECTIVE__", objective)
+            .replace("__FIRST__", metrics[0])
+            .replace("__LAST__", metrics[-1])
+            .replace("__TARGET__", repr(target)))
+
+
+MEASURE = '''#!/usr/bin/env python3
+"""One experiment, one validated record on stdout.
+
+REPLACE THE `evaluate` FUNCTION with your real experiment. Everything else is
+the contract the core depends on:
+
+  * emit ONE JSON object on stdout, the last line
+  * `metrics` carries every metric goal.yaml declares
+  * `provenance` identifies what was actually run -- a measurement that cannot
+    be reproduced is not evidence
+  * status "invalid" when the run did not measure the thing (never "ok" with
+    zeroes -- that scores as a perfect result)
+
+The core decides where the row lands and what makes it valid; you decide how to
+measure. Run it directly to check: `bin/measure --knob x=2`
+"""
+import argparse, hashlib, json, os, platform, sys, time, uuid
+
+DEFAULTS = {"x": 1}
+
+
+def evaluate(knobs):
+    """REPLACE ME. Must return a dict with one entry per declared metric."""
+    x = max(1, int(knobs["x"]))
+    return {"cost": round(1000.0 / x + 10.0 * x, 3)}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--knob", action="append", default=[], metavar="K=V")
+    ap.add_argument("--session", default=os.environ.get("AR_SESSION", "unknown"))
+    ap.add_argument("--entry", default=os.environ.get("AR_ENTRY"))
+    args = ap.parse_args()
+
+    knobs = dict(DEFAULTS)
+    for item in args.knob:
+        if "=" not in item:
+            sys.exit(f"--knob wants K=V, got {item!r}")
+        key, value = item.split("=", 1)
+        if key not in DEFAULTS:
+            # An unrecognised knob must never read as a successful run of the
+            # defaults -- that failure mode looks exactly like a clean null.
+            sys.exit(f"unknown knob {key!r}; known: {sorted(DEFAULTS)}")
+        knobs[key] = int(value)
+
+    started = time.time()
+    metrics = evaluate(knobs)
+    json.dump({
+        "schema": "run-v1", "id": uuid.uuid4().hex[:12],
+        "session": args.session, "entry": args.entry,
+        "status": "ok" if all(v > 0 for v in metrics.values()) else "invalid",
+        "started": started, "finished": time.time(),
+        "metrics": metrics, "config": {"knobs": knobs},
+        "provenance": {
+            "host": platform.node(), "python": platform.python_version(),
+            "measure_sha": hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:12],
+        },
+        "outputs": [], "cost": {"seconds": time.time() - started}, "notes": "",
+    }, sys.stdout, sort_keys=True)
+    sys.stdout.write("\\n")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+GUIDE = '''# What is known about this problem
+
+Domain knowledge the generator and worker agents read before forming hypotheses.
+Keep it measured, and keep the closed directions here -- this file is how the
+next agent avoids re-running work the board already paid for.
+
+## The knobs
+
+| Knob | Range | Effect |
+|---|---|---|
+| `x` | 1-100 | TODO |
+
+## Closed directions
+
+None yet. As entries close, record the ones whose refutation was `mechanism`
+here: those hold outside the range measured and should never be re-proposed.
+
+## Open questions
+
+- TODO
+'''
+
+
+def init(root, name: str, objective: str = "cost", metrics=("cost",),
+         target: float = 100.0, force: bool = False) -> list[pathlib.Path]:
+    root = pathlib.Path(root).resolve()
+    config = root / "domain.toml"
+    if config.exists() and not force:
+        raise ConfigError(
+            f"{config} already exists. `ar init` refuses to scaffold over a "
+            f"live domain -- it would destroy the records. Use --force only on "
+            f"a directory you are certain is disposable.")
+
+    written = []
+    for d in DIRS:
+        (root / d).mkdir(parents=True, exist_ok=True)
+
+    metrics = list(metrics)
+    files = {
+        "domain.toml": _domain_toml(name, objective, metrics),
+        "goal.yaml": _goal_yaml(name, objective, metrics, target),
+        "bin/measure": MEASURE,
+        "guides/landscape.md": GUIDE,
+    }
+    for rel, content in files.items():
+        path = root / rel
+        path.write_text(content)
+        written.append(path)
+    (root / "bin" / "measure").chmod(0o755)
+    return written

@@ -109,7 +109,7 @@ def _dead_mechanisms(entries, machine_for):
 
 
 def rank(entries, config, *, prior_weight: float = 3.0,
-         verdicts_since=None, budget_ok=None) -> Ranking:
+         verdicts_since=None, budget_ok=None, host=None) -> Ranking:
     """Score every claimable entry. Returns the ranking and why each entry sits
     where it does -- an unexplained ranking is one nobody can correct."""
     machine_for = lambda eid: config.track_for(eid).machine   # noqa: E731
@@ -139,6 +139,15 @@ def rank(entries, config, *, prior_weight: float = 3.0,
             card.excluded = f"not claimable from {entry.status!r}"
         elif budget_ok is not None and not budget_ok(entry):
             card.excluded = f"cost {entry.cost:g} exceeds the remaining budget"
+        elif host is not None and entry.hardware and entry.hardware in config.hardware:
+            # Refuse before claiming, not after measuring. A run that silently
+            # truncates to what fits reports a number for a configuration
+            # nobody chose.
+            from .hardware import check as _check
+            capability = _check(host, config.hardware[entry.hardware])
+            if not capability.ok:
+                card.excluded = (f"host cannot run {entry.hardware!r}: "
+                                 + "; ".join(capability.problems))
         else:
             dead = [m for m in entry.mechanisms if m in hard_dead]
             if dead:

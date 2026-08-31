@@ -36,6 +36,7 @@ import time
 from dataclasses import dataclass, field
 
 from .. import budget as budget_mod
+from .. import hardware as hw
 from .. import rank as rank_mod
 from .. import render, runs as runs_mod
 from ..claims import Claims
@@ -118,6 +119,10 @@ class Coordinator:
         # -- the budget is for work this loop does -- but the count is kept and
         # reported rather than silently dropped, because "0 rows" and "0 rows we
         # can read, of 9,443" are different facts (H81/H96).
+        # Detected once per coordinator: every measurement this iteration takes
+        # is on this machine, and a figure that does not name its machine is not
+        # a measurement.
+        self.host = hw.detect()
         rows, self.foreign_rows = runs_mod.read_with_skipped(config.paths.runs)
         self.domain_budget = budget_mod.domain_budget(config, spent_runs=len(rows))
 
@@ -161,6 +166,16 @@ class Coordinator:
                 "best_so_far": iteration.objective,
             },
             "knowledge_paths": self.config.knowledge,
+            "host": {
+                "fingerprint": self.host.fingerprint,
+                "chip": self.host.chip,
+                "cpu_threads": self.host.cpu_threads,
+                "memory_gb": round(self.host.memory_gb, 1),
+                "gpu": self.host.gpu.describe(),
+                "on_battery": self.host.on_battery,
+                "note": "every throughput figure you report must name this "
+                        "machine and the concurrency it was taken at",
+            },
             "measure_command": self.config.commands.get("measure"),
             "open_entries": [
                 {"id": e.id, "title": e.title, "status": e.status,
@@ -193,7 +208,8 @@ class Coordinator:
         it.objective = best[0] if best else None
         phase.read = len(entries)
         phase.did = 1
-        phase.detail = [f"target={it.target}", f"best={it.objective}",
+        phase.detail = [f"host={self.host.fingerprint}",
+                        f"target={it.target}", f"best={it.objective}",
                         f"runs charged to this campaign="
                         f"{self.domain_budget['runs'].spent:g}"]
         if self.foreign_rows:
@@ -271,7 +287,7 @@ class Coordinator:
         start = time.time()
         entries = self.store.all()
         remaining = self.domain_budget["runs"].remaining()
-        ranking = rank_mod.rank(entries, self.config,
+        ranking = rank_mod.rank(entries, self.config, host=self.host,
                                 budget_ok=lambda e: e.cost <= remaining)
         phase.read = len(entries)
 

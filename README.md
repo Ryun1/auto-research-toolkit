@@ -87,9 +87,28 @@ pip install -e .
 ar --domain domains/toy board
 ```
 
+## Start a new research project
+
+```bash
+ar init ~/research/widgets --name widgets \
+   --objective "round(latency) * memory" --metric latency --metric memory --target 5000
+```
+
+That writes a domain which **validates clean and runs before you edit anything** —
+a scaffold whose first act is to fail teaches you to ignore the validator. Then:
+
+1. `bin/measure` — replace `evaluate()` with your real experiment
+2. `goal.yaml` — the metrics it returns, and what winning means
+3. `guides/landscape.md` — what an agent needs to know to guess well
+4. `domain.toml` — `[policy]` never-rules, `[budgets]`, `[hardware]`
+5. `ar hardware` — what this machine can and cannot run
+6. `ar loop` — go
+
 ## Commands
 
 ```
+ar init        scaffold a new domain that is valid and runnable before you edit it
+ar hardware    what this machine is, what it can run, and what it cannot
 ar board       one screen: goal, distance to target, queues, live claims, measurements
 ar rank        score the queue and show the numbers it ranked on
 ar budget      every meter, and the stop decision
@@ -105,6 +124,70 @@ ar render      write the generated queue views
 ar validate    check records, views, runs and policy
 ar policy      show the never-rules and prove each refuses something
 ```
+
+## Hardware awareness
+
+The harness inspects the machine it is on, records it, refuses work it cannot
+do, and says when to stop buying local time.
+
+```
+$ ar hardware
+chip        Apple M2  [apple arm64]
+cpu         8 threads (4P + 4E)
+memory      16.0 GB (6.0 GB available)
+gpu         Apple M2, 10 cores, 16 GB unified
+power       battery  ** sustained throughput will be lower **
+note        unified memory: the GPU competes with the CPU for the same pool
+
+  OK   gpu-walk-full        (memory allows 323-way concurrency)
+```
+
+Three things make this more than a `uname` wrapper:
+
+- **Capacity is a refusal, not a truncation.** A domain declares what an
+  experiment class needs (`base_memory_gb`, `gb_per_unit`, `needs_gpu`), and an
+  entry naming a class the host fails is excluded from ranking *before* it is
+  claimed. A run that silently caps its concurrency reports a throughput for a
+  configuration nobody chose — and a figure produced that way was published and
+  later retired in the corpus this came from.
+- **A rate is never a property of hardware alone.** `Throughput` cannot be
+  constructed without naming its machine *and* its concurrency, and
+  `ratio_to()` refuses to divide two figures taken at different concurrencies
+  unless you say so explicitly. That comparison is exactly how the retired
+  figure was produced.
+- **Apple Silicon specifics are first-class**: P/E core split, unified memory
+  (GPU concurrency is bounded by total RAM, not a separate VRAM budget),
+  battery vs AC, and thermal throttling — a figure taken while throttled is a
+  lower bound, not a measurement.
+
+### When local hardware is not enough
+
+`escalate` recommends rented compute, under two gates borrowed from a guide that
+was written after renting on a hunch had already cost money:
+
+- **Gate 0 — the work is already correct locally.** Asserted by the domain, never
+  inferred. A rented hour spent finding a port bug buys nothing.
+- **Gate A — the budget reaches a rung.** Compute has to change the *answer*, not
+  the wall clock. Being 10× faster at something needing 10,000× is not a reason.
+
+And one rule of its own: **core never invents a speedup.** A class with no
+measured ratio for this workload cannot be costed — the verdict is
+`NEEDS_MEASUREMENT`, not a guess. The same walk measured 0.82× on one GPU and
+38.1× on another; nothing about the hardware predicted either.
+
+```
+escalation: GO  (trigger: too-slow)
+  rent rtx-4090: 2.3 h at $0.40/h = $0.90
+  local       2.22 candidates/s @ 8-way on Apple-M2/8t/16g [screen]
+  need        200,000 candidates  ->  25.0 h locally
+    rtx-4090          2.3 h   $  0.90  [measured 11.10x @ 16384-way, run-abc]
+    cpu-32core        8.3 h   $  1.25  [measured 3.00x @ 32-way, run-def]
+    h100                —          —   [no measured ratio; not costed]
+  Renting spends money, which is a human decision.
+```
+
+Note the cheapest per hour is not the cheapest overall — which is why this is
+arithmetic and not a rule of thumb. Nothing here spends money.
 
 ## The seven invariants
 
@@ -156,7 +239,7 @@ loop with no model, which is what makes `ar loop` a unit test rather than a bill
 
 ## Status
 
-The core is complete and tested (150 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (185 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.
