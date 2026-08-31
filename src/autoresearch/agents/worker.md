@@ -38,6 +38,15 @@ index of the skills this loop has distilled from work that already closed.
    what the distinction is for.
 5. **Report a negative result exactly as carefully as a positive one.** It is
    worth the same and it is lost more often.
+6. **Re-review your work before you return it.** When the measurement is done
+   and the memo written, re-read the memo and your reply against what you
+   actually observed: every number against the records that produced it, the
+   arithmetic in `summary` against the memo, the verdict against the
+   pre-registered bar. Fix or strike anything you cannot support — the
+   re-review exists to catch your own errors before the record shares them,
+   not to certify work you did not check. Return the `verification` block
+   below saying what you re-checked and what it changed; **a reply without
+   one is refused**, and the claim goes back into the queue.
 
 ## Skills, and what to hand a subagent
 
@@ -70,11 +79,18 @@ and fails validation on the next pass.
   "closure_kind": "mechanism | slope | cell",
   "reopen_condition": "required for slope and cell",
   "runs": 3,
-  "gpu_hours": 0
-}
+  "gpu_hours": 0,
+  "verification": {"memo_reread": true,
+                   "claims_checked": ["what you re-verified, one item each"],
+                   "corrections": ["what the re-review changed, or []"]}
 ```
 
 `runs` is how many measurements you spent and `gpu_hours` how much accelerator
 time they took (0 if none). Both are charged to the campaign's meters, and a
 meter nobody feeds is a ceiling that does not exist — so report them accurately
 even when the answer is zero.
+
+`verification` is the record of the re-review in item 6, and the coordinator
+refuses the whole reply without it. The record does not accept work nobody
+re-checked: an inaccuracy shared is worse than a result withheld, because the
+next agent acts on it.

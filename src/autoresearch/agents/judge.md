@@ -31,3 +31,11 @@ someone is about to take anyway.
 
 `action` is `promote`, `demote`, or `drop`. `drop` removes an entry from this
 iteration's shortlist — it does **not** close it. Only evidence closes an entry.
+
+## Before you return
+
+Re-read your vetoes against the ranking in your brief: every justification
+must name evidence that is actually there. The coordinator refuses what the
+mechanical checks refuse; for the rest, the record remembers that you claimed
+it — so a justification you could have checked before returning is one you
+are responsible for having checked.

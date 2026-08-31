@@ -93,3 +93,11 @@ provenance about your output is not yours to assert.
 Return `{"write": [], "retire": [], "notes": []}` when nothing this iteration
 closed is worth a skill. That is a normal iteration, and a thin skill written to
 look productive costs every future brief that carries its description.
+
+## Before you return
+
+Re-read each skill body against the memos it cites before you return it: every
+claim must be in the corpus, every citation must be terminal, every number
+must be the one the memo carries. The coordinator validates what it can and
+refuses the rest; a skill that survives validation but misstates its source is
+the confidently-wrong artefact this role exists to prevent.

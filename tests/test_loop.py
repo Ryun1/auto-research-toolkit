@@ -91,6 +91,10 @@ def test_fanout_budget_caps_dispatch(sandbox):
     assert len(it.shortlist) == 1
 
 
+VERIFIED = {"memo_reread": True, "claims_checked": ["summary", "verdict"],
+            "corrections": []}
+
+
 def test_a_worker_returning_inconclusive_releases_the_claim(sandbox):
     """H26: the loop had no way to report 'measured, found nothing', so agents
     reached for a status that was not true."""
@@ -101,7 +105,8 @@ def test_a_worker_returning_inconclusive_releases_the_claim(sandbox):
         Role.GENERATOR: lambda b: [],
         Role.JUDGE: lambda b: [],
         Role.WORKER: lambda b: {"verdict": "inconclusive",
-                                "summary": "the measurement did not decide the bar"},
+                                "summary": "the measurement did not decide the bar",
+                                "verification": dict(VERIFIED)},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     it = Coordinator(sandbox, brain).run_iteration(1)
@@ -119,7 +124,8 @@ def test_a_close_without_evidence_is_refused_and_the_claim_returned(sandbox):
         Role.GENERATOR: lambda b: [],
         Role.JUDGE: lambda b: [],
         Role.WORKER: lambda b: {"verdict": "confirmed", "memo": "inbox/ghost.md",
-                                "summary": "it worked, trust me"},
+                                "summary": "it worked, trust me",
+                                "verification": dict(VERIFIED)},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     it = Coordinator(sandbox, brain).run_iteration(1)
@@ -135,7 +141,8 @@ def test_qc_files_harness_debt_against_the_harness_track(sandbox):
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [],
         Role.JUDGE: lambda b: [],
-        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a"},
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a",
+                                "verification": dict(VERIFIED)},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "verdict": "problems", "harness_debt": [
             {"title": "measure command has no timeout", "hypothesis": "a hung run stalls the pool"}]}})
@@ -153,7 +160,8 @@ def test_extract_json_handles_fenced_and_bare_replies():
 # -- the meters that were declared and never spent -------------------------
 
 IDLE = {Role.GENERATOR: lambda b: [], Role.JUDGE: lambda b: [],
-        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a"},
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a",
+                                "verification": dict(VERIFIED)},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}}
 
@@ -217,6 +225,47 @@ def test_a_failed_target_probe_is_recorded_not_silent(sandbox):
     assert it.target is None
     assert any("target probe failed" in line and "exploded" in line
                for line in phase.detail)
+
+
+def test_a_verdict_without_verification_is_refused(sandbox, store):
+    """The re-review is the completion protocol, not advice: a verdict whose
+    own agent did not re-verify it is a claim the record takes on faith."""
+    make_entry(store, "Q1", impact=1.0)
+    (sandbox.paths.root / "inbox" / "real.md").write_text("memo exists")
+    brain = ScriptedBrain({
+        Role.GENERATOR: lambda b: [],
+        Role.JUDGE: lambda b: [],
+        Role.WORKER: lambda b: {"verdict": "confirmed", "memo": "inbox/real.md",
+                                "summary": "it worked", "verification": None},
+        Role.CURATOR: lambda b: {"reprice": [], "notes": []},
+        Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
+    it = Coordinator(sandbox, brain).run_iteration(1)
+    entry = store.load("Q1")
+    assert it.verdicts["Q1"] == "refused"
+    assert entry.status == "queued", "an unverified verdict must not close an entry"
+    dispatch = next(p for p in it.phases if p.name == "dispatch")
+    assert any("verification" in d for d in dispatch.detail)
+
+
+def test_a_verified_verdict_records_the_rereview(sandbox, store):
+    """The verification block is provenance: the closure says not only what was
+    claimed but that the agent that made it re-checked it."""
+    from autoresearch.entries import Store
+    make_entry(store, "Q1", impact=1.0)
+    (sandbox.paths.root / "inbox" / "real.md").write_text("numbers")
+    verification = {"memo_reread": True, "claims_checked": ["objective"],
+                    "corrections": []}
+    brain = ScriptedBrain({
+        Role.GENERATOR: lambda b: [],
+        Role.JUDGE: lambda b: [],
+        Role.WORKER: lambda b: {"verdict": "confirmed", "memo": "inbox/real.md",
+                                "summary": "it worked", "verification": verification},
+        Role.CURATOR: lambda b: {"reprice": [], "notes": []},
+        Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
+    Coordinator(sandbox, brain).run_iteration(1)
+    entry = Store(sandbox.paths.entries).load("Q1")
+    assert entry.status == "confirmed"
+    assert entry.result.verification == verification
 
 
 def test_model_spend_is_charged_to_the_campaign_money_meter(sandbox):
@@ -291,7 +340,7 @@ def test_a_workers_runs_and_gpu_hours_are_charged_to_the_campaign(sandbox):
     make_entry(Store(sandbox.paths.entries), "Q1", impact=1.0)
     brain = ScriptedBrain({**IDLE, Role.WORKER: lambda b: {
         "verdict": "inconclusive", "summary": "measured, decided nothing",
-        "runs": 3, "gpu_hours": 1.5}})
+        "runs": 3, "gpu_hours": 1.5, "verification": dict(VERIFIED)}})
     c = Coordinator(sandbox, brain)
     c.run_iteration(1)
     assert c.domain_budget["runs"].spent == 3
@@ -305,7 +354,8 @@ def test_a_workers_measurements_survive_a_restart(sandbox):
     from autoresearch.entries import Store
     make_entry(Store(sandbox.paths.entries), "Q1", impact=1.0)
     brain = ScriptedBrain({**IDLE, Role.WORKER: lambda b: {
-        "verdict": "inconclusive", "summary": "n/a", "runs": 3, "gpu_hours": 1.5}})
+        "verdict": "inconclusive", "summary": "n/a", "runs": 3, "gpu_hours": 1.5,
+        "verification": dict(VERIFIED)}})
     Coordinator(sandbox, brain).run(max_iterations=1)
 
     fresh = Coordinator(sandbox, ScriptedBrain(dict(IDLE)))
@@ -491,7 +541,8 @@ def test_the_loop_reserves_a_shortlist_slot_for_amplitude(sandbox):
     make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [], Role.JUDGE: lambda b: [],
-        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision"},
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision",
+                                "verification": dict(VERIFIED)},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     it = Coordinator(sandbox, brain).run_iteration(1)
@@ -514,7 +565,8 @@ def test_the_judge_sees_which_entries_the_reserve_would_take(sandbox):
         return []
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [], Role.JUDGE: judge,
-        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision"},
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision",
+                                "verification": dict(VERIFIED)},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     Coordinator(sandbox, brain).run_iteration(1)
@@ -533,7 +585,8 @@ def test_the_loop_honours_a_domain_that_disables_the_reserve(sandbox):
     make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [], Role.JUDGE: lambda b: [],
-        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision"},
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision",
+                                "verification": dict(VERIFIED)},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     it = Coordinator(sandbox, brain).run_iteration(1)

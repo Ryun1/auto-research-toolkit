@@ -551,12 +551,17 @@ class Coordinator:
                     instruction=(
                         "Test this entry against its own pre-registered bar. "
                         "Measure with the domain's measure command; write a memo "
-                        "under inbox/ containing the numbers; then return JSON: "
-                        "{verdict: confirmed|refuted|blocked|inconclusive, memo: "
+                        "under inbox/ containing the numbers; then re-read your "
+                        "own memo and verify every claim in it before returning. "
+                        "Return JSON: {verdict: "
+                        "confirmed|refuted|blocked|inconclusive, memo: "
                         "path relative to the domain root, summary, closure_kind: "
                         "mechanism|slope|cell (refutations only), "
                         "reopen_condition (required for slope/cell), runs: int, "
-                        "gpu_hours: float}."))
+                        "gpu_hours: float, verification: {memo_reread: true, "
+                        "claims_checked: [what you re-verified], corrections: "
+                        "[what the re-review changed]}}. A reply without a "
+                        "verification block is refused."))
                 return self.brain.ask(Role.WORKER, brief, workspace=slot.path)
             finally:
                 pool.release(slot.name)
@@ -593,6 +598,20 @@ class Coordinator:
         if machine.status(entry.status).terminal:
             phase.detail.append(f"{entry_id}: already closed by the worker")
             return entry.status
+        # The re-review is the completion protocol, not advice: a verdict the
+        # worker did not re-check against its own deliverable is a claim the
+        # record would take on faith. Refused loudly, claim handed back.
+        verification = report.get("verification")
+        if not (isinstance(verification, dict) and verification.get("memo_reread")):
+            phase.detail.append(
+                f"{entry_id}: reply refused — no verification block; the work "
+                "was not re-reviewed before it was shared")
+            try:
+                self.claims.release(entry_id,
+                                    why="reply refused: no verification block")
+            except AutoresearchError as exc:
+                phase.detail.append(f"{entry_id}: {exc}")
+            return "refused"
 
         verdict = str(report.get("verdict", "inconclusive"))
         if verdict not in machine.terminal_names:
@@ -612,7 +631,8 @@ class Coordinator:
             verdict=verdict, memo=str(report.get("memo", "")), at=_iso(),
             session=self.session, summary=str(report.get("summary", "")),
             closure_kind=report.get("closure_kind"),
-            reopen_condition=str(report.get("reopen_condition", "")))
+            reopen_condition=str(report.get("reopen_condition", "")),
+            verification=verification)
         try:
             entry.apply(machine, verdict, who=self.session,
                         why=result.summary, result=result,
