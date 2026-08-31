@@ -80,7 +80,7 @@ and fails validation on the next pass.
   "reopen_condition": "required for slope and cell",
   "runs": 3,
   "gpu_hours": 0,
-  "verification": {"memo_reread": true,
+  "verification": {"reread": true,
                    "claims_checked": ["what you re-verified, one item each"],
                    "corrections": ["what the re-review changed, or []"]}
 ```

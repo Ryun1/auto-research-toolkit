@@ -558,10 +558,10 @@ class Coordinator:
                         "path relative to the domain root, summary, closure_kind: "
                         "mechanism|slope|cell (refutations only), "
                         "reopen_condition (required for slope/cell), runs: int, "
-                        "gpu_hours: float, verification: {memo_reread: true, "
-                        "claims_checked: [what you re-verified], corrections: "
-                        "[what the re-review changed]}}. A reply without a "
-                        "verification block is refused."))
+                        "gpu_hours: float, verification: {reread: true, "
+                        "claims_checked: [what you re-verified, one item each], "
+                        "corrections: [what the re-review changed]}}. A reply "
+                        "without a verification block is refused."))
                 return self.brain.ask(Role.WORKER, brief, workspace=slot.path)
             finally:
                 pool.release(slot.name)
@@ -600,9 +600,16 @@ class Coordinator:
             return entry.status
         # The re-review is the completion protocol, not advice: a verdict the
         # worker did not re-check against its own deliverable is a claim the
-        # record would take on faith. Refused loudly, claim handed back.
+        # record would take on faith. Refused loudly, claim handed back. The
+        # flag must be a real True and the checks non-empty (H101: a
+        # verification that reported OK having checked strictly less than the
+        # gate is the vacuous-pass shape this record does not survive).
         verification = report.get("verification")
-        if not (isinstance(verification, dict) and verification.get("memo_reread")):
+        claims = verification.get("claims_checked") if isinstance(
+            verification, dict) else None
+        if not (isinstance(verification, dict)
+                and verification.get("reread") is True
+                and isinstance(claims, list) and claims):
             phase.detail.append(
                 f"{entry_id}: reply refused — no verification block; the work "
                 "was not re-reviewed before it was shared")

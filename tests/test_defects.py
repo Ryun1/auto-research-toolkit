@@ -226,7 +226,9 @@ def test_qc_files_harness_debt_with_core_stamped(sandbox):
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [],
         Role.JUDGE: lambda b: [],
-        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a"},
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a",
+                                "verification": {"reread": True,
+                                                 "claims_checked": ["summary"]}},
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "verdict": "problems", "harness_debt": [
             {"title": "measure command has no timeout",
