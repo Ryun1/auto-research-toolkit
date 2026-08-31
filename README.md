@@ -180,6 +180,7 @@ ar hardware    what this machine is, what it can run, and what it cannot
 ar escalate    whether to rent compute, which class, and the arithmetic
 ar board       one screen: goal, distance to target, queues, live claims, measurements
 ar rank        score the queue and show the numbers it ranked on
+               (--explore F overrides coordinator.explore_fraction)
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar entry       file, show and list entries

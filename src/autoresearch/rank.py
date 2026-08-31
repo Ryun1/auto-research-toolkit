@@ -23,6 +23,20 @@ decides:
   and excluding it would be exactly the over-claim the taxonomy was invented to
   stop.
 
+**A fraction of the shortlist is reserved for amplitude.** The formula is
+expected value per unit cost, which is risk-neutral, and risk-neutral EV/cost
+is pure exploitation: an honest long shot (confidence 0.10, impact 0.40, cost 8
+-> 0.005) loses to a safe increment (0.85, 0.02, 1 -> 0.017) by 3.4x, and would
+need impact > 1.0 -- more than the whole objective -- to draw level. Nothing
+else in the formula corrects for it: `staleness` and `overlap` are both bounded
+by 1, so every term is a penalty and none is a bonus. `Ranking.shortlist` hands
+`explore_fraction` of the slots to the entries with the largest `impact`,
+ignoring confidence and cost. The reserve reorders among *ranked* entries only,
+so it is not a second route past the hard filters above.
+
+(Called a reserve, not a lane, because `lanes.py` already owns "lane" for the
+findings/scaffolding publish boundary, which is a different thing entirely.)
+
 **The formula proposes; a judge may reorder within the shortlist.** The numbers
 cannot encode everything -- that is why the human curator existed -- but a judge
 that can also *resurrect* a hard-filtered entry can undo the exclusion above, so
@@ -32,6 +46,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+#: Share of the shortlist reserved for amplitude. Small enough that the loop
+#: still spends most of every iteration on the objective, large enough that at
+#: the fanouts actually run (k=3) it reserves one slot.
+EXPLORE_FRACTION = 0.2
+
 
 @dataclass
 class Score:
@@ -40,12 +59,15 @@ class Score:
     score: float = 0.0
     terms: dict = field(default_factory=dict)
     excluded: str | None = None      # the hard filter that removed it, if any
+    explore: bool = False            # taken by the reserve, not by the score
 
     def explain(self) -> str:
         if self.excluded:
             return f"{self.entry_id:6} EXCLUDED  {self.excluded}"
         terms = "  ".join(f"{k}={v:.4g}" for k, v in self.terms.items())
-        return f"{self.entry_id:6} {self.score:9.4f}  {terms}   {self.title[:60]}"
+        lane = "  [explore]" if self.explore else ""
+        return (f"{self.entry_id:6} {self.score:9.4f}  {terms}   "
+                f"{self.title[:60]}{lane}")
 
 
 @dataclass
@@ -54,14 +76,53 @@ class Ranking:
     excluded: list[Score]
     calibration: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    explore_fraction: float = 0.0
 
     def shortlist(self, k: int) -> list[Score]:
-        return self.scored[:k]
+        """The top `k`, with a fraction of the slots reserved for amplitude.
+
+        `scored` stays in score order -- that is the auditable ranking, and the
+        judge reviews it -- so the reserve is applied here, at the point where
+        slots are actually spent.
+
+        Rounding is deliberate: `int(k * f + 0.5)` rather than a floor, because
+        a floor at the fanouts this loop actually runs (k=3, f=0.2 -> 0.6) would
+        reserve nothing and the lane would exist only on paper. At k=1 it still
+        rounds to 0: the only slot in an iteration is never spent on a lottery
+        ticket.
+        """
+        if k <= 0:
+            return []
+        for card in self.scored:            # recomputed, so this is idempotent
+            card.explore = False
+        reserve = int(k * self.explore_fraction + 0.5)
+        picks = self.scored[:k - reserve]
+        if reserve:
+            taken = {c.entry_id for c in picks}
+            # Impact alone. Confidence and cost are precisely the terms that
+            # bury a long shot, so the reserve must not consult them; ties break
+            # on score so the ordering stays deterministic.
+            rest = sorted((c for c in self.scored if c.entry_id not in taken),
+                          key=lambda c: (-c.terms.get("impact", 0.0), -c.score))
+            for card in rest[:reserve]:
+                card.explore = True
+                picks.append(card)
+            # A reserve nobody could fill is given back to the score, so a short
+            # queue is never shortlisted below `k` for want of a long shot.
+            if len(picks) < k:
+                chosen = {c.entry_id for c in picks}
+                picks += [c for c in self.scored
+                          if c.entry_id not in chosen][:k - len(picks)]
+        return picks
 
     def explain(self) -> str:
         out = [f"ranked {len(self.scored)} candidate(s), "
                f"excluded {len(self.excluded)}"]
-        out += ["", "score = confidence x impact / cost x staleness x overlap", ""]
+        out += ["", "score = confidence x impact / cost x staleness x overlap"]
+        if self.explore_fraction:
+            out += [f"explore reserve: {self.explore_fraction:.0%} of the "
+                    f"shortlist, ranked on impact alone"]
+        out += [""]
         out += ["  " + s.explain() for s in self.scored]
         if self.excluded:
             out += ["", "excluded by hard filter:"]
@@ -109,9 +170,19 @@ def _dead_mechanisms(entries, machine_for):
 
 
 def rank(entries, config, *, prior_weight: float = 3.0,
-         verdicts_since=None, budget_ok=None, host=None) -> Ranking:
+         verdicts_since=None, budget_ok=None, host=None,
+         explore_fraction: float = 0.0) -> Ranking:
     """Score every claimable entry. Returns the ranking and why each entry sits
-    where it does -- an unexplained ranking is one nobody can correct."""
+    where it does -- an unexplained ranking is one nobody can correct.
+
+    `explore_fraction` reserves that share of the shortlist for amplitude; see
+    the module docstring. It is off by default so a library caller gets the
+    score and nothing else; the loop and the CLI pass `EXPLORE_FRACTION`."""
+    if not 0.0 <= explore_fraction < 1.0:
+        raise ValueError(
+            f"explore_fraction must be in [0, 1), got {explore_fraction!r}; "
+            "a reserve of the whole shortlist leaves no exploit lane, and the "
+            "score is what connects an iteration to the objective")
     machine_for = lambda eid: config.track_for(eid).machine   # noqa: E731
     calibration = calibrate(entries, machine_for)
     hard_dead, soft_dead = _dead_mechanisms(entries, machine_for)
@@ -206,7 +277,7 @@ def rank(entries, config, *, prior_weight: float = 3.0,
                      f"penalised rather than excluded — they re-open outside "
                      f"the band measured")
     return Ranking(scored=scored, excluded=excluded, calibration=calibration,
-                   notes=notes)
+                   notes=notes, explore_fraction=explore_fraction)
 
 
 @dataclass
@@ -258,4 +329,5 @@ def apply_veto(ranking: Ranking, vetoes: list[Veto]) -> Ranking:
         notes.append(f"veto: {veto.action} {veto.entry_id} — {veto.justification}")
 
     return Ranking(scored=scored, excluded=ranking.excluded,
-                   calibration=ranking.calibration, notes=notes)
+                   calibration=ranking.calibration, notes=notes,
+                   explore_fraction=ranking.explore_fraction)

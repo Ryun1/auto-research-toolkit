@@ -67,6 +67,9 @@ probe_target = "bin/probe-target"
 [coordinator]
 workers_per_iteration = 3
 generators_per_iteration = 2
+# Share of each shortlist reserved for the largest `impact`, ignoring confidence
+# and cost -- the terms that bury an honest long shot. 0 disables it.
+explore_fraction = 0.2
 
 # What each experiment class needs of the machine. Declared so a capacity limit
 # surfaces as a REFUSAL before the run, rather than as a truncated measurement

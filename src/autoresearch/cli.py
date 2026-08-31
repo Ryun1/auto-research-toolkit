@@ -355,13 +355,15 @@ def cmd_rank(args):
     all_runs = runs_mod.read_all(config.paths.runs)
     domain = budget_mod.domain_budget(config, spent_runs=len(all_runs))
     remaining = domain["runs"].remaining()
-    ranking = rank_mod.rank(entries, config,
+    explore = config.explore_fraction if args.explore is None else args.explore
+    ranking = rank_mod.rank(entries, config, explore_fraction=explore,
                             budget_ok=lambda e: e.cost <= remaining)
     print(ranking.explain())
     if args.top:
         print(f"\nshortlist (top {args.top}):")
         for s in ranking.shortlist(args.top):
-            print(f"  {s.entry_id}  {s.title}")
+            print(f"  {s.entry_id}  {s.title}"
+                  + ("  [explore]" if s.explore else ""))
     return 0
 
 
@@ -636,6 +638,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     rankp = sub.add_parser("rank", help="score the queue and explain the numbers")
     rankp.add_argument("--top", type=int, default=3)
+    rankp.add_argument("--explore", type=float, default=None, metavar="F",
+                       help="share of the shortlist reserved for the largest "
+                            "impact, ignoring confidence and cost; overrides "
+                            "the domain's coordinator.explore_fraction "
+                            f"(core default {rank_mod.EXPLORE_FRACTION}, "
+                            "0 disables)")
     rankp.set_defaults(func=cmd_rank)
 
     sub.add_parser("budget", help="every meter, and the stop decision"

@@ -428,3 +428,66 @@ def test_an_iteration_record_is_written_atomically(sandbox, monkeypatch):
     assert dst.endswith("0001.json") and src != dst
     assert [p.name for p in sandbox.paths.iterations.iterdir()] == ["0001.json"], \
         "a temporary file was left beside the record"
+
+
+
+
+def test_the_loop_reserves_a_shortlist_slot_for_amplitude(sandbox):
+    """The score is EV per unit cost, so a cheap certain increment always beats
+    an honest long shot. The coordinator hands part of every shortlist to the
+    largest `impact` instead, or the loop never attempts a big swing."""
+    from autoresearch.entries import Store
+    store = Store(sandbox.paths.entries)
+    sandbox.budgets["iteration_fanout"] = 3
+    for i in range(4):                    # cheap, likely, small
+        make_entry(store, f"Q1{i}", confidence=0.85, impact=0.02, cost=1.0)
+    make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
+    brain = ScriptedBrain({
+        Role.GENERATOR: lambda b: [], Role.JUDGE: lambda b: [],
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision"},
+        Role.CURATOR: lambda b: {"reprice": [], "notes": []},
+        Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
+    it = Coordinator(sandbox, brain).run_iteration(1)
+    assert "Q90" in it.shortlist, it.shortlist
+    assert len(it.shortlist) == 3
+
+
+def test_the_judge_sees_which_entries_the_reserve_would_take(sandbox):
+    """A veto is reviewed against the ranking; an unlabelled explore pick reads
+    to the judge as the formula having gone wrong."""
+    from autoresearch.entries import Store
+    store = Store(sandbox.paths.entries)
+    sandbox.budgets["iteration_fanout"] = 3
+    for i in range(4):
+        make_entry(store, f"Q1{i}", confidence=0.85, impact=0.02, cost=1.0)
+    make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
+    seen = {}
+    def judge(brief):
+        seen.update(json.loads(brief))
+        return []
+    brain = ScriptedBrain({
+        Role.GENERATOR: lambda b: [], Role.JUDGE: judge,
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision"},
+        Role.CURATOR: lambda b: {"reprice": [], "notes": []},
+        Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
+    Coordinator(sandbox, brain).run_iteration(1)
+    assert seen["explore_reserve"] == ["Q90"]
+
+
+def test_the_loop_honours_a_domain_that_disables_the_reserve(sandbox):
+    """A converged domain may want every slot on the score. The coordinator
+    reads the domain's appetite; it does not carry its own."""
+    from autoresearch.entries import Store
+    store = Store(sandbox.paths.entries)
+    sandbox.explore_fraction = 0.0
+    sandbox.budgets["iteration_fanout"] = 3
+    for i in range(4):
+        make_entry(store, f"Q1{i}", confidence=0.85, impact=0.02, cost=1.0)
+    make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
+    brain = ScriptedBrain({
+        Role.GENERATOR: lambda b: [], Role.JUDGE: lambda b: [],
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision"},
+        Role.CURATOR: lambda b: {"reprice": [], "notes": []},
+        Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
+    it = Coordinator(sandbox, brain).run_iteration(1)
+    assert "Q90" not in it.shortlist, it.shortlist
