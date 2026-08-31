@@ -190,7 +190,7 @@ def _claim_record(claims_root: pathlib.Path, entry_id: str) -> dict:
     return {}
 
 
-def migrate(queue_path, closed_status_map=None, *, track: str,
+def migrate(queue_path, *, track: str,
             claims_root=None, root=None, terminal=()) -> CorpusMigration:
     """Convert one queue document into entry records.
 
