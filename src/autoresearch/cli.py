@@ -18,7 +18,7 @@ import pathlib
 import subprocess
 import sys
 
-from . import render, runs as runs_mod
+from . import budget as budget_mod, rank as rank_mod, render, runs as runs_mod
 from .claims import Claims
 from .config import DomainConfig, discover
 from .entries import Entry, Result, Store
@@ -227,6 +227,72 @@ def cmd_measure(args):
     return 0
 
 
+def cmd_rank(args):
+    config = _load(args)
+    entries = _store(config).all()
+    all_runs = runs_mod.read_all(config.paths.runs)
+    domain = budget_mod.domain_budget(config, spent_runs=len(all_runs))
+    remaining = domain["runs"].remaining()
+    ranking = rank_mod.rank(entries, config,
+                            budget_ok=lambda e: e.cost <= remaining)
+    print(ranking.explain())
+    if args.top:
+        print(f"\nshortlist (top {args.top}):")
+        for s in ranking.shortlist(args.top):
+            print(f"  {s.entry_id}  {s.title}")
+    return 0
+
+
+def cmd_budget(args):
+    config = _load(args)
+    entries = _store(config).all()
+    all_runs = runs_mod.read_all(config.paths.runs)
+    domain = budget_mod.domain_budget(config, spent_runs=len(all_runs))
+    iteration = budget_mod.iteration_budget(config)
+    print(domain.report())
+    print()
+    print(iteration.report())
+    held = [e for e in entries if e.claim
+            and not config.track_for(e.id).machine.status(e.status).terminal]
+    print(f"\n{len(held)} live claim(s)")
+    for entry in held:
+        spent = sum(1 for r in all_runs if r.entry == entry.id)
+        print(f"  {entry.id}  {entry.claim.session}")
+        print("    " + budget_mod.claim_budget(entry, config).report()
+              .replace("\n", "\n    "))
+        over = None
+        if entry.claim.max_runs and spent > entry.claim.max_runs:
+            over = f"max_runs {spent} > {entry.claim.max_runs}"
+        if over:
+            print(f"    OVERRUN: {over}")
+
+    try:
+        target = _probe_target(config)
+    except AutoresearchError:
+        target = None
+    best = None
+    for record in all_runs:
+        if record.status != "ok":
+            continue
+        try:
+            value = config.goal.objective_value(record.metrics)
+        except AutoresearchError:
+            continue
+        if best is None or value < best:
+            best = value
+    decision = budget_mod.should_stop(
+        config,
+        measurements=None,
+        target=target,
+        budgets=[domain])
+    print(f"\nstop decision: {decision}")
+    if best is not None and target is not None:
+        met = config.goal.direction == "minimise" and best < target
+        print(f"best objective {best:,.0f} vs target {target:,.0f}"
+              + ("  ** GOAL MET **" if met else ""))
+    return 0
+
+
 def cmd_validate(args):
     config = _load(args)
     store = _store(config)
@@ -311,6 +377,13 @@ def build_parser() -> argparse.ArgumentParser:
                    ).set_defaults(func=cmd_validate)
     sub.add_parser("policy", help="show never-rules and prove each refuses something"
                    ).set_defaults(func=cmd_policy)
+
+    rankp = sub.add_parser("rank", help="score the queue and explain the numbers")
+    rankp.add_argument("--top", type=int, default=3)
+    rankp.set_defaults(func=cmd_rank)
+
+    sub.add_parser("budget", help="every meter, and the stop decision"
+                   ).set_defaults(func=cmd_budget)
 
     entry = sub.add_parser("entry", help="file, show and list entries")
     esub = entry.add_subparsers(dest="entry_cmd", required=True)
