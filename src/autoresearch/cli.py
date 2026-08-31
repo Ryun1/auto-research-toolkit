@@ -293,6 +293,32 @@ def cmd_budget(args):
     return 0
 
 
+def cmd_loop(args):
+    """Run the coordinator. The unattended entry point."""
+    from .driver.brain import SDKBrain
+    from .driver.loop import Coordinator
+
+    config = _load(args)
+    brain = SDKBrain(config, model=args.model, max_budget_usd=args.max_usd)
+
+    def probe(command):
+        result = subprocess.run(command.split(), cwd=config.paths.root,
+                                capture_output=True, text=True)
+        return float(result.stdout.strip().splitlines()[-1])
+
+    coordinator = Coordinator(config, brain, session=args.session,
+                              probe_target=probe)
+    print(f"{config.name}: goal {config.goal.id} — {config.goal.objective} "
+          f"({config.goal.direction})")
+    history = coordinator.run(args.iterations, on_iteration=lambda it: print(it.report()))
+    last = history[-1] if history else None
+    print(f"\n{len(history)} iteration(s); "
+          f"stopped: {last.stop if last else 'no iterations run'}"
+          f"{(' — ' + last.stop_detail) if last and last.stop_detail else ''}")
+    print(f"cost: ${sum(i.cost_usd for i in history):.2f}")
+    return 0
+
+
 def cmd_validate(args):
     config = _load(args)
     store = _store(config)
@@ -384,6 +410,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("budget", help="every meter, and the stop decision"
                    ).set_defaults(func=cmd_budget)
+
+    loop = sub.add_parser("loop", help="run the coordinator until it stops")
+    loop.add_argument("--iterations", type=int, default=1)
+    loop.add_argument("--model")
+    loop.add_argument("--max-usd", type=float, dest="max_usd",
+                      help="hard ceiling on model spend; defaults to policy.spend_ceiling")
+    loop.set_defaults(func=cmd_loop)
 
     entry = sub.add_parser("entry", help="file, show and list entries")
     esub = entry.add_subparsers(dest="entry_cmd", required=True)

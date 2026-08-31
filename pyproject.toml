@@ -15,5 +15,8 @@ ar = "autoresearch.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+autoresearch = ["agents/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
