@@ -68,3 +68,21 @@ def test_board_shows_goal_met(sandbox, store):
                   provenance={"h": "x"}, entry="Q1")
     text = render.board(sandbox, store.all(), [r], target=1000.0, best=(20.0, "Q1"))
     assert "GOAL MET" in text
+
+
+def test_unadopted_domain_is_pointed_at_migrate_not_render(sandbox, store):
+    """An empty store with a source document means "not adopted yet", not
+    "forgot to re-render". Pointing the first case at `ar render` sends the
+    reader the wrong way: rendering an empty store writes an empty queue and
+    looks like it worked."""
+    sandbox.tracks["research"].migrate_from = "docs/log/Legacy Queue.md"
+    problems = render.check_views(sandbox, store.all())
+    assert any("run `ar migrate` first" in p for p in problems)
+
+
+def test_populated_track_missing_a_view_is_pointed_at_render(sandbox, store):
+    sandbox.tracks["research"].migrate_from = "docs/log/Legacy Queue.md"
+    make_entry(store, "Q1")
+    problems = render.check_views(sandbox, store.all())
+    assert any("has never been rendered" in p and "Hypothesis" in p
+               for p in problems)

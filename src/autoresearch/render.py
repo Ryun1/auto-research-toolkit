@@ -204,7 +204,19 @@ def check_views(config, entries) -> list[str]:
         path = config.paths.root / track.view
         expected = queue_view(track, entries)
         if not path.exists():
-            problems.append(f"{track.view} has never been rendered (`ar render`)")
+            # Distinguish "you have not adopted this domain yet" from "you
+            # forgot to re-render". Both leave no file, and pointing the first
+            # case at `ar render` sends the reader the wrong way: rendering an
+            # empty store writes an empty queue and looks like it worked.
+            mine = [e for e in entries if track.is_id(e.id)]
+            if not mine and track.migrate_from:
+                problems.append(
+                    f"{track.view} does not exist and this track holds no "
+                    f"records. Its source document is {track.migrate_from!r}: "
+                    f"run `ar migrate` first, then `ar render`.")
+            else:
+                problems.append(
+                    f"{track.view} has never been rendered (`ar render`)")
         elif path.read_text() != expected:
             problems.append(
                 f"{track.view} differs from what the records render. It is a "
