@@ -45,3 +45,11 @@ You are asked about what code cannot check:
 
 Report nothing you cannot point at. A quality gate that produces plausible
 complaints is worse than none, because it trains the next reader to skip it.
+
+## Before you return
+
+Re-read your problems against the iteration record before you return them:
+every problem must point at something the record shows, and every
+harness_debt item must carry a repro you have reasoned through. Report
+nothing you cannot support — a false alarm costs the next reader's trust, and
+that trust is the only budget this role spends.

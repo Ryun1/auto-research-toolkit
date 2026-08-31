@@ -74,6 +74,11 @@ class Result:
     #: what would re-open it. H136: 7 of 18 `slope` closures had none, which
     #: makes a permanent closure wearing a temporary label.
     reopen_condition: str = ""
+    #: the worker's own re-review, recorded at the reply boundary. A verdict
+    #: reply without one is refused by the coordinator: a claim nobody
+    #: re-checked is a claim the record takes on faith. Empty on closes made
+    #: outside the loop (`ar close`, migration), which the gate never saw.
+    verification: dict = field(default_factory=dict)
 
 
 @dataclass

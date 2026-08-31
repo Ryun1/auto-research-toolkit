@@ -80,15 +80,6 @@ def test_reap_frees_one_claim_only(sandbox, store):
     assert store.load("Q2").claim.session == "b"        # untouched
 
 
-def test_heartbeat_keeps_a_claim_out_of_the_reapable_set(sandbox, store):
-    make_entry(store)
-    claims = Claims(store, sandbox, "a")
-    claims.claim("Q1")
-    assert len(claims.reapable(ttl_hours=0)) == 1
-    claims.heartbeat("Q1")
-    assert len(claims.reapable(ttl_hours=1)) == 0
-
-
 def test_overrun_reports_the_meter_that_stopped_the_work(sandbox, store):
     make_entry(store)
     claims = Claims(store, sandbox, "a")

@@ -43,8 +43,10 @@ def _store(config) -> Store:
     return Store(config.paths.entries)
 
 
-def _probe_target(config):
-    """Resolve the goal's target, running the domain's probe if it needs one."""
+def _make_probe(config):
+    """The target probe as a callable: the domain's command, run, and refused
+    by name when it fails. One derivation -- `ar loop`, `ar budget` and the
+    board must not disagree about what a failed probe looks like."""
     def probe(command):
         result = subprocess.run(command.split(), cwd=config.paths.root,
                                 capture_output=True, text=True)
@@ -53,7 +55,12 @@ def _probe_target(config):
                 f"target probe {command!r} failed ({result.returncode}): "
                 f"{result.stderr.strip()[:300]}")
         return float(result.stdout.strip().splitlines()[-1])
-    return config.goal.target.resolve(probe)
+    return probe
+
+
+def _probe_target(config):
+    """Resolve the goal's target, running the domain's probe if it needs one."""
+    return config.goal.target.resolve(_make_probe(config))
 
 
 # -- verbs ----------------------------------------------------------------
@@ -503,7 +510,8 @@ def cmd_rank(args):
 
 def cmd_budget(args):
     config = _load(args)
-    entries = _store(config).all()
+    store = _store(config)
+    entries = store.all()
     all_runs = runs_mod.read_all(config.paths.runs)
     # Consumption is read back from the iteration records, the same source the
     # coordinator charges against, so `ar budget` and the loop cannot disagree
@@ -520,16 +528,18 @@ def cmd_budget(args):
     held = [e for e in entries if e.claim
             and not config.track_for(e.id).machine.status(e.status).terminal]
     print(f"\n{len(held)} live claim(s)")
+    claims = Claims(store, config, session=args.session)
     for entry in held:
-        spent = sum(1 for r in all_runs if r.entry == entry.id)
+        # Runs spent under THIS claim, not the entry's whole history: work
+        # done under an earlier claim went against that claim's ceiling.
+        spent = sum(1 for r in all_runs
+                    if r.entry == entry.id and r.session == entry.claim.session)
         print(f"  {entry.id}  {entry.claim.session}")
         print("    " + budget_mod.claim_budget(entry, config).report()
               .replace("\n", "\n    "))
-        over = None
-        if entry.claim.max_runs and spent > entry.claim.max_runs:
-            over = f"max_runs {spent} > {entry.claim.max_runs}"
+        over = claims.overrun(entry.id, runs_spent=spent)
         if over:
-            print(f"    OVERRUN: {over}")
+            print(f"    OVERRUN: {over[0]} {over[1]:g} > {over[2]:g}")
 
     try:
         target = _probe_target(config)
@@ -563,13 +573,8 @@ def cmd_loop(args):
     config = _load(args)
     brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd)
 
-    def probe(command):
-        result = subprocess.run(command.split(), cwd=config.paths.root,
-                                capture_output=True, text=True)
-        return float(result.stdout.strip().splitlines()[-1])
-
     coordinator = Coordinator(config, brain, session=args.session,
-                              probe_target=probe)
+                              probe_target=_make_probe(config))
     print(f"{config.name}: goal {config.goal.id} — {config.goal.objective} "
           f"({config.goal.direction})")
     history = coordinator.run(args.iterations, on_iteration=lambda it: print(it.report()))

@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 
 from .errors import ClaimError
@@ -120,14 +121,17 @@ class Pool:
     def release_all(self) -> int:
         """Every slot this pool created. Called from the coordinator's `finally`,
         which is the wiring H91 found missing: teardown documented in a runbook
-        and present in no loop leaves 64 of 64 worktrees behind."""
+        and present in no loop leaves 64 of 64 worktrees behind. A release that
+        fails is named on stderr, never swallowed -- teardown that silently
+        leaks a slot is indistinguishable from a clean shutdown."""
         released = 0
         for name in list(self.slots):
             try:
                 self.release(name)
                 released += 1
-            except Exception:
-                pass
+            except Exception as exc:      # reported, not swallowed
+                print(f"workspace release failed for {name!r}: {exc}",
+                      file=sys.stderr)
         return released
 
     def __enter__(self):

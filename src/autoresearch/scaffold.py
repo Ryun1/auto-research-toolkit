@@ -25,9 +25,7 @@ DIRS = ("bin", "guides", "docs/log", "docs/skills", "inbox",
         "state/entries", "state/claims", "state/iterations", "data/runs")
 
 
-def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
-    metric_block = "\n".join(
-        f'  {m}:\n    field: {m}\n    direction: minimise' for m in metrics)
+def _domain_toml(name: str) -> str:
     return textwrap.dedent(f'''\
         # {name} -- an `autoresearch` domain.
         #
@@ -143,7 +141,7 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         # a librarian asked to distil after a single verdict writes a skill
         # that says what one entry already says. 0 turns distillation off.
         distil_every             = 5
-        ''').replace("{metric_block}", metric_block)
+        ''')
 
 
 GOAL_TEMPLATE = """# The goal, typed. Derived values are EXPRESSIONS, never stored numbers:
@@ -369,7 +367,7 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
 
     metrics = list(metrics)
     files = {
-        "domain.toml": _domain_toml(name, objective, metrics),
+        "domain.toml": _domain_toml(name),
         "goal.yaml": _goal_yaml(name, objective, metrics, target),
         "bin/measure": MEASURE,
         "guides/landscape.md": GUIDE,

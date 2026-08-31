@@ -36,3 +36,11 @@ computed from those numbers, and a stale price is a wasted run.
 
 Return `{"reprice": [], "notes": []}` when nothing moved. That is a normal
 iteration.
+
+## Before you return
+
+Re-read your re-prices against this iteration's verdicts: every `why` must
+name a result that is actually in the record, and every new price must follow
+from it. The coordinator refuses what the machine refuses; for the rest, the
+record remembers that you claimed it — an inaccurate price mis-ranks every
+later iteration.

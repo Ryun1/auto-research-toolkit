@@ -144,7 +144,7 @@ flowchart TB
     judge -->|"vetoes: promote/demote/drop"| veto["apply_veto<br/>may not touch the excluded list"]
 
     coord -->|"brief + entry + workspace"| worker["worker ×K<br/>Read/Grep/Glob/Bash/Write/Edit<br/>in an isolated workspace"]
-    worker -->|"verdict, memo, closure_kind"| apply["_apply_verdict<br/>memo must exist;<br/>refutation must name a kind"]
+    worker -->|"verdict, memo, closure_kind, verification"| apply["_apply_verdict<br/>memo must exist;<br/>refutation must name a kind;<br/>no verification block → refused"]
 
     coord -->|"brief + this iteration's verdicts"| cur["curator<br/>read + write"]
     cur -->|"reprice: confidence/impact/cost"| repr["never a closed entry"]
@@ -230,12 +230,12 @@ sequenceDiagram
         C->>P: acquire(slot)
         C->>W: run
         W->>Br: ask(worker, brief, workspace=slot)
-        Br-->>W: Reply{verdict, memo, closure_kind, runs, gpu_hours, cost}
+        Br-->>W: Reply{verdict, memo, closure_kind, runs, gpu_hours, verification, cost}
         W->>P: release(slot) (finally)
     end
 
     C->>C: _apply_verdict per entry
-    Note over C: already closed → success, not a race<br/>close refused → release the claim, do not close
+    Note over C: already closed → success, not a race<br/>no verification block → refused, claim released<br/>close refused → release the claim, do not close
     C->>P: release_all() (finally)
 ```
 

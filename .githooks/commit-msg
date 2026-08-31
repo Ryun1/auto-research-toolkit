@@ -9,6 +9,10 @@ subject="$(head -n1 "$file")"
 # this hook either).
 case "$subject" in Merge\ *) exit 0 ;; esac
 
+# `git revert` subjects quote the original ("Revert \"Ranking: ...\""). Git
+# generated them, and the quote is not part of any area prefix.
+case "$subject" in 'Revert "'*'"') exit 0 ;; esac
+
 if [ -z "$subject" ]; then
   echo "commit-msg: empty commit message" >&2
   exit 1

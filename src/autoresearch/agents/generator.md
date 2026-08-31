@@ -80,3 +80,11 @@ they are how the board excludes dead directions, so reuse existing tags from
 
 Return `[]` if every angle you can see is already closed or already queued. An
 empty list is a real answer and is better than a duplicate.
+
+## Before you return
+
+Re-read your reply against what you actually observed or read: every claim in
+it must be one you can support, and every number an honest estimate. The
+coordinator checks what can be checked mechanically and refuses what fails;
+where it cannot check, the record remembers that you claimed it — so an
+inaccuracy you could have caught by re-reading is an inaccuracy you shared.

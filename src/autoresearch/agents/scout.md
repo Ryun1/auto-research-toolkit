@@ -53,3 +53,12 @@ coordinator files:
 
 Return `[]` when the question opens nothing. That is a real answer, and a
 better one than a padded list.
+
+## Before you return
+
+Re-read your reply against what you actually observed or read: every claim in
+it must be one you can support, and every citation must resolve to a source
+you opened. The coordinator checks what can be checked mechanically and
+refuses what fails; where it cannot check, the record remembers that you
+claimed it — so an inaccuracy you could have caught by re-reading is an
+inaccuracy you shared.

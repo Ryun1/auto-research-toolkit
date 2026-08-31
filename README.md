@@ -600,6 +600,13 @@ runs the whole loop with no model, which is what makes `ar loop` a unit test
 rather than a bill. `docs/ARCHITECTURE.md` diagrams what each role reads, what
 it may return, and where the coordinator refuses it.
 
+Every agent re-reviews its work before it is shared. A worker's reply carries a
+`verification` block — what the agent re-read and re-checked, and what that
+re-check changed — and the coordinator refuses a verdict that arrives without
+one, releasing the claim back to the queue. The block is stored on the
+closure's result, so the record says not only what was claimed but that the
+agent that claimed it verified it.
+
 ### The scout: research the loop did not ask for
 
 `ar research "<question>" [--count N]` spins up N scouts in parallel, each
@@ -614,7 +621,7 @@ spends the spawn meter, so researchers cannot flood what generators could not.
 
 ## Status
 
-The core is complete and tested (342 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested. Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.

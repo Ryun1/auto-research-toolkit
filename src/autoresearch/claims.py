@@ -18,11 +18,13 @@ going wrong:
 * and `claim-next` failed instantly while the lock was held, so agents burned
   cycles on retries (H92).
 
-The fix is not a better inference. It is a **heartbeat**: a live claim is one
-whose holder has touched it recently, and under a coordinator the holder is a
-process the coordinator is watching, so liveness is observed rather than
-guessed. TTL reaping survives only for sessions running outside a coordinator,
-it targets one entry at a time, and it says which claim it took and why.
+The fix is not a better inference. Under a coordinator, liveness is
+**observed**: the coordinator owns the workspace pool and knows when a worker
+finished, so a claim that outlives its iteration is freeable on sight -- the
+pool is torn down in the coordinator's own finally, and QC checks that no
+claim survived dispatch. TTL reaping survives for sessions running outside a
+coordinator, where a claim's age is the only liveness fact on disk: it targets
+one entry at a time, and it says which claim it took and why.
 """
 from __future__ import annotations
 
@@ -127,7 +129,7 @@ class Lock:
 
 
 class Claims:
-    """Claim, heartbeat, release and reap, over an entry store."""
+    """Claim, release and reap, over an entry store."""
 
     def __init__(self, store, config, session: str):
         self.store, self.config, self.session = store, config, session
@@ -193,14 +195,6 @@ class Claims:
             entry.claim = None
             self.store.save(entry)
             return entry
-
-    def heartbeat(self, entry_id: str):
-        """Record that the holder is still working. Liveness observed, not inferred."""
-        entry = self.store.load(entry_id)
-        if entry.claim and entry.claim.session == self.session:
-            entry.claim.at = _now_iso()
-            self.store.save(entry)
-        return entry
 
     # -- freeing abandoned work --------------------------------------------
 
