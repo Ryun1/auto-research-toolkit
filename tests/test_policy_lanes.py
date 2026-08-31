@@ -92,3 +92,12 @@ def test_mixed_branch_is_detected_and_explained():
 def test_bad_regex_is_refused_at_load():
     with pytest.raises(ConfigError, match="not a valid regex"):
         Lanes("^(unclosed")
+
+
+def test_the_shipped_domain_does_not_publish_per_machine_state(toy):
+    """The claim lock is a single-filesystem primitive: its holder and pid mean
+    nothing on another machine, and committing it hands the next machine a lock
+    it cannot diagnose. A `state/` prefix in the findings lane published it."""
+    assert toy.lanes.classify("state/entries/Q1.yaml") == FINDINGS
+    assert toy.lanes.classify("state/iterations/0001.json") == FINDINGS
+    assert toy.lanes.classify("state/claims/lock") == SCAFFOLDING
