@@ -7,7 +7,7 @@ from toy_brain import ToyBrain
 
 from autoresearch.budget import BUDGET, MET, recorded_usage
 from autoresearch.driver.brain import Reply, Role, ScriptedBrain, extract_json
-from autoresearch.driver.loop import Coordinator
+from autoresearch.driver.loop import Coordinator, Iteration
 from autoresearch.errors import AutoresearchError
 
 
@@ -24,7 +24,7 @@ def coordinator(sandbox):
 def test_one_iteration_runs_every_phase(coordinator):
     it = coordinator.run_iteration(1)
     assert [p.name for p in it.phases] == [
-        "orient", "generate", "rank", "dispatch", "curate", "qc"]
+        "orient", "generate", "rank", "dispatch", "curate", "distil", "qc"]
     assert it.phases[1].did >= 1, "generation filed nothing"
     assert it.shortlist, "nothing was dispatched"
     assert it.verdicts, "no verdicts recorded"
@@ -230,7 +230,7 @@ def test_the_iteration_seconds_ceiling_stops_new_work(sandbox):
     sandbox.budgets["iteration_max_seconds"] = 0
     it = Coordinator(sandbox, ScriptedBrain(dict(IDLE))).run_iteration(1)
     assert [p.name for p in it.phases] == [
-        "orient", "generate", "rank", "dispatch", "curate", "qc"], \
+        "orient", "generate", "rank", "dispatch", "curate", "distil", "qc"], \
         "a phase that did not run must still be visible (H98)"
     for name in ("generate", "rank", "dispatch"):
         phase = _phase(it, name)
@@ -491,3 +491,156 @@ def test_the_loop_honours_a_domain_that_disables_the_reserve(sandbox):
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     it = Coordinator(sandbox, brain).run_iteration(1)
     assert "Q90" not in it.shortlist, it.shortlist
+
+
+# -- distil: closed work becomes knowledge ---------------------------------
+
+def _librarian(write=(), retire=()):
+    handlers = dict(IDLE)
+    handlers[Role.LIBRARIAN] = lambda b: {"write": list(write),
+                                          "retire": list(retire), "notes": []}
+    return ScriptedBrain(handlers)
+
+
+def test_distil_does_not_run_off_cadence_but_says_so(sandbox):
+    """H98 again: a phase the cadence skipped and a phase that did not run are
+    different facts, and only one of them is fine."""
+    sandbox.distil_every = 5
+    it = Coordinator(sandbox, ScriptedBrain(dict(IDLE))).run_iteration(1)
+    phase = _phase(it, "distil")
+    assert phase.did == 0
+    assert any("cadence is every 5" in d and "next at 5" in d for d in phase.detail)
+
+
+def test_distil_off_is_a_decision_and_is_recorded(sandbox):
+    sandbox.distil_every = 0
+    it = Coordinator(sandbox, ScriptedBrain(dict(IDLE))).run_iteration(1)
+    assert any("turned distillation off" in d
+               for d in _phase(it, "distil").detail)
+
+
+def test_distil_writes_a_skill_the_next_brief_carries(sandbox, store):
+    """The loop's own output becomes the next agent's index -- which is the
+    whole reason the phase exists."""
+    from conftest import close, make_entry
+    entry = close(sandbox, store, make_entry(store, "Q1"))
+    sandbox.distil_every = 1
+    brain = _librarian(write=[{
+        "name": "one-lesson",
+        "description": "Use when a proposal shares Q1's mechanism.",
+        "cites": ["Q1"],
+        "body": "# It held\n\nMeasured and closed [Q1].\n"}])
+    coordinator = Coordinator(sandbox, brain)
+    it = coordinator.run_iteration(1)
+
+    phase = _phase(it, "distil")
+    assert phase.did == 1, phase.detail
+    assert (sandbox.paths.root / "docs/skills/one-lesson/SKILL.md").exists()
+    brief = json.loads(coordinator._brief(Role.GENERATOR, it))
+    assert brief["skills"] == [{
+        "name": "one-lesson",
+        "description": "Use when a proposal shares Q1's mechanism.",
+        "path": "docs/skills/one-lesson/SKILL.md",
+        "cites": ["Q1"]}]
+    assert "Measured and closed" not in json.dumps(brief), \
+        "the brief carries the index, not the bodies"
+
+
+def test_distil_refuses_a_skill_citing_an_open_entry_and_says_why(sandbox, store):
+    from conftest import close, make_entry
+    make_entry(store, "Q1")                       # queued, never closed
+    close(sandbox, store, make_entry(store, "Q2"))   # gives the phase work to do
+    sandbox.distil_every = 1
+    brain = _librarian(write=[{
+        "name": "premature", "description": "Use when it applies.",
+        "cites": ["Q1"], "body": "# claim [Q1]\n"}])
+    it = Coordinator(sandbox, brain).run_iteration(1)
+
+    phase = _phase(it, "distil")
+    assert phase.did == 0
+    assert any("premature: refused" in d and "not terminal" in d
+               for d in phase.detail), phase.detail
+    assert not (sandbox.paths.root / "docs/skills/premature").exists()
+
+
+def test_distil_retires_a_skill_and_records_the_reason(sandbox, store):
+    from conftest import close, make_entry, make_skill
+    close(sandbox, store, make_entry(store, "Q1"))
+    close(sandbox, store, make_entry(store, "Q2"))   # undistilled: the phase runs
+    make_skill(sandbox, "going", cites=["Q1"])
+    sandbox.distil_every = 1
+    it = Coordinator(sandbox, _librarian(retire=[
+        {"name": "going", "why": "superseded"}])).run_iteration(1)
+    assert any("retired going: superseded" in d
+               for d in _phase(it, "distil").detail)
+    assert not (sandbox.paths.root / "docs/skills/going").exists()
+
+
+def test_the_librarian_comes_out_of_the_same_spawn_pool(sandbox, store):
+    """Every model ask spends a spawn, or the meter that bounds an iteration
+    undercounts -- the exact defect QC's ask was."""
+    from conftest import close, make_entry
+    close(sandbox, store, make_entry(store, "Q1"))
+    sandbox.distil_every = 1
+    sandbox.budgets["iteration_max_spawns"] = 4   # 2 generators, judge, curator
+    it = Coordinator(sandbox, _librarian()).run_iteration(1)
+    skipped = [d for d in _phase(it, "distil").detail if "librarian skipped" in d]
+    assert skipped and "spawns exhausted" in skipped[0], _phase(it, "distil").detail
+
+
+def test_qc_reports_a_skill_whose_evidence_moved(sandbox, store):
+    """Mechanical first: the reopen is caught by code, in the same iteration,
+    with no model asked about it."""
+    from conftest import close, make_entry, make_skill
+    entry = close(sandbox, store, make_entry(store, "Q1"))
+    make_skill(sandbox, "was-true", cites=["Q1"])
+    machine = sandbox.track_for("Q1").machine
+    entry.apply(machine, machine.initial, "test", why="new evidence")
+    store.save(entry)
+
+    it = Coordinator(sandbox, ScriptedBrain(dict(IDLE))).run_iteration(1)
+    assert any("was-true" in d and "result-archived" in d
+               for d in _phase(it, "qc").detail), _phase(it, "qc").detail
+
+
+def test_the_brief_says_which_skills_it_could_not_read(sandbox, store):
+    """A role given a short index and no signal reads it as the whole of what is
+    known -- the silent-drop failure `read_all` exists to prevent."""
+    broken = sandbox.paths.root / "docs/skills/broken/SKILL.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("# no frontmatter at all\n")
+    coordinator = Coordinator(sandbox, ScriptedBrain(dict(IDLE)))
+    brief = json.loads(coordinator._brief(Role.GENERATOR, Iteration(n=1)))
+    assert brief["skills"] == []
+    assert any("frontmatter" in p for p in brief["skills_unreadable"])
+
+
+def test_an_out_of_band_distil_does_not_drag_the_yield_floor(sandbox):
+    """Its record charges the money meter, but it is not a sample of what the
+    queue yields -- counting it would stop a healthy loop."""
+    from autoresearch.driver.loop import Iteration as It
+    coordinator = Coordinator(sandbox, ScriptedBrain(dict(IDLE)))
+    for n, kind in ((1, "iteration"), (2, "out-of-band")):
+        it = It(n=n, kind=kind)
+        it.verdicts = {"Q1": "confirmed"} if kind == "iteration" else {}
+        coordinator._record(it)
+    fresh = Coordinator(sandbox, ScriptedBrain(dict(IDLE)))
+    counted = [i.confirmed for i in fresh.history if i.kind == "iteration"]
+    assert counted == [1], "only real iterations are samples"
+
+
+def test_force_overrides_distillation_being_turned_off(sandbox, store):
+    """An explicitly invoked out-of-band command that silently does nothing is
+    the failure shape this harness refuses everywhere else."""
+    from conftest import close, make_entry
+    close(sandbox, store, make_entry(store, "Q1"))
+    sandbox.distil_every = 0
+    coordinator = Coordinator(sandbox, _librarian(write=[{
+        "name": "forced", "description": "Use when it applies.",
+        "cites": ["Q1"], "body": "# claim [Q1]\n"}]))
+    it = Iteration(n=1)
+    from autoresearch import budget as budget_mod
+    phase = coordinator.distil(it, budget_mod.iteration_budget(sandbox),
+                               force=True)
+    assert phase.did == 1, phase.detail
+    assert (sandbox.paths.root / "docs/skills/forced/SKILL.md").exists()

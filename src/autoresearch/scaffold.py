@@ -22,7 +22,7 @@ import textwrap
 
 from .errors import ConfigError
 
-DIRS = ("bin", "guides", "docs/log", "inbox",
+DIRS = ("bin", "guides", "docs/log", "docs/skills", "inbox",
         "state/entries", "state/claims", "state/iterations", "data/runs")
 
 
@@ -36,9 +36,18 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         #   1. measurement      bin/measure
         #   2. goal + constants goal.yaml
         #   3. safety policy    [policy] below
-        #   4. knowledge        guides/, listed in `knowledge`
+        #   4. knowledge        guides/, listed in `knowledge`, plus the
+        #                       skills the loop distils under [skills]
 
         knowledge = ["guides/landscape.md"]
+
+        # Distilled skills: one directory each, cited to the entries that back
+        # them, checked by `ar skill check` and by `ar validate`. Written by the
+        # loop's distil phase and by `ar skill distil`; read by every role, as a
+        # name-and-description index rather than inlined prose.
+        [skills]
+        dir       = "docs/skills"
+        max_lines = 500
 
         [domain]
         name = "{name}"
@@ -110,6 +119,10 @@ def _domain_toml(name: str, objective: str, metrics: list[str]) -> str:
         # beats an honest long shot and the loop never attempts a big swing.
         # Raise it while the frontier is moving; 0 disables it entirely.
         explore_fraction         = 0.2
+        # Distil closed work into skills every N iterations. Not every one:
+        # a librarian asked to distil after a single verdict writes a skill
+        # that says what one entry already says. 0 turns distillation off.
+        distil_every             = 5
         ''').replace("{metric_block}", metric_block)
 
 
@@ -255,6 +268,52 @@ here: those hold outside the range measured and should never be re-proposed.
 '''
 
 
+SKILLS_README = """# Skills
+
+One directory per skill, each holding a `SKILL.md`. This directory starts empty:
+a skill is *distilled from closed work*, and nothing has closed yet.
+
+```
+docs/skills/<name>/SKILL.md
+```
+
+```markdown
+---
+name: width-validity-gate
+description: "Use when a proposal touches `width` or a run comes back unscored:
+  'invalid', validity gate, rows that vanish from a sweep."
+cites: [Q7, Q12]
+distilled: {at: 2026-08-31T09:12:04Z, iteration: 14, core: 0.1.0}
+---
+
+# Width below 16 does not trade -- it deletes the run
+
+Below 16 the run is `invalid` and does not score [Q7]. It is a gate, not a
+knob: there is no band in which paying width buys operations back [Q12].
+```
+
+Three rules, each enforced by `ar skill check` and by `ar validate`:
+
+- **The description is triggering conditions only**, opening `Use when`. It is
+  the entire routing layer -- every role's brief carries the descriptions and
+  not the bodies, so an agent reads the one skill that matches instead of all of
+  them. A description that summarises the procedure gets followed *instead of*
+  the skill.
+- **Every claim cites the entry that earned it**, inline and in `cites`. A skill
+  is prose, and prose is the one thing in this harness that cannot be
+  regenerated from the record -- the citation is what stands in for that.
+- **A citation that moves invalidates the skill.** Reopen or relabel a cited
+  entry and validation fails until the skill is re-distilled or retired. A skill
+  that outlived its evidence is worse than no skill. This is measured from
+  `distilled.at`, so a hand-written skill must carry one -- without it there is
+  no "since", and the check would pass by never running. `ar skill distil`
+  stamps it for you.
+
+Write one with `ar skill distil`, or by hand. `ar skill list` shows what exists,
+what is stale, and how many closed entries no skill cites yet.
+"""
+
+
 GITIGNORE = '''# Per-machine state. Stopping work on one machine and resuming on another is a
 # supported workflow; these two are exactly what must NOT travel with it.
 #
@@ -294,6 +353,7 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
         "goal.yaml": _goal_yaml(name, objective, metrics, target),
         "bin/measure": MEASURE,
         "guides/landscape.md": GUIDE,
+        "docs/skills/README.md": SKILLS_README,
     }
     for rel, content in files.items():
         path = root / rel

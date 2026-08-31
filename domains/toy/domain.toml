@@ -1,5 +1,12 @@
 knowledge = ["guides/toy-landscape.md"]
 
+# Distilled skills. Empty in the shipped domain on purpose: a skill cites
+# entries, and `state/entries/` here is empty, so a committed skill would cite
+# something no checkout has. The tests build them in a sandbox instead.
+[skills]
+dir       = "docs/skills"
+max_lines = 500
+
 [domain]
 name = "toy"
 description = "A synthetic optimisation domain used to exercise the loop end to end in seconds."
@@ -70,6 +77,8 @@ generators_per_iteration = 2
 # Share of each shortlist reserved for the largest `impact`, ignoring confidence
 # and cost -- the terms that bury an honest long shot. 0 disables it.
 explore_fraction = 0.2
+# Distil closed work into skills every N iterations; 0 turns it off.
+distil_every = 5
 
 # What each experiment class needs of the machine. Declared so a capacity limit
 # surfaces as a REFUSAL before the run, rather than as a truncated measurement

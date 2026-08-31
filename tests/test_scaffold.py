@@ -57,3 +57,22 @@ def test_scaffolding_twice_does_not_duplicate_the_gitignore_block(tmp_path):
     lines = (tmp_path / "d" / ".gitignore").read_text().splitlines()
     assert lines.count("state/claims/") == 1
     assert lines.count(".ar/") == 1
+
+
+def test_a_scaffolded_domain_has_a_skills_directory_that_starts_empty(tmp_path):
+    """The scaffold's first act must not be to fail its own validator, and a
+    skill cites entries -- of which a new domain has none. So it ships the
+    format, not an example."""
+    from autoresearch import skills as skills_mod
+    init(tmp_path / "d", name="d")
+    config = DomainConfig.load(tmp_path / "d")
+    assert (config.paths.root / config.skills.dir).is_dir()
+    assert (config.paths.root / config.skills.dir / "README.md").exists()
+    assert skills_mod.read_all(config) == ([], [])
+    assert list(config.check()) == []
+
+
+def test_a_scaffolded_domain_declares_a_distil_cadence(tmp_path):
+    init(tmp_path / "d", name="d")
+    config = DomainConfig.load(tmp_path / "d")
+    assert config.distil_every == 5
