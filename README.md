@@ -204,7 +204,10 @@ Each comes from a failure class in `docs/EVALUATION.md`, and each has a test.
 5. **Liveness is observed, not inferred.** The coordinator owns the pool and
    knows when a worker finished; TTL reaping is the fallback.
 6. **Results are returned through a typed interface.** Undeclared output is not
-   evidence and cannot back a closure.
+   evidence and cannot back a closure. Records carry `"schema": "ar-run-1"` —
+   deliberately not a name a domain is likely to already own, because two
+   schemas under one name invites appending a core record into a corpus whose
+   validator will reject it.
 7. **The state machine is total and every budget is a meter.** No status is
    terminal by omission; no ceiling is free text.
 
@@ -239,7 +242,15 @@ loop with no model, which is what makes `ar loop` a unit test rather than a bill
 
 ## Status
 
-The core is complete and tested (185 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (189 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.
+
+Not yet exercised: `SDKBrain` has never made a real API call — it constructs,
+packages and is wired to the money ceiling, and that is all. The offline loop is
+proven; the model-in-the-loop path is not.
+
+`docs/EVALUATION.md` carries the harness critique this was built from, plus an
+appendix on the eleven defects found in the core itself, grouped by *how* each
+was caught. None was found by reading the code.

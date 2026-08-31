@@ -297,61 +297,133 @@ The core's job is to keep the judgement and delete the compensation.
 
 ---
 
-## Appendix: what building the core found
+## Appendix: how the core's own defects were found
 
-Written after the fact. Four things only became visible once the design was run
-against the real corpus rather than reasoned about, and they are worth recording
-because three of them are the *same failure classes this document catalogues*,
-reproduced by someone who had just finished cataloguing them.
+Written after the fact, and reorganised once it became clear that *how* each
+defect surfaced was more interesting than what it was. Eleven defects were found
+in the core during this work, by three different mechanisms — and **none of them
+by reasoning about the code.** Each mechanism found a class the others did not.
 
-**1. My own policy selftest produced a false alarm — the H138 shape exactly.**
-The selftest synthesises a probe from each rule's pattern by replacing `*` with
-`x`. For a glob that works. For the ECDSA domain's `human_only` rule, whose
-pattern is the regex `ecdsafail\s+submit`, the synthesised probe was a literal
-string the rule could not match — so a **working** rule was reported as refusing
-nothing. A guard that cries wolf trains the reader to skip the real ones, which
-is precisely why H138's "4 constants rows are unpoliced" warning was read as
-noise while a retired number went through underneath it. Fixed by trying several
+### Tier 1 — caught by running it against real data
+
+Four defects survived design, review-by-author, and a passing test suite, and
+died the first time the code met 412 real entries and 9,443 real rows. Three are
+failure classes this document had just finished cataloguing, reproduced by the
+person who catalogued them.
+
+**1. The policy selftest produced a false alarm — the H138 shape exactly.**
+Probes were synthesised from each rule's pattern by replacing `*` with `x`. For a
+glob that works; for a rule whose pattern is a regex it produced a probe the rule
+could not match, so a **working** rule was reported as refusing nothing. A guard
+that cries wolf trains the reader to skip the real ones. Fixed by trying several
 probe shapes and letting a rule declare the `example` it must refuse.
 
 **2. Mapping `Lane:` into `mechanisms` silently killed the research queue.**
 `mechanisms` is the exclusion vocabulary: a `mechanism`-kind refutation sharing a
-tag hard-excludes an entry. Migration mapped each entry's `Lane:` there, because
-it was the one structured classifier in the prose. The result was that a single
-`mechanism`-kind refutation in lane A excluded **every queued entry in lane A**,
-and the real corpus ranked five harness entries and zero hypotheses. A lane is a
-category; a refutation does not close a category. Fixed by separating `tags`
-(classification, never excludes) from `mechanisms` (exclusion vocabulary,
-deliberately left empty by migration). The failure was silent — the ranking
-looked plausible — which is the whole argument for testing against real data.
+tag hard-excludes an entry. Migration mapped each entry's `Lane:` there because
+it was the one structured classifier in the prose — so a single refutation in a
+lane excluded **every queued entry in that lane**, and the real corpus ranked
+five harness entries and zero hypotheses. A lane is a category; a refutation does
+not close a category. Fixed by separating `tags` (never excludes) from
+`mechanisms`. The ranking still looked plausible, which is the argument.
 
 **3. The staleness term was a constant factor wearing a penalty's name.** It
-counted total closed entries; against a corpus with 400 verdicts that put every
-entry at 0.048 and ordered nothing. A penalty applied equally to everything is
-not a penalty. Fixed to count verdicts landing since the entry was last priced.
+counted total closed entries; against 400 verdicts that put every entry at 0.048
+and ordered nothing. A penalty applied equally to everything is not a penalty.
 
-**4. `_map`'s failure path lost which item failed** — in a function whose
-docstring said it never loses a failure silently. A worker exception was replaced
-by a generic "worker failed" reply with no entry id, so eight tests failed with
-one indistinguishable message and the actual cause (a bad path) took a separate
-run to find. A failure that reads as a result, in the code written to prevent
-failures that read as results.
+**4. `_map`'s failure path lost which item failed** — in the function whose
+docstring said it never loses a failure silently.
+
+### Tier 2 — caught by rechecking finished work
 
 **5. The domain shipped as the getting-started example did not pass the gate.**
-Found only when explicitly rechecking finished work. `domains/toy` — named in the
-README as the thing you run first — had accumulated the debris of a manual CLI
-walkthrough, and a later `--reopen` left its generated view out of step with its
-records, so `ar validate` on it exited 1. Every test used a fixture that copies
-the domain and **wipes exactly those directories first**, so 146 passing tests
-said nothing about what was actually committed. This is H101's shape precisely: a
-verification block that reported OK having checked strictly less than the gate.
-The fix is a test that checks the artefact rather than a cleaned copy of it, and
-it is the one of these five that generalises furthest — a test suite that
-normalises away the state it is meant to inspect is not testing the artefact.
+`domains/toy` — named in the README as the thing you run first — had accumulated
+the debris of a manual walkthrough, and a later `--reopen` left its generated
+view out of step with its records, so `ar validate` on it exited 1. Every test
+used a fixture that copies the domain and **wipes exactly those directories
+first**, so 146 passing tests said nothing about what was actually committed.
 
-None of these were caught by reasoning. Four were caught by running the thing
-against 412 real entries and 9,443 real rows; the fifth was caught only by going
-back over finished work and asking what had not been looked at.
+H101's shape precisely: a verification that reported OK having checked strictly
+less than the gate. The fix is a test that checks the artefact rather than a
+cleaned copy of it, and the lesson generalises furthest of any here: **a test
+suite that normalises away the state it is meant to inspect is not testing the
+artefact.**
+
+### Tier 3 — caught by an independent review
+
+Six more, none of which the author found in two passes over the same code. The
+review raised seven; one was checked against the running system and not accepted.
+
+**6. Measurement attributed whichever row finished last.** The domain adapter
+took the globally newest run row across every ledger file with a recent mtime.
+The same config file sets `max_parallel = 3`, and the harvest step merges *every*
+worktree's results — so three parallel workers would all see freshly-modified
+files and all claim the same row, two of them attributing another
+configuration's numbers to their own knobs. Silently, and in the direction that
+looks like a clean result. `timestamp` is integer seconds across all 9,453 rows,
+so even sequential runs tie, and the tie broke on filename order. This is
+failure class 3.6 — results escaping the record — arriving by a route the
+original corpus had not found.
+
+**7. Every failing run was reported as `invalid`.** A run whose experiment fails
+its validity gates has still *measured* its axes, and in this domain that is most
+of the corpus. Reporting them as unmeasured would make every refutation taken
+from a failing configuration unusable as evidence. Three outcomes were needed
+where two had been written.
+
+**8. A guard promised in a docstring was never called.** The domain's frontier
+probe documented the H102 protection at length and then did not invoke the
+function that provides it — which the tool it borrowed from *does* call. Failure
+class 3.3, in prose form: the documentation asserted a property the code did not
+have.
+
+**9. Two axes were inverted, and the verification could not fail.** The
+constants table prices "one Toffoli" in *qubits* and "one qubit" in *Toffolis* —
+the label names the thing being priced and the value is in the other unit. The
+probe matched on the label and got both backwards. It was invisible because the
+only consumer multiplied them, and multiplication commutes.
+
+The author had "verified" this by checking that `903,471 × 1,264` equals the
+printed score. **That test cannot fail regardless of whether the axes are
+correct.** It is Tier 2's lesson again, one level down: not a suite that
+normalises away the state, but a single assertion that could not have detected
+the defect it was written to rule out. Worth stating as a rule — *an assertion
+that passes under the bug is not evidence, however specific its numbers look.*
+
+**10. The workspace directory was not ignored by version control.** The
+publishing tool refuses any non-empty working tree, untracked paths included, so
+the first coordinator run would have blocked every later publish — and as a new
+top-level path it could not have been committed alongside findings either.
+
+**11. The core's schema id collided with the domain's own.** Both were called
+`run-v1`, with entirely different required keys, so the obvious thing — appending
+a core record into the existing ledger — produced a row the domain's validator
+rejects, under a name asserting it should pass.
+
+### The finding that was not accepted
+
+The review reported that a TOML sub-table bound to the wrong track, leaving the
+research queue with no terminal statuses and no closure-kind requirement. Loading
+the configuration showed otherwise: the research track falls through to the
+default terminal set, and its `refuted` status does require a closure kind. The
+binding is intended and the behaviour correct.
+
+Recorded because a review is evidence, not a verdict, and a corpus that logs only
+the accepted findings misrepresents what review costs and what it is worth.
+
+### What this says about verification
+
+Eleven defects, three mechanisms, zero found by reading the code:
+
+| mechanism | found | the class it is good at |
+|---|--:|---|
+| running against real data | 4 | assumptions that are wrong about *scale* — 400 verdicts, 9,443 rows, a real lane structure |
+| rechecking finished work | 1 | the gap between what is tested and what is shipped |
+| independent review | 6 | concurrency, and defects whose own verification was circular |
+
+The third row is the one to take seriously. Every defect a review found had
+already survived the author's own checking twice — and the sharpest of them was
+protected by an assertion the author had written and watched pass.
 
 ### What the migration says about the source corpus
 
