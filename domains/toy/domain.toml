@@ -34,7 +34,11 @@ refuted = { requires_evidence = true, requires_closure_kind = true }
 
 [lanes]
 # Default-deny: anything not matching is scaffolding and takes the proposal lane.
-findings = "^(data/runs|data/artifacts|inbox|docs|state)/"
+# `state/` is enumerated rather than taken whole: state/claims holds the lock,
+# which is a single-filesystem primitive whose holder and pid mean nothing on
+# another machine. Publishing it hands the next machine a lock it cannot
+# diagnose. See .gitignore.
+findings = "^(data/runs|data/artifacts|inbox|docs|state/entries|state/iterations)/"
 
 [policy]
 spend_ceiling = 5.0

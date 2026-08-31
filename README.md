@@ -266,6 +266,38 @@ escalation: GO  (trigger: too-slow)
 Note the cheapest per hour is not the cheapest overall — which is why this is
 arithmetic and not a rule of thumb. Nothing here spends money.
 
+## Working across two machines
+
+The loop's coordination primitives are single-filesystem: the claim lock is an
+`O_CREAT|O_EXCL` file, the TTL is local wall-clock, and ids are `max + 1` over
+local records. So two machines running *at the same time* is not supported.
+Stopping on one and picking the work up on another is, and costs one rule each
+way:
+
+- **Stop between iterations.** The coordinator destroys its workspace pool in
+  its own `finally` and QC asserts no claim outlived dispatch, so a completed
+  iteration leaves nothing held. Commit `state/entries`, `state/iterations`,
+  `data/runs`, `inbox` and `docs/log`; pull before you resume.
+- **`state/claims/` and `.ar/` never travel**, and the scaffold's `.gitignore`
+  and lane boundary both say so. A committed lock names a holder and a pid that
+  mean nothing on the other machine — H32 reintroduced by other means — and the
+  workspace markers record absolute paths that are not there.
+- **Use one session name across both machines.** Claims, releases and the
+  run-file name all key off `--session`, and those are equality checks: under
+  one name the second machine can release or close what the first left behind,
+  which is otherwise refused outright. (Run them concurrently under one name and
+  those same checks pass when they should refuse — which is why the two rules
+  are a pair.)
+- **After a crash**, `ar reap --ttl-hours 0 <id>` frees a claim whose holder is
+  gone, and `git worktree prune` followed by
+  `git branch --list 'ar/*' | xargs -n1 git branch -D` clears the pool. Anything
+  a worker wrote only inside its slot is unrecoverable — which is why a memo
+  backing a closure has to live under the domain root.
+
+Iteration records are read back at startup, so numbering continues and the
+`yield_floor` stop keeps its window across the handoff. Reusing a recorded
+iteration number is refused before any phase runs.
+
 ## The seven invariants
 
 Each comes from a failure class in `docs/EVALUATION.md`, and each has a test.
@@ -320,7 +352,7 @@ may return, and where the coordinator refuses it.
 
 ## Status
 
-The core is complete and tested (189 tests). Two domains exist: `domains/toy`, a
+The core is complete and tested (227 tests). Two domains exist: `domains/toy`, a
 synthetic problem with an interior optimum, a knob interaction and a validity
 gate, used to exercise the loop in seconds; and the ECDSA Fail benchmark, wired
 up in its own repository.

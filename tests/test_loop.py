@@ -313,3 +313,118 @@ def test_a_maximise_goal_stops_on_its_best_row_not_its_worst(sandbox):
     it = Coordinator(sandbox, ScriptedBrain(dict(IDLE))).run_iteration(1)
     assert it.objective == 100.0, "the best row of a maximise goal is the largest"
     assert it.stop == MET, it.report()
+# -- resuming on another machine ------------------------------------------
+#
+# `state/iterations/` was write-only. Nothing read it back, so every new
+# `ar loop` process numbered from 1 again. These are the two things that broke.
+
+def test_a_new_coordinator_resumes_the_iteration_number(sandbox):
+    first = Coordinator(sandbox, ToyBrain(sandbox))
+    first.run_iteration(1)
+    first.run_iteration(2)
+
+    second = Coordinator(sandbox, ToyBrain(sandbox))
+    assert [i.n for i in second.history] == [1, 2], "history was not read back"
+    assert second.run(max_iterations=1)[-1].n == 3
+
+
+def test_resuming_does_not_clobber_the_earlier_records(sandbox):
+    first = Coordinator(sandbox, ToyBrain(sandbox))
+    first.run_iteration(1)
+    written = (sandbox.paths.iterations / "0001.json").read_text()
+
+    Coordinator(sandbox, ToyBrain(sandbox)).run(max_iterations=1)
+    assert (sandbox.paths.iterations / "0001.json").read_text() == written
+    assert (sandbox.paths.iterations / "0002.json").exists()
+
+
+def test_reusing_an_iteration_number_is_refused_before_any_work(sandbox):
+    """Silently overwriting is the failure this whole directory exists to
+    prevent, so the collision is loud and it happens before the phases run."""
+    coordinator = Coordinator(sandbox, ToyBrain(sandbox))
+    coordinator.run_iteration(1)
+    with pytest.raises(AutoresearchError, match="already recorded"):
+        Coordinator(sandbox, ToyBrain(sandbox)).run_iteration(1)
+
+
+def test_the_yield_floor_counts_iterations_from_earlier_sessions(sandbox):
+    """The stop condition needs `over_iterations` samples of
+    confirmed-per-iteration. Run one iteration per process -- which is what
+    stopping and resuming looks like -- and it never used to see more than one.
+    """
+    from autoresearch.driver import loop as loop_mod
+
+    for n in range(1, 4):
+        Coordinator(sandbox, ToyBrain(sandbox)).run(max_iterations=1)
+
+    seen = []
+    real = loop_mod.budget_mod.should_stop
+
+    def spy(config, **kw):
+        seen.append(kw["verdicts_per_iteration"])
+        return real(config, **kw)
+
+    loop_mod.budget_mod.should_stop = spy
+    try:
+        Coordinator(sandbox, ToyBrain(sandbox)).run(max_iterations=1)
+    finally:
+        loop_mod.budget_mod.should_stop = real
+    assert len(seen[-1]) == 4, "the yield floor saw only this process's work"
+
+
+def test_a_malformed_iteration_record_is_reported_not_skipped(sandbox):
+    (sandbox.paths.iterations).mkdir(parents=True, exist_ok=True)
+    (sandbox.paths.iterations / "0001.json").write_text("{not json")
+    with pytest.raises(AutoresearchError, match="0001.json"):
+        Coordinator(sandbox, ToyBrain(sandbox))
+
+
+def test_run_returns_only_the_iterations_this_process_ran(sandbox):
+    """`cmd_loop` prints `len(history)` and sums `cost_usd` over it. Returning
+    the resumed history too makes every resume report iterations it did not run
+    and money it did not spend -- and under `--iterations 1`, the workflow the
+    README recommends, that figure grows monotonically forever."""
+    Coordinator(sandbox, ToyBrain(sandbox)).run(max_iterations=1)
+
+    second = Coordinator(sandbox, ToyBrain(sandbox))
+    ran = second.run(max_iterations=1)
+    assert [i.n for i in ran] == [2]
+    assert len(second.history) == 2, "the full history is still available"
+
+
+def test_orient_counts_only_genuinely_resumed_iterations(sandbox):
+    """`self.history` grows as the process runs, so reading its length fresh
+    each iteration attributes this process's own work to a previous machine --
+    in the record whose whole purpose is the audit trail."""
+    Coordinator(sandbox, ToyBrain(sandbox)).run(max_iterations=1)
+
+    second = Coordinator(sandbox, ToyBrain(sandbox))
+    second.run(max_iterations=2)
+    for it in second.history[1:]:
+        detail = next(p for p in it.phases if p.name == "orient").detail[0]
+        assert "resumed 1 prior iteration(s), through 1" == detail, detail
+
+
+def test_an_iteration_record_is_written_atomically(sandbox, monkeypatch):
+    """`read_history` hard-fails on an unreadable record at construction, so a
+    torn write bricks every later `ar loop` -- and losing power mid-write is
+    the crash the README documents as recoverable. Truncate-then-write leaves a
+    window where the file on disk is neither the old record nor the new one, so
+    the record is built beside its destination and moved onto it in one step.
+    """
+    from autoresearch.driver import loop as loop_mod
+
+    moves, real = [], loop_mod.os.replace
+
+    def spy(src, dst):
+        moves.append((str(src), str(dst)))
+        return real(src, dst)
+
+    monkeypatch.setattr(loop_mod.os, "replace", spy)
+    Coordinator(sandbox, ToyBrain(sandbox)).run_iteration(1)
+
+    assert moves, "the record was written in place, not moved onto its name"
+    src, dst = moves[-1]
+    assert dst.endswith("0001.json") and src != dst
+    assert [p.name for p in sandbox.paths.iterations.iterdir()] == ["0001.json"], \
+        "a temporary file was left beside the record"
