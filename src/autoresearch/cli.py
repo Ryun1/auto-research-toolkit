@@ -319,6 +319,41 @@ def cmd_loop(args):
     return 0
 
 
+def cmd_migrate(args):
+    """Convert an existing prose corpus into entry records. One way, once."""
+    from .migrate import migrate as migrate_prose
+
+    config = _load(args)
+    store = _store(config)
+    total, problems = 0, []
+    for track in config.tracks.values():
+        source = pathlib.Path(args.source or config.paths.root) / (
+            args.view or track.view)
+        if not source.exists():
+            print(f"{track.id}: no source document at {source}, skipping")
+            continue
+        result = migrate_prose(
+            source, track=track.id,
+            claims_root=config.paths.claims if config.paths.claims.exists() else None,
+            root=config.paths.root,
+            terminal=tuple(track.machine.terminal_names))
+        print(f"\n=== {track.id} ({source.name}) ===")
+        print(result.report())
+        problems += [d.line() for d in result.disagreements]
+        problems += result.missing_evidence
+        if not args.dry_run:
+            for entry in result.entries:
+                store.save(entry)
+        total += len(result.entries)
+    print(f"\n{total} entries "
+          + ("would be written (dry run)" if args.dry_run
+             else f"written to {config.paths.entries}"))
+    if problems:
+        print(f"{len(problems)} item(s) need a human decision; nothing was "
+              "reconciled silently.")
+    return 0
+
+
 def cmd_validate(args):
     config = _load(args)
     store = _store(config)
@@ -410,6 +445,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("budget", help="every meter, and the stop decision"
                    ).set_defaults(func=cmd_budget)
+
+    mig = sub.add_parser("migrate", help="convert a prose corpus into records (one way)")
+    mig.add_argument("--source", help="root the documents live under")
+    mig.add_argument("--view", help="one document, instead of each track's view")
+    mig.add_argument("--dry-run", action="store_true", dest="dry_run")
+    mig.set_defaults(func=cmd_migrate)
 
     loop = sub.add_parser("loop", help="run the coordinator until it stops")
     loop.add_argument("--iterations", type=int, default=1)
