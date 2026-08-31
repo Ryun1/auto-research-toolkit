@@ -33,7 +33,12 @@ from dataclasses import dataclass, field
 
 from .errors import SchemaError
 
-SCHEMA = "run-v1"
+# Deliberately NOT "run-v1": the first domain to adopt this core already has a
+# `schemas/run-v1.schema.json` of its own, with entirely different required
+# keys. Two different schemas under one name invites appending a core record
+# straight into that corpus and producing a row its own validator rejects,
+# under a name that says it should pass.
+SCHEMA = "ar-run-1"
 OK, FAILED, INVALID = "ok", "failed", "invalid"
 STATUSES = (OK, FAILED, INVALID)
 
@@ -65,7 +70,9 @@ class RunRecord:
     def problems(self, goal=None) -> list[str]:
         out = []
         if self.schema != SCHEMA:
-            out.append(f"schema is {self.schema!r}, expected {SCHEMA!r}")
+            out.append(f"schema is {self.schema!r}, expected {SCHEMA!r}"
+                       + (" -- 'run-v1' is a different, domain-owned schema"
+                          if self.schema == "run-v1" else ""))
         if self.status not in STATUSES:
             out.append(f"status {self.status!r} not in {STATUSES}")
         if not self.session:

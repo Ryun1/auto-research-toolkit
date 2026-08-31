@@ -65,3 +65,34 @@ def test_malformed_line_names_file_and_line(tmp_path):
     path.write_text(path.read_text() + "{not json}\n")
     with pytest.raises(SchemaError, match=r"s1\.jsonl:2"):
         read_all(path.parent)
+
+
+def test_schema_id_does_not_collide_with_a_domain_owned_schema():
+    """The first domain to adopt this core already has its own
+    `schemas/run-v1.schema.json` with entirely different required keys. Two
+    schemas under one name invites appending a core record into that corpus and
+    producing a row its own validator rejects."""
+    from autoresearch.runs import SCHEMA
+    assert SCHEMA == "ar-run-1"
+
+
+def test_a_domain_schema_record_is_refused_with_a_pointed_message():
+    with pytest.raises(SchemaError, match="different, domain-owned schema"):
+        record(schema="run-v1").validate(GOAL)
+
+
+def test_a_failed_run_still_carries_usable_metrics():
+    """Three outcomes, not two. A run whose experiment failed its validity gates
+    may still have measured the axes perfectly well -- in the first real domain
+    that is most of the corpus, because the whole lambda lane is about
+    configurations that fail. Reporting those as `invalid` would make every
+    refutation measured from a failing config unusable as evidence."""
+    r = record(status="failed")
+    r.validate(GOAL)
+    assert r.metrics["ops"] == 100.0
+
+
+def test_failed_is_not_subject_to_the_all_zero_guard():
+    """The H134 guard is about a run claiming success having measured nothing;
+    a run that reports failure is not making that claim."""
+    record(status="failed", metrics={"ops": 0.0, "peak": 0.0}).validate(GOAL)

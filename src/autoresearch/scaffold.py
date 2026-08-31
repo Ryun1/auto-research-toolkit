@@ -208,7 +208,7 @@ def main():
     started = time.time()
     metrics = evaluate(knobs)
     json.dump({
-        "schema": "run-v1", "id": uuid.uuid4().hex[:12],
+        "schema": "ar-run-1", "id": uuid.uuid4().hex[:12],
         "session": args.session, "entry": args.entry,
         "status": "ok" if all(v > 0 for v in metrics.values()) else "invalid",
         "started": started, "finished": time.time(),

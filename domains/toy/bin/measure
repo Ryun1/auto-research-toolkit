@@ -69,7 +69,7 @@ def main():
     # `invalid` rather than a cheap-looking `ok` is the whole point (H134).
     status = "invalid" if int(knobs["width"]) < 16 else "ok"
     record = {
-        "schema": "run-v1", "id": uuid.uuid4().hex[:12],
+        "schema": "ar-run-1", "id": uuid.uuid4().hex[:12],
         "session": args.session, "entry": args.entry, "status": status,
         "started": started, "finished": time.time(),
         "metrics": metrics, "config": {"knobs": knobs},
