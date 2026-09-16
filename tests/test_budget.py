@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from autoresearch.budget import (
@@ -109,6 +111,17 @@ def test_recorded_usage_refuses_an_unreadable_record(sandbox):
     sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
     (sandbox.paths.iterations / "corrupt.json").write_text('{"n": 1, ')
     with pytest.raises(AutoresearchError, match="corrupt.json"):
+        recorded_usage(sandbox)
+
+
+def test_recorded_usage_refuses_malformed_consumption_figures(sandbox):
+    """A readable record with a malformed figure is the same under-count risk
+    as an unreadable one: recorded_run_overlap already refuses it, so lone
+    recorded_usage callers must not quietly read it as zero (H6)."""
+    sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
+    (sandbox.paths.iterations / "0001.json").write_text(
+        json.dumps({"n": 1, "runs": "many", "run_ids": []}))
+    with pytest.raises(AutoresearchError, match="0001.json"):
         recorded_usage(sandbox)
 
 

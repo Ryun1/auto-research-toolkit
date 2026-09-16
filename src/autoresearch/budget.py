@@ -180,8 +180,18 @@ def recorded_usage(config) -> dict[str, float]:
         for meter, field_name in USAGE_FIELDS.items():
             try:
                 usage[meter] += float(record.get(field_name) or 0.0)
-            except (TypeError, ValueError, AttributeError):
-                continue  # a malformed figure must not make the loop unstartable
+            except (TypeError, ValueError, AttributeError) as exc:
+                # The malformed-figure branch used to `continue`, so a figure
+                # recorded_run_overlap refuses came back as 0.0 here -- the
+                # under-count the comment below refuses to accept. Same rule,
+                # one verdict.
+                raise AutoresearchError(
+                    f"{path}: meter {meter!r} figure "
+                    f"{record.get(field_name)!r} is not a number. The campaign "
+                    "budget is rebuilt from these records, so a malformed one "
+                    "under-counts the ceiling -- and a budget that "
+                    "under-counts does not stop. Fix or remove it "
+                    "deliberately.") from exc
     return usage
 
 
