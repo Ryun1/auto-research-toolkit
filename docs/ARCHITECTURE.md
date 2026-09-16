@@ -231,9 +231,11 @@ sequenceDiagram
         C->>W: run
         W->>Br: ask(worker, brief, workspace=slot)
         Br-->>W: Reply{verdict, memo, closure_kind, runs, gpu_hours, verification, cost}
-        W->>P: release(slot) (finally)
+        W-->>C: reply + pinned slot + inherited ledger snapshot
     end
 
+    C->>C: harvest new run rows, outputs and memo serially
+    Note over C: missing/colliding evidence → refuse verdict, retain slot<br/>successful harvest → release slot
     C->>C: _apply_verdict per entry
     Note over C: already closed → success, not a race<br/>no verification block → refused, claim released<br/>close refused → release the claim, do not close
     C->>P: release_all() (finally)
@@ -246,9 +248,13 @@ shape this harness keeps filing defects about.
 Two details in the first block are load-bearing. `runs` is spent at *dispatch*,
 from the entry's declared cost, not after the worker reports: every card is
 dispatched before any of them answers, so a meter charged after the fact bounds
-nothing. And `gpu_hours` has to come back through the reply because the rows a
-worker wrote live in its own workspace, not in the coordinator's `data/runs` —
-the ledger cannot answer that meter alone.
+nothing. After each worker returns, new rows and declared findings are retained
+in the coordinator's configured ledger before its workspace is removed.
+Missing evidence refuses a measured verdict and leaves the workspace pinned
+for inspection, while reported consumption is still charged conservatively.
+`run_ids` on each iteration identifies retained rows so restarting does not
+charge them twice; historical iterations without IDs remain conservative.
+GPU-hours use the greater of worker-reported consumption and retained row cost.
 
 ## 6. Resuming on another machine
 
