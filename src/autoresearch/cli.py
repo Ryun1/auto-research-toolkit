@@ -203,7 +203,7 @@ def cmd_board(args):
     best = runs_mod.best_run(all_runs, config.goal)
     print(render.board(config, entries, all_runs, target,
                        (best[0], best[1].entry or best[1].id) if best else None,
-                       skipped))
+                       skipped, best_metrics=best[1].metrics if best else None))
     return 0
 
 

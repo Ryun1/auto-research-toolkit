@@ -183,7 +183,8 @@ def _entry_section(e) -> list[str]:
     return out
 
 
-def board(config, entries, runs, target=None, best=None, skipped_runs=0) -> str:
+def board(config, entries, runs, target=None, best=None, skipped_runs=0,
+          best_metrics=None) -> str:
     """One screen answering what is currently true.
 
     Modelled on the source harness's `bin/board`, which existed because a cold
@@ -203,9 +204,14 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0) -> str:
     if best is not None and target:
         value, entry_id = best
         distance = goal.distance_to(value, target)
+        # GOAL MET is the stop decision's own answer: a stop_when clause is
+        # the goal's definition of "met" (qsb requires +1% over a moving
+        # target), so the board must not derive a second, looser one from
+        # raw distance.
+        met = goal.is_met(best_metrics or {}, target)
         out.append(f"best       {_fmt(value)}  ({entry_id})   "
                    f"distance {distance:+.2%}"
-                   + ("  ** GOAL MET **" if distance <= 0 else ""))
+                   + ("  ** GOAL MET **" if met else ""))
     else:
         out.append("best       (no valid measurement yet)")
     out.append("")
