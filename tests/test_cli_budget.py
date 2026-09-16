@@ -38,9 +38,8 @@ def test_overrun_names_the_meter_and_the_ceiling(sandbox, store, capsys):
     assert "OVERRUN: max_hours" in capsys.readouterr().out
 
 
-def test_overrun_reports_at_the_registered_ceiling(sandbox, store, capsys):
-    """H11: a claim at exactly max_runs is refused by the attempt gate and
-    would_exceed; the OVERRUN line must say so, not stay silent until 2x."""
+def test_exhausted_claim_is_not_overrun(sandbox, store, capsys):
+    """Spending the allowance is legal; only exceeding it is an overrun."""
     make_entry(store, "Q1", claim=Claim(session="s1", at=NOW, why="",
                                         budget="", max_runs=2, max_hours=4.0))
     for _ in range(2):
@@ -48,7 +47,12 @@ def test_overrun_reports_at_the_registered_ceiling(sandbox, store, capsys):
                RunRecord(metrics={"ops": 5.0, "peak": 1.0}, session="s1",
                          entry="Q1", status=OK))
     assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
-    assert "OVERRUN: max_runs" in capsys.readouterr().out
+    assert "OVERRUN" not in capsys.readouterr().out
+    append(sandbox.paths.runs / "s1.jsonl",
+           RunRecord(metrics={"ops": 5.0, "peak": 1.0}, session="s1",
+                     entry="Q1", status=OK))
+    assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
+    assert "OVERRUN: max_runs 3 > 2" in capsys.readouterr().out
 
 
 def test_overrun_counts_recorded_iteration_consumption(sandbox, store, capsys, tmp_path):
