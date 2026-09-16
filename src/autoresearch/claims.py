@@ -256,6 +256,9 @@ class Claims:
         hours = _age_hours(entry.claim.at)
         if entry.claim.max_hours and hours > entry.claim.max_hours:
             return ("max_hours", hours, entry.claim.max_hours)
-        if entry.claim.max_runs and runs_spent > entry.claim.max_runs:
+        # "max N runs" is the same boundary everywhere else: Meter.spend
+        # refuses the (N+1)th and the attempt gate refuses at spent >= N, so
+        # a claim AT its ceiling must be visible here, not only past 2x (H11).
+        if entry.claim.max_runs and runs_spent >= entry.claim.max_runs:
             return ("max_runs", runs_spent, entry.claim.max_runs)
         return None
