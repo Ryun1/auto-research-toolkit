@@ -48,8 +48,8 @@ from dataclasses import dataclass, field
 
 from .. import budget as budget_mod
 from .. import hardware as hw
+from .. import preflight, render
 from .. import rank as rank_mod
-from .. import render
 from .. import runs as runs_mod
 from .. import skills as skills_mod
 from ..claims import Claims
@@ -522,6 +522,12 @@ class Coordinator:
         start = time.time()
         jobs = []
         for card in shortlist:
+            reason = preflight.blocked_reason(
+                self.config, self.store.load(card.entry_id))
+            if reason is not None:
+                phase.detail.append(f"{card.entry_id}: {reason}")
+                it.verdicts[card.entry_id] = "blocked"
+                continue
             try:
                 budget.spend("fanout", note=card.entry_id)
                 budget.spend("spawns", note=f"worker {card.entry_id}")

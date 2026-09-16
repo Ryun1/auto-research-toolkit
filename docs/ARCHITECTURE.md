@@ -210,6 +210,18 @@ Liveness is observed, not inferred: the coordinator submits the work, so it
 knows when a worker finished. TTL reaping in `orient` is the fallback for a
 holder that died elsewhere.
 
+Before allocating each selected entry, dispatch checks the measurement command
+against the domain's human-only policy. An optional `[commands].preflight`
+command then receives `{"entry": <entry record>}` on stdin, in the domain root.
+It runs as shell-free argv with a 10-second timeout and must exit zero with
+one JSON object containing `feasible` (boolean) and `reason` (string).
+A false result needs a nonempty reason. Policy refusal, timeout, nonzero exit
+or malformed output records a blocked verdict and skips the card without
+spending dispatch resources or creating a claim/workspace. Domains without a
+hook retain existing behavior after the measurement-command policy check.
+The hook is domain-owned and must be read-only; this is not a sandbox or a
+substitute for native-agent permission checks.
+
 ```mermaid
 sequenceDiagram
     participant C as Coordinator
@@ -220,6 +232,7 @@ sequenceDiagram
     participant Br as Brain
 
     loop each entry on the shortlist
+        C->>C: policy + optional domain preflight; blocked → skip card
         C->>B: spend fanout + spawns + runs (entry's declared cost)
         B-->>C: ok / BudgetExceeded → stop dispatching
         C->>Cl: claim(entry, why="ranked #k")
