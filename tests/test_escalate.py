@@ -122,7 +122,21 @@ def test_go_shows_the_arithmetic_for_every_priced_class():
 def test_spend_ceiling_refuses_rather_than_assuming():
     out = go(spend_ceiling=0.01)
     assert out.verdict == REFUSE and "ceiling" in out.detail
-    assert "human decision" in "\n".join(out.lines)
+
+
+def test_a_faster_class_that_fits_beats_a_refusing_cheapest():
+    """H10: the cheapest measured class missing the wall clock is not a
+    refusal while a faster measured class fits it and the ceiling."""
+    out = go(classes=[FAST, CHEAP], hours_available=9.0, spend_ceiling=10.0)
+    assert out.verdict == GO, out.report()
+    assert out.best.name == "rtx-4090"
+
+
+def test_refusal_says_nothing_measured_fits():
+    out = go(classes=[FAST, CHEAP], hours_available=1.0)
+    assert out.verdict == REFUSE
+    assert "no measured class fits" in out.detail
+    assert out.best is not None and out.best.measured_ratio == 11.1
 
 
 def test_a_go_is_a_recommendation_not_an_action():

@@ -167,7 +167,6 @@ def recommend(*, trigger: str | None, local: Throughput, units_needed: float,
                 "the hardware predicted either. Measure one hour on the "
                 "cheapest candidate, then re-ask."])
 
-    best, best_cost, best_hours = None, None, None
     for c in sorted(priced, key=lambda c: -c.measured_ratio):
         hours = local_hours / c.measured_ratio
         cost = hours * c.usd_per_hour
@@ -175,35 +174,61 @@ def recommend(*, trigger: str | None, local: Throughput, units_needed: float,
                 + (f" @ {c.measured_at_concurrency}-way" if c.measured_at_concurrency else "")
                 + (f", {c.measured_on}" if c.measured_on else "") + "]")
         lines.append(f"  {c.name:22} {hours:8,.1f} h   ${cost:9,.2f}{note}")
-        if best is None or cost < best_cost:
-            best, best_cost, best_hours = c, cost, hours
     for c in unmeasured:
         lines.append(f"  {c.name:22} {'—':>8}   {'—':>10}  [no measured ratio "
                      f"for this workload; not costed]")
 
     # Gate A: does the spend reach a rung -- does it change the answer?
-    if hours_available is not None and best_hours > hours_available:
+    # A class fits when it meets the wall clock; among fitting classes the
+    # cheapest wins. The cheapest class missing the deadline is not a refusal
+    # while a faster measured class fits it (H10).
+    def fits(c):
+        return (hours_available is None
+                or local_hours / c.measured_ratio <= hours_available)
+
+    fitting = [c for c in priced if fits(c)]
+    if fitting:
+        chosen = min(fitting, key=lambda c: c.usd_per_hour * local_hours
+                     / c.measured_ratio)
+    else:
+        chosen = max(priced, key=lambda c: c.measured_ratio)
+    chosen_hours = local_hours / chosen.measured_ratio
+    chosen_cost = chosen_hours * chosen.usd_per_hour
+
+    if hours_available is not None and not fitting:
         return Escalation(
-            REFUSE, trigger=trigger, best=best, usd=best_cost, hours=best_hours,
-            detail=f"Gate A fails: the best measured class still needs "
-                   f"{best_hours:,.1f} h against {hours_available:,.1f} h "
-                   f"available.",
+            REFUSE, trigger=trigger, best=chosen, usd=chosen_cost,
+            hours=chosen_hours,
+            detail=f"Gate A fails: no measured class fits "
+                   f"{hours_available:,.1f} h -- the fastest measured class "
+                   f"({chosen.name}) still needs {chosen_hours:,.1f} h.",
             lines=lines + [
                 f"Required ratio to fit: "
                 f"{local_hours / hours_available:,.1f}x against the best "
-                f"measured {best.measured_ratio:.2f}x. Renting buys wall clock, "
+                f"measured {chosen.measured_ratio:.2f}x. Renting buys wall clock, "
                 "not the answer. Change the problem, not the machine."])
 
-    if spend_ceiling is not None and best_cost > spend_ceiling:
-        return Escalation(
-            REFUSE, trigger=trigger, best=best, usd=best_cost, hours=best_hours,
-            detail=f"the cheapest sufficient class costs ${best_cost:,.2f}, "
-                   f"over the ${spend_ceiling:,.2f} ceiling",
-            lines=lines + ["Raising the ceiling is a human decision; this stops "
-                           "rather than assuming it."])
+    if spend_ceiling is not None and chosen_cost > spend_ceiling:
+        affordable = [c for c in fitting
+                      if c.usd_per_hour * local_hours / c.measured_ratio
+                      <= spend_ceiling]
+        if not affordable:
+            return Escalation(
+                REFUSE, trigger=trigger, best=chosen, usd=chosen_cost,
+                hours=chosen_hours,
+                detail=f"the cheapest class fitting the deadline costs "
+                       f"${chosen_cost:,.2f}, over the "
+                       f"${spend_ceiling:,.2f} ceiling",
+                lines=lines + ["Raising the ceiling is a human decision; this "
+                               "stops rather than assuming it."])
+        chosen = min(affordable, key=lambda c: c.usd_per_hour * local_hours
+                     / c.measured_ratio)
+        chosen_hours = local_hours / chosen.measured_ratio
+        chosen_cost = chosen_hours * chosen.usd_per_hour
 
     return Escalation(
-        GO, trigger=trigger, best=best, usd=best_cost, hours=best_hours,
-        detail=f"rent {best.name}: {best_hours:,.1f} h at "
-               f"${best.usd_per_hour:,.2f}/h = ${best_cost:,.2f}",
+        GO, trigger=trigger, best=chosen, usd=chosen_cost, hours=chosen_hours,
+        detail=f"rent {chosen.name}: {chosen_hours:,.1f} h at "
+               f"${chosen.usd_per_hour:,.2f}/h = ${chosen_cost:,.2f}",
         lines=lines)
+
