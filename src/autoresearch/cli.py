@@ -490,7 +490,10 @@ def cmd_rank(args):
     config = _load(args)
     entries = _store(config).all()
     all_runs = runs_mod.read_all(config.paths.runs)
-    domain = budget_mod.domain_budget(config, spent_runs=len(all_runs))
+    recorded = budget_mod.recorded_usage(config)
+    domain = budget_mod.domain_budget(
+        config, spent_runs=len(all_runs) + recorded["runs"]
+        - budget_mod.recorded_run_overlap(config, all_runs))
     remaining = domain["runs"].remaining()
     explore = config.explore_fraction if args.explore is None else args.explore
     ranking = rank_mod.rank(entries, config, explore_fraction=explore,

@@ -69,3 +69,24 @@ def test_the_score_table_marks_the_reserve_too(sandbox, store, capsys):
     table = capsys.readouterr().out.split("shortlist (top 3):")[0]
     marked = [ln for ln in table.splitlines() if "[explore]" in ln]
     assert len(marked) == 1 and "Q90" in marked[0], table
+
+
+def test_rank_reconciles_retained_and_unrecorded_campaign_runs(sandbox, store, capsys):
+    import json
+
+    from autoresearch.runs import RunRecord, append
+
+    config = sandbox.paths.root / "domain.toml"
+    config.write_text(config.read_text().replace(
+        "domain_max_runs        = 400", "domain_max_runs        = 5"))
+    make_entry(store, "Q99", cost=4, impact=1)
+    append(sandbox.paths.runs / "seed.jsonl", RunRecord(
+        id="retained", session="worker", metrics={}, status="invalid"))
+    sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
+    history = sandbox.paths.iterations / "0001.json"
+    history.write_text(json.dumps({"runs": 3}))
+    assert cli.main(["--domain", str(sandbox.paths.root), "rank", "--top", "1"]) == 0
+    assert "Q99" not in capsys.readouterr().out.split("shortlist (top 1):")[1]
+    history.write_text(json.dumps({"runs": 1, "run_ids": ["retained"]}))
+    assert cli.main(["--domain", str(sandbox.paths.root), "rank", "--top", "1"]) == 0
+    assert "Q99" in capsys.readouterr().out.split("shortlist (top 1):")[1]
