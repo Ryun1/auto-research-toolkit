@@ -40,6 +40,16 @@ def test_read_all_reports_zero_rather_than_failing_when_nothing_is_distilled(san
     assert (found, problems) == ([], [])
 
 
+def test_unreadable_skill_does_not_hide_valid_sibling(sandbox):
+    broken = sandbox.paths.root / sandbox.skills.dir / "broken" / "SKILL.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_bytes(b"\x80\x81\x82")
+    make_skill(sandbox, "valid-sibling", cites=["Q1"])
+    found, problems = skills_mod.read_all(sandbox)
+    assert [skill.name for skill in found] == ["valid-sibling"]
+    assert len(problems) == 1 and str(broken) in problems[0]
+
+
 def test_render_round_trips(sandbox, store):
     _entries(sandbox, store, "Q1")
     path = make_skill(sandbox, "round-trip", cites=["Q1"])

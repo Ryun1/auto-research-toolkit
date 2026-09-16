@@ -166,6 +166,8 @@ def read_all(config) -> tuple[list[Skill], list[str]]:
             skills.append(parse(path.read_text(), path))
         except SchemaError as exc:
             problems.append(f"skills: {exc}")
+        except (OSError, UnicodeError) as exc:
+            problems.append(f"skills: {path}: {exc}")
     return skills, problems
 
 
