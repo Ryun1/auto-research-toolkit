@@ -85,3 +85,47 @@ def test_populated_track_missing_a_view_is_pointed_at_render(sandbox, store):
     problems = render.check_views(sandbox, store.all())
     assert any("has never been rendered" in p and "Hypothesis" in p
                for p in problems)
+
+
+def _memo_files(sandbox, *names):
+    for name in names:
+        (sandbox.paths.memos / name).write_text("evidence")
+
+
+def test_memos_index_reports_cited_and_uncited(sandbox, store):
+    close(store, make_entry(store, "Q1"))
+    make_entry(store, "Q2", sources=["inbox/extra.md; other/ref.py"])
+    _memo_files(sandbox, "m.md", "extra.md", "orphan.md")
+    text = render.memos_index_view(sandbox, store.all())
+    assert "**3 files read: 2 cited by an entry, 1 not referenced by any entry.**" in text
+    assert "| `m.md` | Q1 (confirmed) |" in text
+    assert "| `extra.md` | Q2 (queued) |" in text
+    assert text.rstrip().endswith("- `orphan.md`")
+
+
+def test_memos_index_excludes_itself_from_its_own_listing(sandbox, store):
+    _memo_files(sandbox, "a.md")
+    render.write_views(sandbox, store.all())
+    assert (sandbox.paths.memos / render.MEMOS_INDEX).exists()
+    text = render.memos_index_view(sandbox, store.all())
+    assert "INDEX.md" not in text and "**1 files read: 0 cited" in text
+
+
+def test_check_views_flags_a_hand_edited_memos_index(sandbox, store):
+    _memo_files(sandbox, "m.md")
+    render.write_views(sandbox, store.all())
+    assert render.check_views(sandbox, store.all()) == []
+    path = sandbox.paths.memos / render.MEMOS_INDEX
+    path.write_text(path.read_text() + "\nhand edit\n")
+    problems = render.check_views(sandbox, store.all())
+    assert any("inbox/INDEX.md" in p and "generated view" in p
+               for p in problems)
+
+
+def test_no_memos_means_no_index_and_no_problem(sandbox, store):
+    """A domain with an empty memos directory gets no view at all: adoption
+    must not turn into a validation failure (same reasoning as migrate)."""
+    assert not (sandbox.paths.memos / render.MEMOS_INDEX).exists()
+    render.write_views(sandbox, store.all())
+    assert not (sandbox.paths.memos / render.MEMOS_INDEX).exists()
+    assert not any("INDEX.md" in p for p in render.check_views(sandbox, store.all()))
