@@ -453,6 +453,10 @@ def cmd_measure(args):
     escaping the ledger (H142, H64, H39).
     """
     config = _load(args)
+    # Dispatch checks this through preflight; a direct invocation gets the
+    # same gate. A human-only measurement command must never reach
+    # subprocess.run just because a caller skipped the coordinator.
+    config.policy.check_command(config.command("measure"))
     command = config.command("measure").split() + list(args.rest)
     env_note = f"entry={args.entry} " if args.entry else ""
     proc = subprocess.run(command, cwd=config.paths.root, capture_output=True,
