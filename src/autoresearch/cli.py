@@ -13,6 +13,7 @@ instead, so a mistyped flag read as a successful run of what you asked for**
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import pathlib
 import subprocess
@@ -537,16 +538,15 @@ def cmd_budget(args):
             and not config.track_for(e.id).machine.status(e.status).terminal]
     print(f"\n{len(held)} live claim(s)")
     claims = Claims(store, config, session=args.session)
+    attributed_runs = budget_mod.recorded_runs_by_entry(config)
     for entry in held:
-        # Runs spent under THIS claim: ledger rows under the claim's own
-        # session, plus unrecorded consumption the coordinator attributed
-        # per entry (harvested rows carry the worker-slot session, so the
-        # campaign ceiling and this line read the same attribution).
+        # Match the claim instance, not earlier work under a reused session.
+        started = dt.datetime.fromisoformat(entry.claim.at).timestamp()
         spent = sum(1 for r in all_runs
-                    if r.entry == entry.id and r.session == entry.claim.session)
-        attribution = budget_mod.recorded_runs_by_entry(config).get(entry.id) or {}
-        if attribution.get("session") == entry.claim.session:
-            spent += attribution.get("runs", 0.0)
+                    if r.entry == entry.id and r.session == entry.claim.session
+                    and r.started >= started)
+        spent += attributed_runs.get(
+            (entry.id, entry.claim.session, entry.claim.at), 0.0)
         print(f"  {entry.id}  {entry.claim.session}")
         print("    " + budget_mod.claim_budget(entry, config).report()
               .replace("\n", "\n    "))

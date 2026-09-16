@@ -102,9 +102,7 @@ class Iteration:
     #: leaves every ceiling but `runs` starting from zero at the next `ar loop`.
     runs: float = 0.0
     gpu_hours: float = 0.0
-    #: Per-entry consumption attributed to the claim that was held at charge
-    #: time ({entry: {"session": ..., "runs": ...}}), so a held claim's
-    #: overrun is visible even when its rows carry the worker-slot session.
+    #: Consumption for the original claim instance, including its timestamp.
     runs_by_entry: dict[str, dict] = field(default_factory=dict)
     #: Retained ledger IDs, used to reconcile consumption on restart.
     run_ids: list[str] = field(default_factory=list)
@@ -525,6 +523,7 @@ class Coordinator:
         phase = it.phase("dispatch")
         start = time.time()
         jobs = []
+        dispatched_claims = {}
         for card in shortlist:
             reason = preflight.blocked_reason(
                 self.config, self.store.load(card.entry_id))
@@ -544,12 +543,13 @@ class Coordinator:
                 phase.detail.append(str(exc))
                 break
             try:
-                self.claims.claim(card.entry_id,
-                                  why=f"ranked #{shortlist.index(card) + 1} "
-                                      f"in iteration {it.n}")
+                claimed = self.claims.claim(
+                    card.entry_id,
+                    why=f"ranked #{shortlist.index(card) + 1} in iteration {it.n}")
             except AutoresearchError as exc:
                 phase.detail.append(f"{card.entry_id}: {exc}")
                 continue
+            dispatched_claims[card.entry_id] = claimed.claim
             jobs.append(card.entry_id)
         phase.read = len(jobs)
 
@@ -648,9 +648,9 @@ class Coordinator:
             attributed = max(amounts["runs"], evidence.consumed)
             self._charge_runs(it, attributed,
                               max(amounts["gpu_hours"], gpu_hours))
-            prior = it.runs_by_entry.get(entry_id) or {"session": self.session, "runs": 0.0}
-            it.runs_by_entry[entry_id] = {"session": self.session,
-                                          "runs": float(prior.get("runs", 0.0)) + attributed}
+            claim = dispatched_claims[entry_id]
+            it.runs_by_entry[entry_id] = {
+                "session": claim.session, "claim_at": claim.at, "runs": attributed}
             it.run_ids.extend(r.id for r in evidence.records)
             if error is not None:
                 evidence.problems.append(f"worker raised {error!r}")

@@ -195,15 +195,13 @@ def recorded_usage(config) -> dict[str, float]:
     return usage
 
 
-def recorded_runs_by_entry(config) -> dict[str, dict]:
-    """Per-entry consumption the coordinator attributed to a claim at charge
-    time ({entry: {"session": ..., "runs": ...}}).
+def recorded_runs_by_entry(config) -> dict[tuple[str, str, str], float]:
+    """Consumption keyed by (entry, session, claim timestamp).
 
-    Harvested rows carry the worker-slot session, so a held claim's overrun
-    needs this attribution; it is the same consumption the campaign ceiling
-    already charges, not an extra meter.
+    Legacy rows without a claim timestamp remain charged to the campaign by
+    recorded_usage, but cannot safely be assigned to a later claim.
     """
-    out: dict[str, dict] = {}
+    out: dict[tuple[str, str, str], float] = {}
     directory = config.paths.iterations
     if not directory.exists():
         return out
@@ -218,9 +216,13 @@ def recorded_runs_by_entry(config) -> dict[str, dict]:
                         or not isinstance(row.get("session"), str)):
                     raise ValueError(f"runs_by_entry[{entry_id!r}] is malformed")
                 runs = float(row.get("runs") or 0.0)
-                prior = out.get(entry_id) or {"session": row["session"], "runs": 0.0}
-                out[entry_id] = {"session": prior["session"],
-                                 "runs": prior["runs"] + runs}
+                claim_at = row.get("claim_at")
+                if claim_at is None:
+                    continue
+                if not isinstance(claim_at, str) or not claim_at:
+                    raise ValueError(f"runs_by_entry[{entry_id!r}] has invalid claim_at")
+                key = (entry_id, row["session"], claim_at)
+                out[key] = out.get(key, 0.0) + runs
         except (OSError, ValueError, TypeError) as exc:
             raise AutoresearchError(
                 f"{path}: cannot read run attribution ({exc}). A claim's "

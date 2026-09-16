@@ -55,23 +55,28 @@ def test_exhausted_claim_is_not_overrun(sandbox, store, capsys):
     assert "OVERRUN: max_runs 3 > 2" in capsys.readouterr().out
 
 
-def test_overrun_counts_recorded_iteration_consumption(sandbox, store, capsys, tmp_path):
-    """H7: a claim can burn runs that leave no ledger row; the OVERRUN line
-    must read the same consumption the campaign ceiling charges, not only
-    rows that survived with their session field intact."""
+def test_overrun_counts_only_current_claim_attribution(sandbox, store, capsys):
     import json
 
     make_entry(store, "Q1", claim=Claim(session="coordinator", at=NOW, why="",
-                                        budget="", max_runs=1, max_hours=4.0))
+                                        budget="", max_runs=2, max_hours=4.0))
     sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
-    (sandbox.paths.iterations / "0001.json").write_text(json.dumps(
-        {"n": 1, "runs": 2, "runs_by_entry": {"Q1": {"session": "coordinator", "runs": 2}}}))
-    assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
-    assert "OVERRUN: max_runs 2 > 1" in capsys.readouterr().out
-    (sandbox.paths.iterations / "0001.json").write_text(json.dumps(
-        {"runs": 2, "run_ids": ["retained", "retained"]}))
-    append(sandbox.paths.runs / "retained.jsonl", RunRecord(
-        id="retained", entry="Q1", session="it1-Q1", metrics={},
-        provenance={"host": "test"}))
+    rows = [
+        {"session": "coordinator", "claim_at": OLD, "runs": 3},
+        {"session": "other", "claim_at": NOW, "runs": 3},
+        {"session": "coordinator", "runs": 3},
+        {"session": "coordinator", "claim_at": NOW, "runs": 2},
+    ]
+    for number, row in enumerate(rows):
+        (sandbox.paths.iterations / f"{number:04}.json").write_text(json.dumps(
+            {"runs": row["runs"], "runs_by_entry": {"Q1": row}}))
+    append(sandbox.paths.runs / "old.jsonl", RunRecord(
+        entry="Q1", session="coordinator", started=dt.datetime.fromisoformat(OLD).timestamp(),
+        metrics={}))
     assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
     assert "OVERRUN" not in capsys.readouterr().out
+    (sandbox.paths.iterations / "0004.json").write_text(json.dumps(
+        {"runs": 1, "runs_by_entry": {"Q1": {
+            "session": "coordinator", "claim_at": NOW, "runs": 1}}}))
+    assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
+    assert "OVERRUN: max_runs 3 > 2" in capsys.readouterr().out

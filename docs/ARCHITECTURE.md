@@ -268,10 +268,12 @@ for inspection, while reported consumption is still charged conservatively.
 `run_ids` on each iteration identifies retained rows so restarting does not
 charge them twice; historical iterations without IDs remain conservative.
 GPU-hours use the greater of worker-reported consumption and retained row cost.
-Unrecorded consumption (reported but not retained) is attributed per entry to
-the claim held at charge time, as `runs_by_entry`; `ar budget` reads it so a
-claim that burned runs without ledger rows still trips its OVERRUN line,
-matching the campaign ceiling's own conservative charge.
+Consumption is attributed to the original claim instance in `runs_by_entry`,
+with its session and `claim_at` timestamp captured before dispatch. `ar budget`
+matches both fields; resolved claims must not charge a later same-session
+claim. Legacy attribution without a timestamp remains part of campaign
+consumption but cannot be assigned to a current claim. Direct ledger rows are
+counted only when their start time falls within the current claim.
 
 ## 6. Resuming on another machine
 
