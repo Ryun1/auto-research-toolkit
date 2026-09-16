@@ -39,8 +39,10 @@ import concurrent.futures as futures
 import dataclasses
 import datetime as dt
 import json
+import math
 import os
 import pathlib
+import shlex
 import time
 from dataclasses import dataclass, field
 
@@ -100,6 +102,8 @@ class Iteration:
     #: leaves every ceiling but `runs` starting from zero at the next `ar loop`.
     runs: float = 0.0
     gpu_hours: float = 0.0
+    #: Retained ledger IDs, used to reconcile consumption on restart.
+    run_ids: list[str] = field(default_factory=list)
 
     def phase(self, name: str) -> Phase:
         p = Phase(name)
@@ -197,7 +201,8 @@ class Coordinator:
         rows, self.foreign_rows = runs_mod.read_with_skipped(config.paths.runs)
         recorded = budget_mod.recorded_usage(config)
         self.domain_budget = budget_mod.domain_budget(
-            config, spent_runs=len(rows) + recorded["runs"],
+            config, spent_runs=len(rows) + recorded["runs"]
+            - budget_mod.recorded_run_overlap(config, rows),
             spent_money=recorded["money"],
             spent_gpu_hours=recorded["gpu_hours"])
 
@@ -248,11 +253,8 @@ class Coordinator:
     def _charge_runs(self, it: Iteration, runs: float, gpu_hours: float = 0.0) -> None:
         """Charge measurements to the campaign, and record them on the iteration.
 
-        The counts are the worker's own report because the rows it wrote landed
-        in its workspace rather than in the coordinator's ledger -- so they are
-        the only numbers available here, and they are charged rather than
-        dropped. `domain_max_gpu_hours` had no feed at all before this, which
-        made it a ceiling that could not be reached by any amount of spending.
+        Reports and observed rows are reconciled before charging. Missing or
+        malformed evidence does not refund consumption: the larger count wins.
 
         The iteration's *pool* of runs is allocated at dispatch, not here; this
         is consumption, which is a campaign-level fact.
@@ -541,18 +543,39 @@ class Coordinator:
             jobs.append(card.entry_id)
         phase.read = len(jobs)
 
+        paths = self.config.paths
+        protected = (paths.entries, paths.claims, paths.runs,
+                     paths.iterations, paths.workspaces)
+
         def work(entry_id):
             slot = pool.acquire(f"it{it.n}-{entry_id}")
+            pool.retain(slot.name, "worker evidence has not been harvested")
+            before, reply, error = None, None, None
             try:
+                relative = self.config.paths.runs.relative_to(self.config.paths.root)
+                directory = slot.path / relative
+                if not directory.resolve().is_relative_to(slot.path.resolve()):
+                    raise AutoresearchError("configured runs directory escapes workspace")
+                before = runs_mod.snapshot(directory)
                 entry = self.store.load(entry_id)
+                command = ["ar", "--domain", str(slot.path), "--session",
+                           slot.name, "measure", "--entry", entry_id, "--"]
                 brief = self._brief(
                     Role.WORKER, it, entry=dataclasses.asdict(entry),
                     workspace=str(slot.path),
+                    record_command=shlex.join(command),
+                    memos_directory=str(self.config.paths.memos.relative_to(
+                        self.config.paths.root)),
                     instruction=(
                         "Test this entry against its own pre-registered bar. "
-                        "Measure with the domain's measure command; write a memo "
-                        "under inbox/ containing the numbers; then re-read your "
-                        "own memo and verify every claim in it before returning. "
+                        "Run measurements through record_command (append domain "
+                        "arguments after --), not the raw measure_command; only "
+                        "toolkit-recorded rows are measurement evidence. Declare "
+                        "all audit outputs as workspace-relative findings paths "
+                        "in each record's outputs. Write a memo under the "
+                        "configured memos directory; then re-read your own memo "
+                        "and verify every claim before returning. Zero-run static "
+                        "work must report runs: 0 and make no measured claims. "
                         "Return JSON: {verdict: "
                         "confirmed|refuted|blocked|inconclusive, memo: "
                         "path relative to the domain root, summary, closure_kind: "
@@ -562,26 +585,77 @@ class Coordinator:
                         "claims_checked: [what you re-verified, one item each], "
                         "corrections: [what the re-review changed]}}. A reply "
                         "without a verification block is refused."))
-                return self.brain.ask(Role.WORKER, brief, workspace=slot.path)
-            finally:
-                pool.release(slot.name)
+                reply = self.brain.ask(Role.WORKER, brief, workspace=slot.path)
+            except Exception as exc:
+                error = exc
+            return slot, before, reply, error
 
         for entry_id, ok, value in self._map(work, jobs):
             if not ok:
-                phase.detail.append(f"{entry_id}: worker raised {value!r}")
-                it.verdicts[entry_id] = "failed"
+                slot, before, reply, error = None, None, None, value
+            else:
+                slot, before, reply, error = value
+            report = reply.data if reply and isinstance(reply.data, dict) else {}
+            if reply is not None:
+                self._charge(it, reply)
+            evidence = runs_mod.Harvest()
+            if slot is not None and before is not None:
                 try:
-                    self.claims.release(entry_id, why=f"worker raised {value}")
-                except AutoresearchError:
+                    evidence = runs_mod.harvest(
+                        slot.path / self.config.paths.runs.relative_to(self.config.paths.root),
+                        before, self.config.paths.runs, workspace=slot.path,
+                        root=self.config.paths.root, goal=self.config.goal,
+                        lanes=self.config.lanes, protected=protected)
+                    if report.get("memo"):
+                        runs_mod.retain_output(slot.path, self.config.paths.root,
+                                               report["memo"], self.config.lanes,
+                                               protected)
+                except Exception as exc:
+                    evidence.problems.append(f"evidence retention failed: {exc}")
+            amounts = {}
+            for key in ("runs", "gpu_hours"):
+                try:
+                    amount = float(report.get(key, 0) or 0)
+                    if not math.isfinite(amount) or amount < 0:
+                        raise ValueError("must be finite and nonnegative")
+                    amounts[key] = amount
+                except (ValueError, TypeError) as exc:
+                    evidence.problems.append(f"invalid reported {key}: {exc}")
+                    amounts[key] = 0
+            verified = sum(r.entry == entry_id for r in evidence.records)
+            if amounts["runs"] > verified or (amounts["gpu_hours"] > 0 and not verified):
+                evidence.problems.append(
+                    f"missing measurement evidence: reported {amounts['runs']:g} runs, "
+                    f"retained {verified} new record(s) for {entry_id}")
+            gpu_hours = 0.0
+            for record in evidence.records:
+                try:
+                    amount = float(record.cost.get("gpu_hours", 0) or 0)
+                    if math.isfinite(amount) and amount > 0:
+                        gpu_hours += amount
+                except (ValueError, TypeError, AttributeError):
                     pass
-                phase.did += 1
-                continue
-            self._charge(it, value)
-            report = value.data if isinstance(value.data, dict) else {}
-            verdict = self._apply_verdict(entry_id, report, phase)
+            self._charge_runs(it, max(amounts["runs"], evidence.consumed),
+                              max(amounts["gpu_hours"], gpu_hours))
+            it.run_ids.extend(r.id for r in evidence.records)
+            if error is not None:
+                evidence.problems.append(f"worker raised {error!r}")
+            if evidence.problems:
+                phase.detail.extend(f"{entry_id}: {p}" for p in evidence.problems)
+                if slot is not None:
+                    pool.retain(slot.name, "; ".join(evidence.problems))
+                    phase.detail.append(f"{entry_id}: workspace retained at {slot.path}")
+                verdict = "failed" if error is not None else "refused"
+                try:
+                    self.claims.release(entry_id, why="; ".join(evidence.problems))
+                except AutoresearchError as exc:
+                    phase.detail.append(f"{entry_id}: {exc}")
+            else:
+                verdict = self._apply_verdict(entry_id, report, phase)
+                if slot is not None:
+                    pool.retain(slot.name, None)
+                    pool.release(slot.name)
             it.verdicts[entry_id] = verdict
-            self._charge_runs(it, float(report.get("runs", 0) or 0),
-                               float(report.get("gpu_hours", 0) or 0))
             phase.did += 1
         phase.seconds = time.time() - start
         return phase

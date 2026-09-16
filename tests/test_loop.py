@@ -363,6 +363,14 @@ def test_a_workers_measurements_survive_a_restart(sandbox):
     assert fresh.domain_budget["gpu_hours"].spent == 1.5
 
 
+def test_retained_measurements_are_not_charged_again_on_restart(coordinator):
+    coordinator.run_iteration(1)
+    spent = coordinator.domain_budget["runs"].spent
+    fresh = Coordinator(coordinator.config, ScriptedBrain(dict(IDLE)))
+    assert spent > 0
+    assert fresh.domain_budget["runs"].spent == spent
+
+
 def test_the_iteration_run_pool_bounds_the_whole_iteration(sandbox):
     """Charged after the fact the meter bounds nothing: every card is dispatched
     before any of them reports. It is allocated at dispatch instead."""

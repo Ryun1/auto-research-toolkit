@@ -110,3 +110,23 @@ def test_recorded_usage_refuses_an_unreadable_record(sandbox):
     (sandbox.paths.iterations / "corrupt.json").write_text('{"n": 1, ')
     with pytest.raises(AutoresearchError, match="corrupt.json"):
         recorded_usage(sandbox)
+
+
+def test_retained_run_overlap_never_discounts_missing_or_repeated_rows(sandbox):
+    import json
+
+    from autoresearch.budget import recorded_run_overlap
+    from autoresearch.runs import RunRecord
+
+    sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
+    records = [RunRecord(id="retained", session="worker", metrics={}),
+               RunRecord(id="standalone", session="worker", metrics={})]
+    for number, data in enumerate([
+        {"runs": 3, "run_ids": ["retained", "retained", "missing"]},
+        {"runs": 1, "run_ids": ["retained"]},
+        {"runs": 4},
+    ]):
+        (sandbox.paths.iterations / f"{number}.json").write_text(json.dumps(data))
+    usage = recorded_usage(sandbox)
+    assert len(records) + usage["runs"] - recorded_run_overlap(sandbox, records) == 9
+    assert usage["runs"] == 8  # Consumers without a ledger still see full usage.

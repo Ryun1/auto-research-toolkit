@@ -518,7 +518,8 @@ def cmd_budget(args):
     # about how much of a ceiling is left.
     recorded = budget_mod.recorded_usage(config)
     domain = budget_mod.domain_budget(
-        config, spent_runs=len(all_runs) + recorded["runs"],
+        config, spent_runs=len(all_runs) + recorded["runs"]
+        - budget_mod.recorded_run_overlap(config, all_runs),
         spent_money=recorded["money"],
         spent_gpu_hours=recorded["gpu_hours"])
     iteration = budget_mod.iteration_budget(config)

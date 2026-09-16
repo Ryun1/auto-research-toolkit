@@ -157,11 +157,11 @@ def recorded_usage(config) -> dict[str, float]:
     `ar loop`, a campaign ceiling is not a ceiling -- it is a per-invocation
     allowance anyone can renew by pressing up-arrow.
 
-    The run ledger cannot answer this on its own: a worker measures inside its
-    own workspace, so the rows it wrote are not in the coordinator's `data/runs`
-    and its GPU-hours are recorded nowhere else at all. Where the two sources
-    could overlap the count is high rather than low, deliberately -- a budget
-    that over-counts stops early, and one that under-counts does not stop.
+    The run ledger cannot answer this on its own: workers can report consumed
+    runs without supplying records, and GPU-hours also live in iteration
+    reports. Consumers adding ledger counts must subtract
+    `recorded_run_overlap` so retained measurements are charged only once.
+    Historical usage without explicit run IDs remains conservatively charged.
     """
     usage = dict.fromkeys(USAGE_FIELDS, 0.0)
     directory = config.paths.iterations
@@ -183,6 +183,30 @@ def recorded_usage(config) -> dict[str, float]:
             except (TypeError, ValueError, AttributeError):
                 continue  # a malformed figure must not make the loop unstartable
     return usage
+
+
+def recorded_run_overlap(config, records) -> float:
+    """Runs already counted by both the ledger and iteration consumption.
+
+    Historical iterations without run IDs remain conservatively charged. A
+    missing ledger row is never discounted, and repeated IDs cannot discount
+    the same measurement twice.
+    """
+    remaining = {record.id for record in records}
+    overlap = 0.0
+    for path in sorted(config.paths.iterations.glob("*.json")):
+        try:
+            record = json.loads(path.read_text())
+            ids = record.get("run_ids", [])
+            consumed = float(record.get("runs") or 0.0)
+            if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+                raise ValueError("run_ids must be a list of strings")
+            matching = remaining.intersection(ids)
+            overlap += min(len(matching), max(0.0, consumed))
+            remaining.difference_update(matching)
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            raise AutoresearchError(f"{path}: cannot reconcile run accounting ({exc})") from exc
+    return overlap
 
 
 # -- the third exit --------------------------------------------------------

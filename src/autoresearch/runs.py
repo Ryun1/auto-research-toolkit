@@ -25,8 +25,11 @@ run produced, and `provenance` must identify what was actually built.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
+import os
 import pathlib
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -200,3 +203,136 @@ def read_with_skipped(directory, strict: bool = False) -> tuple[list, int]:
                     raise SchemaError(f"{path}:{lineno}: {exc}") from exc
                 skipped += 1
     return out, skipped
+
+
+def snapshot(directory) -> dict:
+    """Remember inherited bytes, not just IDs: workers may only append evidence."""
+    directory = pathlib.Path(directory)
+    return {p.relative_to(directory): (p.stat().st_size, _digest(p))
+            for p in directory.rglob("*.jsonl")}
+
+
+def _digest(path, size=None):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while size is None or size > 0:
+            chunk = stream.read(65536 if size is None else min(65536, size))
+            if not chunk:
+                break
+            digest.update(chunk)
+            if size is not None:
+                size -= len(chunk)
+    return digest.digest()
+
+
+def retain_output(workspace, root, name, lanes, protected=()) -> None:
+    """Copy declared findings without following links or replacing owned files."""
+    relative = pathlib.Path(name)
+    if (relative.is_absolute() or ".." in relative.parts or not relative.parts
+            or lanes.classify(relative.as_posix()) != "findings"):
+        raise SchemaError(f"unsafe or non-findings output {name!r}")
+    source, target = workspace / relative, root / relative
+    if any(target.resolve().is_relative_to(path.resolve())
+           or path.resolve().is_relative_to(target.resolve()) for path in protected):
+        raise SchemaError(f"output overlaps coordinator state: {name!r}")
+    for base, path in ((workspace, source), (root, target)):
+        if not path.resolve().is_relative_to(base.resolve()):
+            raise SchemaError(f"output escapes owned root: {path}")
+        current = base
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise SchemaError(f"symlink output is not owned: {current}")
+    if source.is_dir():
+        for child in sorted(source.iterdir()):
+            retain_output(workspace, root,
+                          child.relative_to(workspace).as_posix(), lanes, protected)
+        return
+    if not source.is_file():
+        raise SchemaError(f"declared output is missing or not a file: {source}")
+    if target.exists():
+        if not target.is_file() or _digest(source) != _digest(target):
+            raise SchemaError(f"output collision at {target}")
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation: a second worker must never replace the first's audit.
+    with source.open("rb") as incoming, target.open("xb") as outgoing:
+        shutil.copyfileobj(incoming, outgoing)
+
+
+@dataclass
+class Harvest:
+    records: list[RunRecord] = field(default_factory=list)
+    consumed: int = 0
+    problems: list[str] = field(default_factory=list)
+
+
+def harvest(directory, before, destination, *, workspace, root, goal, lanes,
+            protected=()) -> Harvest:
+    """Retain appended records and their declared local outputs before teardown.
+
+    Bad rows stay in the workspace for audit, never become manufactured records.
+    Callers serialize harvests and retain the workspace when problems are present.
+    """
+    directory, destination = pathlib.Path(directory), pathlib.Path(destination)
+    result = Harvest()
+    existing = {}
+    for record in read_all(destination):
+        if record.id in existing and existing[record.id] != record.to_dict():
+            raise SchemaError(f"conflicting existing run ID {record.id!r}")
+        existing[record.id] = record.to_dict()
+    paths = {p.relative_to(directory): p for p in directory.rglob("*.jsonl")}
+    for relative in before.keys() - paths.keys():
+        result.problems.append(f"inherited run file disappeared: {relative}")
+    for relative, path in sorted(paths.items()):
+        size, digest = before.get(relative, (0, None))
+        if (not path.resolve().is_relative_to(workspace.resolve())
+                or path.is_symlink()):
+            result.problems.append(f"run file escapes owned workspace: {path}")
+            continue
+        if digest is not None and (path.stat().st_size < size
+                                   or _digest(path, size) != digest):
+            result.problems.append(f"inherited run file was rewritten: {path}")
+            continue
+        with path.open("rb") as stream:
+            stream.seek(size)
+            for lineno, line in enumerate(stream, 1):
+                if not line.strip():
+                    continue
+                result.consumed += 1
+                try:
+                    payload = json.loads(line)
+                    if not isinstance(payload, dict) or not {
+                            "id", "schema", "session", "metrics", "provenance"
+                    } <= payload.keys():
+                        raise SchemaError("missing explicit run identity or evidence fields")
+                    record = RunRecord.from_dict(payload)
+                    if not isinstance(record.id, str) or not record.id:
+                        raise SchemaError("run ID must be a nonempty string")
+                    if (not isinstance(record.metrics, dict)
+                            or not isinstance(record.provenance, dict)
+                            or not isinstance(record.session, str)):
+                        raise SchemaError("metrics/provenance must be objects and session a string")
+                    record.validate(goal)
+                    if not isinstance(record.outputs, list) or not all(
+                            isinstance(name, str) for name in record.outputs):
+                        raise SchemaError("outputs must be a list of local paths")
+                    if record.id in existing:
+                        if existing[record.id] != record.to_dict():
+                            raise SchemaError(f"run ID collision: {record.id!r}")
+                        continue
+                    for name in record.outputs:
+                        retain_output(workspace, root, name, lanes, protected)
+                    destination.mkdir(parents=True, exist_ok=True)
+                    target = destination / f"harvest-{uuid.uuid4().hex}.jsonl"
+                    temporary = target.with_suffix(".tmp")
+                    try:
+                        temporary.write_text(json.dumps(record.to_dict(), sort_keys=True) + "\n")
+                        os.link(temporary, target)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                    existing[record.id] = record.to_dict()
+                    result.records.append(record)
+                except (OSError, ValueError, TypeError, AttributeError, SchemaError) as exc:
+                    result.problems.append(f"{path}: appended row {lineno}: {exc}")
+    return result

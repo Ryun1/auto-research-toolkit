@@ -54,6 +54,7 @@ class Slot:
     holder: str
     kind: str            # "worktree" | "directory"
     branch: str | None = None
+    retained: str | None = None
 
 
 class Pool:
@@ -70,7 +71,8 @@ class Pool:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(json.dumps(
             {"name": slot.name, "holder": slot.holder, "kind": slot.kind,
-             "branch": slot.branch, "path": str(slot.path)}))
+             "branch": slot.branch, "path": str(slot.path),
+             "retained": slot.retained}))
 
     def acquire(self, name: str) -> Slot:
         """Create one slot. Refuses to reuse an existing one silently (H70)."""
@@ -96,6 +98,12 @@ class Pool:
         self._record(slot)
         return slot
 
+    def retain(self, name: str, reason: str | None) -> None:
+        """Keep unharvested evidence, including through the outer finally."""
+        slot = self.slots[name]
+        slot.retained = reason
+        self._record(slot)
+
     def release(self, name: str, force: bool = False) -> None:
         """Destroy one slot. Refuses if this pool does not hold it (H57/H59)."""
         marker = self.root / f"{name}.json"
@@ -107,6 +115,12 @@ class Pool:
                     f"{recorded.get('holder')!r}, not by {self.owner!r}. "
                     "Teardown without an ownership check removed other "
                     "sessions' work (H57).")
+        held = self.slots.get(name)
+        reason = held.retained if held else (
+            recorded.get("retained") if marker.exists() else None)
+        if reason and not force:
+            raise ClaimError(f"workspace {name!r} retained at "
+                             f"{held.path if held else self.root / name}: {reason}")
         slot = self.slots.pop(name, None)
         path = slot.path if slot else self.root / name
         if slot and slot.kind == "worktree":

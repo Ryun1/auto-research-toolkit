@@ -9,6 +9,7 @@ judgement about *which* configuration to try is scripted.
 from __future__ import annotations
 
 import json
+import pathlib
 import subprocess
 import sys
 
@@ -81,13 +82,14 @@ class ToyBrain:
 
     def _work(self, payload):
         entry = payload["entry"]
+        workspace = pathlib.Path(payload["workspace"])
         knobs = json.loads(entry["sources"][0]) if entry.get("sources") else {}
         args = [f"--knob={k}={v}" for k, v in knobs.items()]
         proc = subprocess.run(
             [sys.executable, "-m", "autoresearch.cli",
              "--session", f"worker-{entry['id']}",
              "measure", "--entry", entry["id"], "--", *args],
-            cwd=self.config.paths.root, capture_output=True, text=True)
+            cwd=workspace, capture_output=True, text=True)
         line = proc.stdout.strip()
         if proc.returncode != 0:
             return {"verdict": "inconclusive",
@@ -99,8 +101,8 @@ class ToyBrain:
             if "objective=" in line else None
         baseline = payload["goal"].get("best_so_far")
         memo = f"inbox/{entry['id']}-toy.md"
-        (self.config.paths.root / memo).parent.mkdir(parents=True, exist_ok=True)
-        (self.config.paths.root / memo).write_text(
+        (workspace / memo).parent.mkdir(parents=True, exist_ok=True)
+        (workspace / memo).write_text(
             f"# {entry['id']} — {entry['title']}\n\n"
             f"knobs: {knobs}\nobjective: {objective}\nbaseline: {baseline}\n")
 
