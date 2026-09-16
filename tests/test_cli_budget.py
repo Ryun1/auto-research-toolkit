@@ -36,3 +36,25 @@ def test_overrun_names_the_meter_and_the_ceiling(sandbox, store, capsys):
                      entry="Q1", status=OK))
     assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
     assert "OVERRUN: max_hours" in capsys.readouterr().out
+
+
+def test_overrun_counts_recorded_iteration_consumption(sandbox, store, capsys, tmp_path):
+    """H7: a claim can burn runs that leave no ledger row; the OVERRUN line
+    must read the same consumption the campaign ceiling charges, not only
+    rows that survived with their session field intact."""
+    import json
+
+    make_entry(store, "Q1", claim=Claim(session="coordinator", at=NOW, why="",
+                                        budget="", max_runs=1, max_hours=4.0))
+    sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
+    (sandbox.paths.iterations / "0001.json").write_text(json.dumps(
+        {"n": 1, "runs": 2, "runs_by_entry": {"Q1": {"session": "coordinator", "runs": 2}}}))
+    assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
+    assert "OVERRUN: max_runs 2 > 1" in capsys.readouterr().out
+    (sandbox.paths.iterations / "0001.json").write_text(json.dumps(
+        {"runs": 2, "run_ids": ["retained", "retained"]}))
+    append(sandbox.paths.runs / "retained.jsonl", RunRecord(
+        id="retained", entry="Q1", session="it1-Q1", metrics={},
+        provenance={"host": "test"}))
+    assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
+    assert "OVERRUN" not in capsys.readouterr().out

@@ -195,6 +195,41 @@ def recorded_usage(config) -> dict[str, float]:
     return usage
 
 
+def recorded_runs_by_entry(config) -> dict[str, dict]:
+    """Per-entry consumption the coordinator attributed to a claim at charge
+    time ({entry: {"session": ..., "runs": ...}}).
+
+    Harvested rows carry the worker-slot session, so a held claim's overrun
+    needs this attribution; it is the same consumption the campaign ceiling
+    already charges, not an extra meter.
+    """
+    out: dict[str, dict] = {}
+    directory = config.paths.iterations
+    if not directory.exists():
+        return out
+    for path in sorted(directory.glob("*.json")):
+        try:
+            record = json.loads(path.read_text())
+            attribution = record.get("runs_by_entry") or {}
+            if not isinstance(attribution, dict):
+                raise ValueError("runs_by_entry must be an object")
+            for entry_id, row in attribution.items():
+                if (not isinstance(entry_id, str) or not isinstance(row, dict)
+                        or not isinstance(row.get("session"), str)):
+                    raise ValueError(f"runs_by_entry[{entry_id!r}] is malformed")
+                runs = float(row.get("runs") or 0.0)
+                prior = out.get(entry_id) or {"session": row["session"], "runs": 0.0}
+                out[entry_id] = {"session": prior["session"],
+                                 "runs": prior["runs"] + runs}
+        except (OSError, ValueError, TypeError) as exc:
+            raise AutoresearchError(
+                f"{path}: cannot read run attribution ({exc}). A claim's "
+                "overrun is read from the same records as the campaign "
+                "ceiling; a malformed one must not silently hide a "
+                "breach.") from exc
+    return out
+
+
 def recorded_run_overlap(config, records) -> float:
     """Runs already counted by both the ledger and iteration consumption.
 

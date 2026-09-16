@@ -268,6 +268,10 @@ for inspection, while reported consumption is still charged conservatively.
 `run_ids` on each iteration identifies retained rows so restarting does not
 charge them twice; historical iterations without IDs remain conservative.
 GPU-hours use the greater of worker-reported consumption and retained row cost.
+Unrecorded consumption (reported but not retained) is attributed per entry to
+the claim held at charge time, as `runs_by_entry`; `ar budget` reads it so a
+claim that burned runs without ledger rows still trips its OVERRUN line,
+matching the campaign ceiling's own conservative charge.
 
 ## 6. Resuming on another machine
 
