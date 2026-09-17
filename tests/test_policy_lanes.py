@@ -30,6 +30,29 @@ def test_selftest_catches_enforcement_that_was_deleted():
     assert any("forbidden_paths rule refuses nothing" in f for f in failures)
 
 
+def test_selftest_catches_deleted_spend_enforcement():
+    """The selftest proved three rule kinds but never the spend ceiling, so
+    deleting check_spend left `ar policy` green (the H89 class again)."""
+    class Deleted(Policy):
+        def check_spend(self, amount, note=""):
+            return None
+
+    failures = Deleted(spend_ceiling=5.0).selftest()
+    assert any("spend_ceiling" in f for f in failures)
+
+
+def test_regex_forbidden_path_rule_refuses_real_paths():
+    """A regex-shaped forbidden_paths rule was inert in enforcement yet passed
+    the selftest, because probes() offers the pattern itself and fnmatch
+    matched it against itself. check_paths now honors regexes like
+    check_command does (H24)."""
+    p = Policy.from_dict({"forbidden_paths": [
+        {"pattern": r"secrets/.*\.env", "reason": "keys never leave"}]})
+    with pytest.raises(PolicyError, match="forbidden_paths"):
+        p.check_paths(["secrets/prod.env"])
+    assert p.selftest() == []
+
+
 def test_empty_pattern_is_refused_because_it_matches_everything():
     """An empty pattern reads as "disabled" and behaves as "refuse everything":
     re.search("", x) always hits. It fails in the direction nobody tests for."""

@@ -76,13 +76,19 @@ class Policy:
     # -- checks ----------------------------------------------------------
 
     def check_paths(self, paths) -> None:
-        """Refuse a staged/committed path set touching anything forbidden."""
+        """Refuse a staged/committed path set touching anything forbidden.
+
+        Matched as a glob and, if that never hits, as a regex -- the same
+        dual reading check_command gives human_only, so a rule written as a
+        regex is enforced, not silently inert (H24).
+        """
         hits = []
         for path in paths:
             norm = str(path).lstrip("./")
             for rule in self.forbidden_paths:
-                if fnmatch.fnmatch(norm, rule.pattern) or norm.startswith(
-                        rule.pattern.rstrip("*").rstrip("/") + "/"):
+                if (fnmatch.fnmatch(norm, rule.pattern)
+                        or norm.startswith(rule.pattern.rstrip("*").rstrip("/") + "/")
+                        or re.search(rule.pattern, norm)):
                     hits.append((norm, rule))
         if hits:
             raise PolicyError(
@@ -164,6 +170,15 @@ class Policy:
                 failures.append(
                     f"human_only rule refuses nothing: {rule.describe()}"
                     "  (declare `example` if the pattern is a regex)")
+        if self.spend_ceiling is not None:
+            try:
+                self.check_spend(self.spend_ceiling + 0.01)
+            except PolicyError:
+                pass
+            else:
+                failures.append(
+                    "spend_ceiling refuses nothing: the ceiling is declared "
+                    "but enforcement deleted or never wired")
         return failures
 
     def describe(self) -> str:
