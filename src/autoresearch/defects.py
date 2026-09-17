@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from .config import Track
 from .entries import Entry
 from .errors import AutoresearchError
 
@@ -122,20 +123,19 @@ def export_bundle(config, entries, all_status: bool = False) -> tuple[dict, list
     return bundle, refused, stats
 
 
-def ingest_bundle(bundle: dict, store, prefix: str = "F", track: str = "field",
+def ingest_bundle(bundle: dict, store, *, track: Track,
                   ) -> tuple[list[Entry], list[tuple[str, str]]]:
     """Turn an upstream bundle into ordinary entries. The receiving side.
 
-    Each defect becomes a real entry under `prefix`, tagged
+    Each defect becomes a real entry under `track.prefix`, tagged
     `from:<project>/<id>` so re-ingesting the same bundle files nothing twice.
     Returns `(filed, skipped)`; every skip carries its reason, and a skip for
     missing evidence says which field -- a bundle should not have been able to
     carry one, since export refuses it, but ingest trusts nothing it did not
     validate itself.
 
-    Entries land in the target machine's initial status by way of the plain
-    string `track`; the caller is responsible for pointing `--into` at a store
-    whose domain declares that prefix.
+    The caller supplies the receiving domain's configured track. Entries use
+    its id, prefix and initial status, never an independent state default.
     """
     if bundle.get("schema") != BUNDLE_SCHEMA:
         raise AutoresearchError(
@@ -162,7 +162,8 @@ def ingest_bundle(bundle: dict, store, prefix: str = "F", track: str = "field",
                             "export upstream should have refused it"))
             continue
         entry = Entry(
-            id=store.next_id(prefix), track=track,
+            id=store.next_id(track.prefix), track=track.id,
+            status=track.machine.initial,
             title=str(defect.get("title") or "")[:200] or f"field defect {defect_id}",
             hypothesis=str(defect.get("hypothesis") or ""),
             observed=str(defect.get("observed") or ""),

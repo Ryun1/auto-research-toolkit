@@ -142,12 +142,21 @@ def make_bundle(entry_dict, project="widgets"):
             "defects": [entry_dict]}
 
 
-def test_a_bundle_roundtrips_into_ordinary_entries(tmp_path, toy):
+@pytest.fixture
+def receiving(sandbox):
+    config_path = sandbox.paths.root / "domain.toml"
+    config_path.write_text(config_path.read_text() + '\n[[tracks]]\n'
+                           'id = "field"\nprefix = "F"\n')
+    return DomainConfig.load(sandbox.paths.root)
+
+
+def test_a_bundle_roundtrips_into_ordinary_entries(tmp_path, toy, receiving):
     source = Store(tmp_path / "field")
     file_defect(source)
     bundle, _, _ = defects_mod.export_bundle(toy, source.all())
-    target = Store(tmp_path / "upstream")
-    filed, skipped = defects_mod.ingest_bundle(bundle, target, prefix="F")
+    target = Store(receiving.paths.entries)
+    filed, skipped = defects_mod.ingest_bundle(
+        bundle, target, track=receiving.tracks["field"])
     assert skipped == [] and len(filed) == 1
     entry = target.load("F1")
     assert entry.title == source.load("H1").title
@@ -155,41 +164,44 @@ def test_a_bundle_roundtrips_into_ordinary_entries(tmp_path, toy):
     assert entry.tags == ["from:toy/H1"]
 
 
-def test_reingesting_the_same_bundle_files_nothing_twice(tmp_path):
-    target = Store(tmp_path / "upstream")
+def test_reingesting_the_same_bundle_files_nothing_twice(receiving):
+    target = Store(receiving.paths.entries)
     bundle = make_bundle({"id": "H1", "title": "the judge brief drops marks",
                           "core": "0.1.0", "repro": "ar rank",
                           "observed": "unlabelled reserve"})
-    filed, _ = defects_mod.ingest_bundle(bundle, target)
+    filed, _ = defects_mod.ingest_bundle(
+        bundle, target, track=receiving.tracks["field"])
     assert len(filed) == 1
-    filed, skipped = defects_mod.ingest_bundle(bundle, target)
+    filed, skipped = defects_mod.ingest_bundle(
+        bundle, target, track=receiving.tracks["field"])
     assert filed == []
     assert skipped == [("H1", "already ingested (from:widgets/H1)")]
 
 
-def test_ingest_skips_an_incomplete_defect_and_names_the_field(tmp_path):
-    target = Store(tmp_path / "upstream")
+def test_ingest_skips_an_incomplete_defect_and_names_the_field(receiving):
+    target = Store(receiving.paths.entries)
     bundle = make_bundle({"id": "H2", "title": "no repro attached",
                           "core": "0.1.0", "observed": "it broke"})
-    filed, skipped = defects_mod.ingest_bundle(bundle, target)
+    filed, skipped = defects_mod.ingest_bundle(
+        bundle, target, track=receiving.tracks["field"])
     assert filed == []
     assert skipped == [("H2", "incomplete: missing repro; "
                               "export upstream should have refused it")]
 
 
-def test_ingest_refuses_an_unknown_schema(tmp_path):
+def test_ingest_refuses_an_unknown_schema(receiving):
     with pytest.raises(AutoresearchError, match="refusing to guess"):
         defects_mod.ingest_bundle({"schema": "ar-defect-bundle-9", "defects": []},
-                                  Store(tmp_path / "upstream"))
+                                  Store(receiving.paths.entries),
+                                  track=receiving.tracks["field"])
 
 
-def test_the_ingest_script_runs_end_to_end(tmp_path):
+def test_the_ingest_script_runs_end_to_end(tmp_path, receiving):
     """The script is how a bundle lands here; it must work unattended, report
     its counts, and refuse an incomplete bundle with a failing exit."""
     import subprocess
     import sys
-    target = tmp_path / "entries"
-    target.mkdir()
+    target = receiving.paths.entries
     bundle = make_bundle({"id": "H1", "title": "judge brief drops marks",
                           "core": "0.1.0", "repro": "ar rank --top 3",
                           "observed": "unlabelled reserve"})
@@ -214,6 +226,80 @@ def test_the_ingest_script_runs_end_to_end(tmp_path):
         capture_output=True, text=True)
     assert proc.returncode == 1
     assert "incomplete: missing repro" in proc.stdout
+
+
+def test_ingest_script_uses_the_receiving_tracks_initial_status(tmp_path, receiving):
+    import subprocess
+    import sys
+    config_path = receiving.paths.root / "domain.toml"
+    config_path.write_text(config_path.read_text() + '''
+[tracks.states]
+initial = "triage"
+[tracks.states.statuses.triage]
+[tracks.states.statuses.in-progress]
+[[tracks.states.transitions]]
+from = "triage"
+to = "in-progress"
+writer = "claim"
+[[tracks.states.transitions]]
+from = "in-progress"
+to = "triage"
+writer = "release"
+''')
+    bundle = make_bundle({"id": "H1", "title": "judge brief drops marks",
+                          "status": "confirmed", "core": "0.1.0",
+                          "repro": "ar rank --top 3", "observed": "unlabelled reserve"})
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(bundle))
+    here = pathlib.Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, str(here / "scripts" / "ingest-defects.py"),
+         str(path), "--into", str(receiving.paths.entries),
+         "--track", "field", "--prefix", "F"],
+        capture_output=True, text=True, cwd=str(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    entry = Store(receiving.paths.entries).load("F1")
+    assert entry.status == "triage"
+    # The importer owns filing, not view rendering; validate gates on the
+    # views matching, so render first exactly as the loop's finalize does.
+    assert ar(["--domain", str(receiving.paths.root), "render"]) == 0
+    assert ar(["--domain", str(receiving.paths.root), "validate"]) == 0
+
+
+@pytest.mark.parametrize("problem", [
+    "prefix", "track", "store", "missing-domain", "invalid-domain",
+])
+def test_ingest_script_rejects_invalid_destination_before_writing(
+        tmp_path, receiving, problem):
+    import subprocess
+    import sys
+    target = receiving.paths.entries
+    target.rmdir()
+    flags = []
+    if problem == "prefix":
+        flags = ["--prefix", "X"]
+    elif problem == "track":
+        flags = ["--track", "unknown"]
+    elif problem == "store":
+        target = receiving.paths.root / "other-entries"
+    elif problem == "missing-domain":
+        target = tmp_path / "unconfigured" / "entries"
+    elif problem == "invalid-domain":
+        (receiving.paths.root / "domain.toml").write_text("[domain")
+    bundle = make_bundle({"id": "H1", "title": "judge brief drops marks",
+                          "core": "0.1.0", "repro": "ar rank --top 3",
+                          "observed": "unlabelled reserve"})
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(bundle))
+    here = pathlib.Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, str(here / "scripts" / "ingest-defects.py"),
+         str(path), "--into", str(target), *flags],
+        capture_output=True, text=True, cwd=str(tmp_path))
+    assert proc.returncode == 2
+    assert "error:" in proc.stderr and "Traceback" not in proc.stderr
+    assert not target.exists()
+    assert not receiving.paths.entries.exists()
 
 
 # -- where the evidence comes from ------------------------------------------

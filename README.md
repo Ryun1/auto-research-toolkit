@@ -456,6 +456,20 @@ action this harness gates.
 defect that arrived without its evidence is skipped with the missing field
 named — ingest trusts nothing it did not validate itself.
 
+```sh
+python scripts/ingest-defects.py bundle.json \
+  --into /path/to/receiving-domain/state/entries --track field --prefix F
+```
+
+The script discovers `domain.toml` enclosing `--into`, which must be that
+domain's configured entry store. `--track` selects a declared track and
+`--prefix` must match it; the defaults are `field` and `F`. A missing or invalid
+domain, unknown track, wrong store, or mismatched prefix is refused before any
+entry is written. Imported entries use the receiving track's initial status
+(for example, `triage`), not the source status or an assumed `queued`.
+Python callers likewise pass the configured track explicitly:
+`ingest_bundle(bundle, store, track=config.tracks["field"])`.
+
 **The loop closes when the pin moves.** A field defect fixed upstream is fixed
 downstream by bumping the project's pin to the fixing SHA — the
 deliberate-upgrade decision "Pin the toolkit" asks you to make — and closing
