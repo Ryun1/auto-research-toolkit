@@ -295,27 +295,22 @@ def plan_update(config, ref: str | None = None) -> UpdatePlan:
     inst = installed()
     url, ref = upstream_url(config, ref)
     commit = inst.commit or (_editable_head(inst) if inst.editable else None)
-    if inst.editable and commit:
-        # A checkout may be ahead of or diverged from origin, so the plain
-        # commit compare is not enough; the ancestry check comes free with the
-        # clone this path does anyway -- which also resolves the ref, so no
-        # ls-remote is spent on it here.
+    if commit:
+        # The ancestry property is not editable-path-only: a pip install
+        # pinned to a commit upstream does not contain must not read as an
+        # update. The clone this path does anyway resolves the ref.
         head, behind, log = _pull_status(url, ref, commit)
     else:
+        # Not a git install (a version pin from a package index, say):
+        # compare against the newest tag, the only honest comparable.
         head = remote_head(url, ref)
         if head is None:
             raise AutoresearchError(
                 f"upstream {url} has no branch or tag named {ref!r}; "
                 "check the [upstream] table or pass --ref")
-        if commit:
-            behind = head != commit
-            log = changelog(url, commit, head) if behind else None
-        else:
-            # Not a git install (a version pin from a package index, say):
-            # compare against the newest tag, the only honest comparable.
-            newest = latest_tag(remote_tags(url))
-            behind = newest is not None and _vkey(newest) > _vkey(inst.version)
-            log = None
+        newest = latest_tag(remote_tags(url))
+        behind = newest is not None and _vkey(newest) > _vkey(inst.version)
+        log = None
     return UpdatePlan(install=inst, url=url, ref=ref, head=head,
                       behind=behind, changelog=log,
                       local=commit if inst.editable else None)

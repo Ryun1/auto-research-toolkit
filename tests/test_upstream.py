@@ -31,6 +31,8 @@ def upstream_repo(tmp_path):
     repo.mkdir()
     git("init", "-b", "main", cwd=repo)
 
+
+
     def commit(message):
         (repo / "f.txt").write_text(message + "\n")
         git("add", ".", cwd=repo)
@@ -64,6 +66,21 @@ def plan_for(toy, commit, monkeypatch=None, **install_kw):
     finally:
         up.installed = real
 
+def commit_orphan(repo, message):
+    """A commit on a disconnected root: reachable from nowhere on main."""
+    git("checkout", "--orphan", "diverged", cwd=repo)
+    # --orphan keeps the index; force so the staged parent file does not
+    # block emptying the worktree.
+    git("rm", "-r", "--quiet", "--force", ".", cwd=repo)
+    (repo / "fork.txt").write_text(message + "\n")
+    git("add", ".", cwd=repo)
+    git("-c", "user.email=t@t", "-c", "user.name=t",
+        "commit", "-m", message, cwd=repo)
+    sha = git("rev-parse", "HEAD", cwd=repo)
+    git("checkout", "--quiet", "main", cwd=repo)
+    git("branch", "-D", "diverged", cwd=repo)
+    return sha
+
 
 # -- the plan ---------------------------------------------------------------
 
@@ -96,6 +113,20 @@ def test_a_version_only_install_compares_against_tags(upstream, upstream_repo,
     assert up.plan_update(upstream).behind, "0.1.0 with v0.2.0 tagged must read as behind"
     monkeypatch.setattr(up, "installed", lambda: Install(version="0.2.0"))
     assert not up.plan_update(upstream).behind
+
+
+def test_a_diverged_noneditable_install_has_nothing_to_pull(upstream, upstream_repo,
+                                                           monkeypatch):
+    """The ancestry property is not editable-path-only: a pip install pinned
+    to a commit upstream main does not contain (a fork SHA, rewritten
+    history) is not 'behind', and must not read as an update."""
+    repo, commit, first = upstream_repo
+    second = commit("second release")
+    orphan = commit_orphan(repo, "fork-only work")
+    assert orphan != first and orphan != second
+    plan = plan_for(upstream, orphan, monkeypatch)
+    assert plan.head == second
+    assert not plan.behind and plan.changelog is None
 
 
 def test_an_editable_install_says_so_instead_of_guessing(toy, monkeypatch):
