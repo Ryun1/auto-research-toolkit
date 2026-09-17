@@ -621,6 +621,10 @@ def cmd_migrate(args):
         source = pathlib.Path(args.source or config.paths.root) / (
             args.view or track.migrate_from or track.view)
         if not source.exists():
+            if args.track:
+                raise AutoresearchError(
+                    f"track {track.id!r} was requested, but no source document "
+                    f"exists at {source}")
             print(f"{track.id}: no source document at {source}, skipping "
                   "(set `migrate_from` on the track to name it)")
             continue

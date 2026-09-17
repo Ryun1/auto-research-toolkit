@@ -239,3 +239,28 @@ def test_undeclared_status_is_refused_before_writes(sandbox, capsys):
                      "--track", "field", "--view", str(source)]) == 2
     assert "queued" in capsys.readouterr().err
     assert not list(sandbox.paths.entries.glob("*.yaml"))
+
+
+def test_requested_track_with_missing_source_is_refused(sandbox, capsys):
+    from autoresearch import cli
+
+    assert cli.main(["--domain", str(sandbox.paths.root), "migrate",
+                     "--track", "research", "--view", "missing-source.md"]) == 2
+    err = capsys.readouterr().err
+    assert "missing-source.md" in err and "research" in err
+    assert not list(sandbox.paths.entries.glob("*.yaml"))
+
+
+def test_unrequested_track_missing_source_still_skips(sandbox, capsys):
+    from autoresearch import cli
+
+    # A sweep with no --track skips tracks whose resolved document does not
+    # exist; only an explicitly requested track refuses.
+    empty = sandbox.paths.root / "no-sources-here"
+    empty.mkdir()
+    assert cli.main(["--domain", str(sandbox.paths.root),
+                     "migrate", "--source", str(empty)]) == 0
+    out = capsys.readouterr().out
+    assert "skipping" in out
+    assert "0 entries" in out
+    assert not list(sandbox.paths.entries.glob("*.yaml"))
