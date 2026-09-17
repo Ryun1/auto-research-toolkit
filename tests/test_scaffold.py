@@ -13,8 +13,12 @@ def scaffolded(tmp_path):
     return DomainConfig.load(tmp_path / "d")
 
 
-def test_a_scaffolded_domain_loads_and_validates(scaffolded):
-    assert list(scaffolded.check()) == []
+def test_a_scaffolded_domain_loads_and_validates(tmp_path):
+    from autoresearch.cli import main
+
+    root = tmp_path / "fresh"
+    assert main(["init", str(root)]) == 0
+    assert main(["--domain", str(root), "validate"]) == 0
 
 
 def test_it_ignores_the_state_that_must_not_cross_machines(scaffolded):

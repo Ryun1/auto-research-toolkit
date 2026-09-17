@@ -19,7 +19,10 @@ from __future__ import annotations
 import pathlib
 import textwrap
 
+from .config import DomainConfig
+from .entries import Store
 from .errors import ConfigError
+from .render import write_views
 
 DIRS = ("bin", "guides", "docs/log", "docs/skills", "inbox",
         "state/entries", "state/claims", "state/iterations", "data/runs")
@@ -392,4 +395,6 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
         ignore.write_text(existing + joiner + GITIGNORE)
         written.append(ignore)
     (root / "bin" / "measure").chmod(0o755)
+    domain = DomainConfig.load(root)
+    written.extend(write_views(domain, Store(domain.paths.entries).all()))
     return written

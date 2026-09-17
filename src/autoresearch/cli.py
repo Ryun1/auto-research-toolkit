@@ -78,9 +78,7 @@ def cmd_init(args):
     for path in written:
         print(f"  {path.relative_to(root)}")
 
-    config = DomainConfig.load(root)
-    problems = config.check()
-    print(f"\nvalidate: {'clean' if not problems else problems}")
+    validation = cmd_validate(argparse.Namespace(domain=str(root)))
     print(textwrap.dedent(f"""
         Next:
           1. edit  bin/measure   -- replace evaluate() with your real experiment
@@ -90,7 +88,7 @@ def cmd_init(args):
           5. run   ar --domain {root} hardware   -- what this machine can do
           6. later ar --domain {root} skill list -- what the loop has distilled
         """).rstrip())
-    return 0
+    return validation
 
 
 def cmd_hardware(args):
