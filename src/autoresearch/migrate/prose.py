@@ -34,8 +34,9 @@ import re
 from dataclasses import dataclass, field
 
 from ..entries import Entry, Event, Result
+from ..errors import SchemaError
 
-SECTION = re.compile(r"(?m)^## ([QH]\d+) — (.*)$")
+SECTION = re.compile(r"(?m)^## ([A-Z]+)(\d+) — (.*)$")
 FIELD = re.compile(r"(?m)^- \*\*([^:*]+):\*\*[ \t]*(.*)$")
 CLOSED_ROW = re.compile(
     r"(?m)^\|\s*([QH]\d+)\s*\|\s*([a-z-]+)\s*\|\s*([\d-]+)\s*\|\s*`?([^|`]*)`?\s*\|")
@@ -112,7 +113,8 @@ def _split_sections(text: str) -> list[tuple[str, str, str]]:
     out = []
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        out.append((m.group(1), m.group(2).strip(), text[m.end():end]))
+        entry_id = f"{m.group(1)}{m.group(2)}"
+        out.append((entry_id, m.group(3).strip(), text[m.end():end]))
     return out
 
 
@@ -191,11 +193,15 @@ def _claim_record(claims_root: pathlib.Path, entry_id: str) -> dict:
 
 
 def migrate(queue_path, *, track: str,
-            claims_root=None, root=None, terminal=()) -> CorpusMigration:
+            claims_root=None, root=None, terminal=(),
+            machine=None) -> CorpusMigration:
     """Convert one queue document into entry records.
 
     `terminal` names the statuses this track treats as terminal, so the
-    migration does not have to guess which vocabulary it is reading.
+    migration does not have to guess which vocabulary it is reading. When
+    `machine` is given it is the track's configured StateMachine: a missing
+    Status line defaults to its initial state, and a parsed status outside the
+    declared vocabulary is an error, not a record `validate` would refuse.
     """
     queue_path = pathlib.Path(queue_path)
     root = pathlib.Path(root or queue_path.parent)
@@ -213,7 +219,15 @@ def migrate(queue_path, *, track: str,
             continue
         fields = {m.group(1).strip(): m.group(2).strip()
                   for m in FIELD.finditer(body)}
-        state, date, session = _parse_status(fields.get("Status", "queued"))
+        if "Status" in fields:
+            state, date, session = _parse_status(fields["Status"])
+            if machine is not None and state not in machine.statuses:
+                raise SchemaError(
+                    f"{entry_id}: status {state!r} is not declared by track "
+                    f"{track!r}; declared: {sorted(machine.statuses)}")
+        else:
+            state = machine.initial if machine is not None else "queued"
+            date = session = None
 
         row = closed_rows.get(entry_id)
         claim = _claim_record(pathlib.Path(claims_root), entry_id) if claims_root else {}

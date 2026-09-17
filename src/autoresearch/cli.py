@@ -628,7 +628,8 @@ def cmd_migrate(args):
             source, track=track.id,
             claims_root=config.paths.claims if config.paths.claims.exists() else None,
             root=config.paths.root,
-            terminal=tuple(track.machine.terminal_names))
+            terminal=tuple(track.machine.terminal_names),
+            machine=track.machine)
         print(f"\n=== {track.id} ({source.name}) ===")
         print(result.report())
         problems += [d.line() for d in result.disagreements]

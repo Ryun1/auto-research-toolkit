@@ -196,3 +196,46 @@ def test_migration_collision_preserves_all_existing_records(sandbox, dry_run):
     assert cli.main(args) == 2
     assert path.read_bytes() == before
     assert not store.exists("Q1")
+
+
+CUSTOM = """
+[[tracks]]
+id = "field"
+prefix = "F"
+[tracks.states]
+initial = "triage"
+[tracks.states.statuses.triage]
+[tracks.states.statuses.in-progress]
+[[tracks.states.transitions]]
+from = "triage"
+to = "in-progress"
+writer = "claim"
+"""
+
+
+def test_missing_status_uses_configured_initial(sandbox):
+    from autoresearch import cli
+
+    path = sandbox.paths.root / "domain.toml"
+    path.write_text(path.read_text() + CUSTOM)
+    source = sandbox.paths.root / "field-queue.md"
+    source.write_text(f"## F1 {chr(0x2014)} no status line\n\n"
+                      "- **Hypothesis:** custom vocabulary\n")
+    assert cli.main(["--domain", str(sandbox.paths.root), "migrate",
+                     "--track", "field", "--view", str(source)]) == 0
+    from autoresearch.entries import Store
+    assert Store(sandbox.paths.entries).load("F1").status == "triage"
+
+
+def test_undeclared_status_is_refused_before_writes(sandbox, capsys):
+    from autoresearch import cli
+
+    path = sandbox.paths.root / "domain.toml"
+    path.write_text(path.read_text() + CUSTOM)
+    source = sandbox.paths.root / "field-queue.md"
+    source.write_text(f"## F1 {chr(0x2014)} odd state\n\n"
+                      "- **Status:** queued\n")
+    assert cli.main(["--domain", str(sandbox.paths.root), "migrate",
+                     "--track", "field", "--view", str(source)]) == 2
+    assert "queued" in capsys.readouterr().err
+    assert not list(sandbox.paths.entries.glob("*.yaml"))
