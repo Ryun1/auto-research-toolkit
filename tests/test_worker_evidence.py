@@ -18,7 +18,7 @@ VERIFIED = {"reread": True, "claims_checked": ["audited result"]}
 def record(**overrides):
     return RunRecord(**{
         "id": "worker-row", "metrics": {"ops": 30, "peak": 2},
-        "session": "original-worker", "entry": "Q1", "started": 123,
+        "session": "it1-Q1", "entry": "Q1", "started": 123,
         "provenance": {"source": "original-revision", "host": "local"},
         **overrides,
     })
@@ -185,4 +185,31 @@ def test_inherited_rows_cannot_support_new_measurement_claims(sandbox, store, ch
     expected = {"inherited", "worker-row"} if change == "partial" else {"inherited"}
     assert {r.id for r in read_all(sandbox.paths.runs)} == expected
     assert iteration.runs == (2 if change == "partial" else 1)
-    assert (sandbox.paths.workspaces / "it1-Q1").exists()
+
+def test_settlement_refuses_rows_written_under_another_session(sandbox, store):
+    """A run row that does not carry the dispatch slot's session is not evidence
+    this attempt produced; settling over it would launder foreign measurement."""
+    from autoresearch import attempts
+
+    def worker(workspace, brief):
+        append(workspace / "data/runs/new.jsonl", record(session="some-other-worker"))
+        return report()
+
+    coordinator, iteration = dispatch(sandbox, store, worker)
+    assert iteration.verdicts["Q1"] == "refused"
+    assert any("settlement refused" in line for line in iteration.phases[0].detail)
+    assert [r["status"] for r in attempts.records(sandbox)] == ["failed"]
+
+
+def test_restarted_budget_counts_reserved_but_unsettled_attempts(sandbox, store):
+    """Restart-safe counting: a crash after reserve-but-before-settle still
+    spends its reservation, and the same attempt is never counted twice."""
+    from autoresearch import attempts
+    from autoresearch.budget import total_runs
+    make_entry(store, "Q1", impact=1.0)
+    claims = attempts.claims(sandbox, "coordinator")
+    claims.claim("Q1", why="crash test")
+    assert total_runs(sandbox) == 0
+    attempts.reserve(sandbox, "Q1", "coordinator", 60.0, kind="dispatch")
+    assert total_runs(sandbox) == 1
+    assert total_runs(sandbox) == 1, "reading the ledger again must not charge again"

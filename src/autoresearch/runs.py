@@ -235,24 +235,37 @@ def _digest(path, size=None):
     return digest.digest()
 
 
-def retain_output(workspace, root, name, lanes, protected=()) -> None:
-    """Copy declared findings without following links or replacing owned files."""
+def validate_output_path(root, name, lanes, protected=()) -> pathlib.Path:
+    """Resolve a findings destination without crossing owned-state boundaries.
+
+    Shared by ordinary retention and atomic evidence imports. Does not write or
+    require the output to exist; callers must also validate every child path.
+    """
+    root = pathlib.Path(root)
     relative = pathlib.Path(name)
     if (relative.is_absolute() or ".." in relative.parts or not relative.parts
             or lanes.classify(relative.as_posix()) != "findings"):
         raise SchemaError(f"unsafe or non-findings output {name!r}")
-    source, target = workspace / relative, root / relative
-    if any(target.resolve().is_relative_to(path.resolve())
-           or path.resolve().is_relative_to(target.resolve()) for path in protected):
+    target = root / relative
+    if any(target.resolve().is_relative_to(pathlib.Path(path).resolve())
+           or pathlib.Path(path).resolve().is_relative_to(target.resolve())
+           for path in protected):
         raise SchemaError(f"output overlaps coordinator state: {name!r}")
-    for base, path in ((workspace, source), (root, target)):
-        if not path.resolve().is_relative_to(base.resolve()):
-            raise SchemaError(f"output escapes owned root: {path}")
-        current = base
-        for part in relative.parts:
-            current = current / part
-            if current.is_symlink():
-                raise SchemaError(f"symlink output is not owned: {current}")
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise SchemaError(f"output escapes owned root: {target}")
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise SchemaError(f"symlink output is not owned: {current}")
+    return target
+
+
+def retain_output(workspace, root, name, lanes, protected=()) -> None:
+    """Copy declared findings without following links or replacing owned files."""
+    workspace, root = pathlib.Path(workspace), pathlib.Path(root)
+    source = validate_output_path(workspace, name, lanes)
+    target = validate_output_path(root, name, lanes, protected)
     if source.is_dir():
         for child in sorted(source.iterdir()):
             retain_output(workspace, root,

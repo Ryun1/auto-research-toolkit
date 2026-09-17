@@ -18,6 +18,7 @@ prove no phase was silently skipped.
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 import re
 import subprocess
@@ -48,12 +49,26 @@ class Reply:
     role: str
     data: object
     raw: str = ""
-    cost_usd: float = 0.0
+    cost_usd: float | None = None
     #: which backend answered, as the config named it. A curate answered by
     #: one agent and a curate answered by another are different facts on the
     #: record (the H98 principle, applied to backends), so this travels with
     #: every reply instead of living in one phase's detail.
     backend: str = ""
+
+    def __post_init__(self):
+        self.cost_usd = cost_value(self.cost_usd)
+
+
+def cost_value(value):
+    """None means unobserved; measured zero is a real measurement."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise AutoresearchError("cost must be a finite nonnegative number or null")
+    if not math.isfinite(value) or value < 0:
+        raise AutoresearchError("cost must be finite and nonnegative")
+    return float(value)
 
 
 class CostLedger:
@@ -69,17 +84,26 @@ class CostLedger:
     def __init__(self, ceiling_usd: float | None):
         self.ceiling = ceiling_usd
         self.spent = 0.0
+        self.unknown = False
         self._lock = threading.Lock()
 
     def remaining(self) -> float | None:
         with self._lock:
+            if self.unknown and self.ceiling is not None:
+                raise AutoresearchError(
+                    "cost is unknown: supply measured backend costs before further spending "
+                    "under a finite monetary ceiling")
             if self.ceiling is None:
                 return None
             return max(0.0, self.ceiling - self.spent)
 
-    def spend(self, cost: float) -> None:
+    def spend(self, cost: float | None) -> None:
+        cost = cost_value(cost)
         with self._lock:
-            self.spent += float(cost or 0.0)
+            if cost is None:
+                self.unknown = True
+            else:
+                self.spent += cost
 
 
 class Brain(Protocol):
@@ -138,10 +162,10 @@ class ScriptedBrain:
         self.calls.append((role, brief))
         handler = self.handlers.get(role, self.default)
         if handler is None:
-            return Reply(role=role, data=None, raw="(no handler)", backend=self.backend)
+            return Reply(role=role, data=None, raw="(no handler)", backend=self.backend, cost_usd=0.0)
         data = handler(brief) if callable(handler) else handler
         return Reply(role=role, data=data, raw=json.dumps(data, default=str),
-                     backend=self.backend)
+                     backend=self.backend, cost_usd=0.0)
 
 
 class SDKBrain:
@@ -213,17 +237,18 @@ class SDKBrain:
             model=self.model,
             max_budget_usd=ceiling,
         )
-        chunks, cost = [], 0.0
+        chunks, cost = [], None
         async for message in query(prompt=brief, options=options):
             if isinstance(message, ResultMessage):
-                cost = getattr(message, "total_cost_usd", 0.0) or 0.0
+                cost = cost_value(getattr(message, "total_cost_usd", None))
                 continue
             for block in getattr(message, "content", []) or []:
                 text = getattr(block, "text", None)
                 if text:
                     chunks.append(text)
         raw = "\n".join(chunks)
-        self.spent_usd += cost
+        self.spent_usd = (None if cost is None or self.spent_usd is None
+                          else self.spent_usd + cost)
         if self.ledger is not None:
             self.ledger.spend(cost)
         return Reply(role=role, data=extract_json(raw), raw=raw, cost_usd=cost,
@@ -246,8 +271,8 @@ class ProcessBrain:
     - the reply is the command's stdout, parsed by `extract_json` like every
       other role's;
     - `{cost_file}` may be written with a number, which becomes `cost_usd`.
-      A backend that does not meter runs free as far as the ceiling knows,
-      and the run record will show `cost_usd=0` saying exactly that.
+      Missing costs are unknown, never zero. A finite shared ceiling refuses
+      subsequent dispatch until the missing measurement is reconciled.
 
     One subprocess and one temp directory per ask: no shared state, so the
     fan-out path can run several briefs of one role through the same brain.
@@ -276,6 +301,10 @@ class ProcessBrain:
 
     def ask(self, role: str, brief: str, *, workspace=None,
             max_turns=None) -> Reply:
+        if self.ledger is not None:
+            remaining = self.ledger.remaining()
+            if remaining is not None and remaining <= 0:
+                raise AutoresearchError("monetary ceiling exhausted")
         with tempfile.TemporaryDirectory() as tmp:
             tmp = pathlib.Path(tmp)
             prompt_file = tmp / f"{role}.md"
@@ -291,19 +320,20 @@ class ProcessBrain:
                 raise AutoresearchError(
                     f"{self.name} ({role}) exited {result.returncode}: "
                     f"{tail or 'no stderr'}")
-            cost = 0.0
+            cost = None
             if cost_file.exists():
                 text = cost_file.read_text().strip()
-                if text:
-                    try:
-                        cost = float(text)
-                    except ValueError:
-                        raise AutoresearchError(
-                            f"{self.name} ({role}) wrote a cost file that is "
-                            f"not a number: {text[:80]!r}") from None
-        if self.ledger is not None and cost:
+                try:
+                    cost = cost_value(float(text))
+                except (ValueError, AutoresearchError) as exc:
+                    if self.ledger is not None:
+                        self.ledger.spend(None)
+                    raise AutoresearchError(
+                        f"{self.name} ({role}) wrote invalid cost: {text[:80]!r}") from exc
+        if self.ledger is not None:
             self.ledger.spend(cost)
-        self.spent_usd += cost
+        self.spent_usd = (None if cost is None or self.spent_usd is None
+                          else self.spent_usd + cost)
         return Reply(role=role, data=extract_json(result.stdout),
                      raw=result.stdout, cost_usd=cost, backend=self.name)
 

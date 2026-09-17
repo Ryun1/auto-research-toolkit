@@ -17,6 +17,7 @@ records, and "it seemed empty" is not a check.
 from __future__ import annotations
 
 import pathlib
+import sys
 import textwrap
 
 from .config import DomainConfig
@@ -347,9 +348,8 @@ state/claims/
 
 # .ar/ holds the workspace pool: markers recording absolute paths that exist on
 # one machine only. The coordinator destroys its own slots in a `finally`;
-# anything left here after a crash is cleared with:
-#     git worktree prune
-#     git branch --list 'ar/*' | xargs -n1 git branch -D
+# retained evidence is recovered through `autoresearch workspace inspect NAME`
+# and `autoresearch workspace recover`, never by bulk branch deletion.
 .ar/
 '''
 
@@ -373,6 +373,7 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
         "domain.toml": _domain_toml(name),
         "goal.yaml": _goal_yaml(name, objective, metrics, target),
         "bin/measure": MEASURE,
+        "bin/autoresearch": f"#!{sys.executable}\nfrom autoresearch.cli import main\nraise SystemExit(main())\n",
         "guides/landscape.md": GUIDE,
         "docs/skills/README.md": SKILLS_README,
     }
@@ -395,6 +396,7 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
         ignore.write_text(existing + joiner + GITIGNORE)
         written.append(ignore)
     (root / "bin" / "measure").chmod(0o755)
+    (root / "bin" / "autoresearch").chmod(0o755)
     domain = DomainConfig.load(root)
     written.extend(write_views(domain, Store(domain.paths.entries).all()))
     return written

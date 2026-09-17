@@ -157,6 +157,29 @@ def test_cli_research_records_an_out_of_band_iteration(sandbox, store,
     assert any(p["name"] == "research" for p in record["phases"])
 
 
+def test_cli_research_prints_unknown_for_an_unmetered_backend(sandbox, store,
+                                                             monkeypatch,
+                                                             capsys):
+    """A brain that writes no cost file is usage the ceiling cannot see.
+    Printing `$0.00` would say it was free; the summary must say unknown."""
+    import autoresearch.cli as cli
+    from autoresearch.driver import brain as brain_mod
+
+    class Unmetered:
+        def ask(self, role, brief, *, workspace=None, max_turns=None):
+            from autoresearch.driver.brain import Reply
+            return Reply(role=role, data=[dict(PROPOSAL)], cost_usd=None,
+                         backend="unmetered")
+
+    monkeypatch.setattr(brain_mod, "build_brain",
+                        lambda config, model=None, max_budget_usd=None:
+                        Unmetered())
+    rc = cli.main(["--domain", str(sandbox.paths.root),
+                   "research", "any question"])
+    assert rc == 0
+    assert "cost: unknown (unmetered backend usage)" in capsys.readouterr().out
+
+
 def test_the_record_is_written_even_when_the_phase_raises(sandbox, monkeypatch):
     """A scout ask that spends and is not recorded is spend the next loop
     cannot see -- a ceiling that hides an overrun rather than refusing it."""

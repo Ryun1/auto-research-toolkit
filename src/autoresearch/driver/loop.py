@@ -46,17 +46,17 @@ import shlex
 import time
 from dataclasses import dataclass, field
 
+from .. import attempts, preflight, render
 from .. import budget as budget_mod
 from .. import hardware as hw
-from .. import preflight, render
 from .. import rank as rank_mod
 from .. import runs as runs_mod
 from .. import skills as skills_mod
 from ..claims import Claims
-from ..entries import Entry, Event, Result, Store
+from ..entries import Applicability, Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
 from ..workspaces import Pool
-from .brain import Role
+from .brain import Role, cost_value
 
 
 def _iso() -> str:
@@ -90,7 +90,7 @@ class Iteration:
     stop_detail: str = ""
     objective: float | None = None
     target: float | None = None
-    cost_usd: float = 0.0
+    cost_usd: float | None = 0.0
     #: "iteration" for a full pass of the loop; "out-of-band" for a single phase
     #: run by hand (`ar skill distil`). Both are recorded, because a ceiling
     #: that refuses to record an overrun is a ceiling that hides one -- but only
@@ -106,6 +106,7 @@ class Iteration:
     runs_by_entry: dict[str, dict] = field(default_factory=dict)
     #: Retained ledger IDs, used to reconcile consumption on restart.
     run_ids: list[str] = field(default_factory=list)
+    attempt_ids: list[str] = field(default_factory=list)
 
     def phase(self, name: str) -> Phase:
         p = Phase(name)
@@ -115,6 +116,8 @@ class Iteration:
     @classmethod
     def from_dict(cls, data: dict) -> Iteration:
         data = dict(data)
+        if "cost_usd" in data:
+            data["cost_usd"] = cost_value(data["cost_usd"])
         data["phases"] = [Phase(**p) if isinstance(p, dict) else p
                           for p in data.get("phases", [])]
         return cls(**data)
@@ -203,8 +206,7 @@ class Coordinator:
         rows, self.foreign_rows = runs_mod.read_with_skipped(config.paths.runs)
         recorded = budget_mod.recorded_usage(config)
         self.domain_budget = budget_mod.domain_budget(
-            config, spent_runs=len(rows) + recorded["runs"]
-            - budget_mod.recorded_run_overlap(config, rows),
+            config, spent_runs=budget_mod.total_runs(config),
             spent_money=recorded["money"],
             spent_gpu_hours=recorded["gpu_hours"])
 
@@ -248,9 +250,12 @@ class Coordinator:
         by the time we hear about it, and a ceiling that refuses to record an
         overrun is a ceiling that hides one.
         """
-        cost = float(getattr(reply, "cost_usd", 0.0) or 0.0)
-        it.cost_usd += cost
-        self.domain_budget["money"].spent += cost
+        cost = cost_value(getattr(reply, "cost_usd", None))
+        it.cost_usd = None if cost is None or it.cost_usd is None else it.cost_usd + cost
+        if cost is None:
+            self.domain_budget["money"].unknown = True
+        else:
+            self.domain_budget["money"].spent += cost
 
     def _charge_runs(self, it: Iteration, runs: float, gpu_hours: float = 0.0) -> None:
         """Charge measurements to the campaign, and record them on the iteration.
@@ -272,6 +277,15 @@ class Coordinator:
         budget["seconds"].spent = time.time() - budget.started
         return budget["seconds"].remaining()
 
+    def _require_money(self) -> None:
+        money = self.domain_budget["money"]
+        budget_mod.require_money(self.config, None if money.unknown else money.spent)
+
+    def _ask(self, role, brief, *, workspace=None):
+        """Keep historical campaign costs authoritative across backend restarts."""
+        self._require_money()
+        return self.brain.ask(role, brief, workspace=workspace)
+
     def _time_left(self, it: Iteration, budget, phase_name: str) -> bool:
         """Charge elapsed time and say whether this phase may start.
 
@@ -279,6 +293,11 @@ class Coordinator:
         it skips has to be visible: a phase that did nothing and a phase that
         never ran are different facts, which is H98's whole subject.
         """
+        try:
+            self._require_money()
+        except AutoresearchError as exc:
+            it.phase(phase_name).error = f"not run: {exc}"
+            return False
         if self._charge_seconds(budget) > 0:
             return True
         meter = budget["seconds"]
@@ -413,7 +432,7 @@ class Coordinator:
 
         existing = self._seen_titles()
         for (i, _), ok, reply in self._map(
-                lambda nb: self.brain.ask(Role.GENERATOR, nb[1]), numbered):
+                lambda nb: self._ask(Role.GENERATOR, nb[1]), numbered):
             if not ok:
                 phase.detail.append(f"generator {i} raised {reply!r}")
                 continue
@@ -459,6 +478,7 @@ class Coordinator:
             # defect report.
             core=str(proposal.get("core", ""))
             or (core_version() if track.requires_defect_evidence else ""))
+        entry.gates = [dataclasses.replace(gate) for gate in track.gates]
         self.store.save(entry)
         return entry
 
@@ -486,7 +506,7 @@ class Coordinator:
         # hard filter, and apply_veto refuses that outright.
         try:
             budget.spend("spawns", note="judge")
-            reply = self.brain.ask(Role.JUDGE, self._brief(
+            reply = self._ask(Role.JUDGE, self._brief(
                 Role.JUDGE, it,
                 ranking=[{"id": s.entry_id, "score": s.score, "terms": s.terms,
                           "title": s.title} for s in ranking.scored],
@@ -524,6 +544,7 @@ class Coordinator:
         start = time.time()
         jobs = []
         dispatched_claims = {}
+        dispatch_attempts = {}
         for card in shortlist:
             reason = preflight.blocked_reason(
                 self.config, self.store.load(card.entry_id))
@@ -550,6 +571,16 @@ class Coordinator:
                 phase.detail.append(f"{card.entry_id}: {exc}")
                 continue
             dispatched_claims[card.entry_id] = claimed.claim
+            try:
+                reservation = attempts.reserve(
+                    self.config, card.entry_id, self.session,
+                    claimed.claim.max_hours * 3600, kind="dispatch")
+            except AutoresearchError as exc:
+                self.claims.release(card.entry_id, why=str(exc))
+                phase.detail.append(f"{card.entry_id}: {exc}")
+                continue
+            dispatch_attempts[card.entry_id] = reservation
+            it.attempt_ids.append(reservation["id"])
             jobs.append(card.entry_id)
         phase.read = len(jobs)
 
@@ -591,11 +622,13 @@ class Coordinator:
                         "path relative to the domain root, summary, closure_kind: "
                         "mechanism|slope|cell (refutations only), "
                         "reopen_condition (required for slope/cell), runs: int, "
+                        "disposition: experiment|superseded|already-shipped (optional, default experiment), "
+                        "applicability: {baseline, source_revision, workload, hardware, parameters} (optional), "
                         "gpu_hours: float, verification: {reread: true, "
                         "claims_checked: [what you re-verified, one item each], "
                         "corrections: [what the re-review changed]}}. A reply "
                         "without a verification block is refused."))
-                reply = self.brain.ask(Role.WORKER, brief, workspace=slot.path)
+                reply = self._ask(Role.WORKER, brief, workspace=slot.path)
             except Exception as exc:
                 error = exc
             return slot, before, reply, error
@@ -645,13 +678,23 @@ class Coordinator:
                         gpu_hours += amount
                 except (ValueError, TypeError, AttributeError):
                     pass
-            attributed = max(amounts["runs"], evidence.consumed)
+            attributed = max(1, amounts["runs"], evidence.consumed)
             self._charge_runs(it, attributed,
                               max(amounts["gpu_hours"], gpu_hours))
             claim = dispatched_claims[entry_id]
             it.runs_by_entry[entry_id] = {
                 "session": claim.session, "claim_at": claim.at, "runs": attributed}
             it.run_ids.extend(r.id for r in evidence.records)
+            try:
+                attempts.settle(self.config, dispatch_attempts[entry_id]["id"],
+                                self.session, "failed" if error is not None else "completed",
+                                consumed=attributed, run_ids=[r.id for r in evidence.records],
+                                evidence_session=f"it{it.n}-{entry_id}")
+            except AutoresearchError as exc:
+                evidence.problems.append(f"settlement refused: {exc}")
+                attempts.settle(self.config, dispatch_attempts[entry_id]["id"],
+                                self.session, "failed", consumed=attributed,
+                                reason=f"settlement refused: {exc}")
             if error is not None:
                 evidence.problems.append(f"worker raised {error!r}")
             if evidence.problems:
@@ -665,7 +708,8 @@ class Coordinator:
                 except AutoresearchError as exc:
                     phase.detail.append(f"{entry_id}: {exc}")
             else:
-                verdict = self._apply_verdict(entry_id, report, phase)
+                verdict = self._apply_verdict(entry_id, report, phase,
+                                              expected_claim_at=claim.at)
                 if slot is not None:
                     pool.retain(slot.name, None)
                     pool.release(slot.name)
@@ -674,13 +718,27 @@ class Coordinator:
         phase.seconds = time.time() - start
         return phase
 
-    def _apply_verdict(self, entry_id: str, report: dict, phase: Phase) -> str:
+    def _apply_verdict(self, entry_id: str, report: dict, phase: Phase,
+                       expected_claim_at=None) -> str:
+        with self.claims._lock():
+            entry = self.store.load(entry_id)
+            if expected_claim_at is not None and (
+                    not entry.claim or entry.claim.session != self.session
+                    or entry.claim.at != expected_claim_at):
+                raise AutoresearchError("claim identity changed; verdict refused")
+            return self._apply_verdict_locked(entry_id, report, phase)
+
+    def _apply_verdict_locked(self, entry_id: str, report: dict, phase: Phase,
+                              receipt_id=None) -> str:
         """Record a worker's verdict, enforcing the evidence rules.
 
         Idempotent on purpose: a worker with tool access may have run `ar close`
         itself, and finding the entry already terminal is a success, not a race.
         """
         entry = self.store.load(entry_id)
+        def receipt(verdict):
+            return Event(_iso(), "external-complete", self.session,
+                         json.dumps({"assignment": receipt_id, "verdict": verdict})) if receipt_id else None
         track = self.config.track_for(entry_id)
         machine = track.machine
         if machine.status(entry.status).terminal:
@@ -702,8 +760,8 @@ class Coordinator:
                 f"{entry_id}: reply refused — no verification block; the work "
                 "was not re-reviewed before it was shared")
             try:
-                self.claims.release(entry_id,
-                                    why="reply refused: no verification block")
+                self.claims.release_locked(entry_id,
+                                    why="reply refused: no verification block", event=receipt("refused"))
             except AutoresearchError as exc:
                 phase.detail.append(f"{entry_id}: {exc}")
             return "refused"
@@ -714,25 +772,31 @@ class Coordinator:
             # had no way to report "audited, found nothing", so agents reached
             # for a status that was not true.
             try:
-                self.claims.release(
+                self.claims.release_locked(
                     entry_id,
                     why=str(report.get("summary")
-                            or f"{verdict}: no verdict against the registered bar"))
+                            or f"{verdict}: no verdict against the registered bar"), event=receipt(verdict))
             except AutoresearchError as exc:
                 phase.detail.append(f"{entry_id}: {exc}")
             return verdict
 
-        result = Result(
-            verdict=verdict, memo=str(report.get("memo", "")), at=_iso(),
-            session=self.session, summary=str(report.get("summary", "")),
-            closure_kind=report.get("closure_kind"),
-            reopen_condition=str(report.get("reopen_condition", "")),
-            verification=verification)
         try:
+            applicability = report.get("applicability")
+            result = Result(
+                verdict=verdict, memo=str(report.get("memo", "")), at=_iso(),
+                session=self.session, summary=str(report.get("summary", "")),
+                closure_kind=report.get("closure_kind"),
+                reopen_condition=str(report.get("reopen_condition", "")),
+                verification=verification,
+                applicability=(Applicability.from_dict(applicability)
+                               if applicability is not None else None),
+                disposition=report.get("disposition", "experiment"))
             entry.apply(machine, verdict, who=self.session,
                         why=result.summary, result=result,
                         memo_exists=lambda m: (self.config.paths.root / m).exists())
             entry.claim = None
+            if receipt_id:
+                entry.history.append(receipt(verdict))
             self.store.save(entry)
             return verdict
         except AutoresearchError as exc:
@@ -740,7 +804,7 @@ class Coordinator:
             # The claim goes back rather than the entry being closed anyway.
             phase.detail.append(f"{entry_id}: close refused — {exc}")
             try:
-                self.claims.release(entry_id, why=f"close refused: {exc}")
+                self.claims.release_locked(entry_id, why=f"close refused: {exc}", event=receipt("refused"))
             except AutoresearchError:
                 pass
             return "refused"
@@ -754,7 +818,7 @@ class Coordinator:
         phase.did += 1
         try:
             budget.spend("spawns", note="curator")
-            reply = self.brain.ask(Role.CURATOR, self._brief(
+            reply = self._ask(Role.CURATOR, self._brief(
                 Role.CURATOR, it, verdicts=it.verdicts,
                 instruction=("Fold this iteration's verdicts into the record. "
                              "Return JSON: {reprice: [{entry_id, confidence, "
@@ -823,7 +887,7 @@ class Coordinator:
 
         def scout(numbered_brief):
             i, brief = numbered_brief
-            return i, self.brain.ask(Role.SCOUT, brief)
+            return i, self._ask(Role.SCOUT, brief)
 
         for item, ok, value in self._map(scout, list(enumerate(briefs))):
             i = item[0]
@@ -902,7 +966,7 @@ class Coordinator:
             return phase
         try:
             budget.spend("spawns", note="librarian")
-            reply = self.brain.ask(Role.LIBRARIAN, self._brief(
+            reply = self._ask(Role.LIBRARIAN, self._brief(
                 Role.LIBRARIAN, it,
                 undistilled=pending,
                 stale=stale,
@@ -984,7 +1048,7 @@ class Coordinator:
         # impossible undercounted by one every iteration.
         try:
             budget.spend("spawns", note="qc")
-            reply = self.brain.ask(Role.QC, self._brief(
+            reply = self._ask(Role.QC, self._brief(
                 Role.QC, it,
                 mechanical_problems=problems,
                 phases=[dataclasses.asdict(p) for p in it.phases],

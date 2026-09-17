@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import json
+import math
 import pathlib
 import re
 from dataclasses import dataclass, field
@@ -42,7 +44,68 @@ from dataclasses import dataclass, field
 import yaml
 
 from .errors import SchemaError, TransitionError
+from .gates import Gate
+from .gates import validate as validate_gates
 from .states import CLOSURE_KINDS
+
+DISPOSITIONS = ("experiment", "superseded", "already-shipped")
+
+
+@dataclass
+class Applicability:
+    """Exact-match scope. Omitted dimensions are unrestricted, never guessed."""
+    baseline: str = ""
+    source_revision: str = ""
+    workload: str = ""
+    hardware: str = ""
+    parameters: dict[str, str | int | float | bool] = field(default_factory=dict)
+
+    def __post_init__(self):
+        for name in ("baseline", "source_revision", "workload", "hardware"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or (value and not value.strip()):
+                raise SchemaError(f"context.{name} must be a string, not blank whitespace")
+        if not isinstance(self.parameters, dict):
+            raise SchemaError("context.parameters must be a mapping of named scalars")
+        for name, value in self.parameters.items():
+            if not isinstance(name, str) or not name.strip():
+                raise SchemaError("context parameter names must be non-empty strings")
+            if type(value) not in (str, int, float, bool) or (
+                    isinstance(value, float) and not math.isfinite(value)):
+                raise SchemaError(f"context parameter {name!r} must be a finite scalar")
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise SchemaError("context must be an object")
+        try:
+            return cls(**data)
+        except TypeError as exc:
+            raise SchemaError(f"invalid context: {exc}") from exc
+
+    def matches(self, candidate: Applicability) -> bool:
+        for name in ("baseline", "source_revision", "workload", "hardware"):
+            value = getattr(self, name)
+            if value and value != getattr(candidate, name):
+                return False
+        return all(name in candidate.parameters
+                   and type(value) is type(candidate.parameters[name])
+                   and value == candidate.parameters[name]
+                   for name, value in self.parameters.items())
+
+    def describe(self) -> str:
+        parts = [f"{name}={getattr(self, name)}"
+                 for name in ("baseline", "source_revision", "workload", "hardware")
+                 if getattr(self, name)]
+        parts += [f"{name}={value!r}" for name, value in sorted(self.parameters.items())]
+        return ", ".join(parts) or "unscoped"
+
+
+def parse_context(text: str) -> Applicability:
+    try:
+        return Applicability.from_dict(json.loads(text))
+    except json.JSONDecodeError as exc:
+        raise SchemaError(f"invalid context JSON: {exc}") from exc
 
 ID_RE = re.compile(r"^([A-Z]+)(\d+)$")
 
@@ -79,6 +142,24 @@ class Result:
     #: re-checked is a claim the record takes on faith. Empty on closes made
     #: outside the loop (`ar close`, migration), which the gate never saw.
     verification: dict = field(default_factory=dict)
+    #: None on historical results: their original unscoped semantics survive.
+    applicability: Applicability | None = None
+    disposition: str = "experiment"
+    #: Snapshot the tested premises so later entry amendments cannot extend them.
+    mechanisms: list[str] | None = None
+
+    def __post_init__(self):
+        if isinstance(self.applicability, dict):
+            self.applicability = Applicability.from_dict(self.applicability)
+        if self.applicability is not None and not isinstance(self.applicability, Applicability):
+            raise SchemaError("result.applicability must be a context object")
+        if self.applicability is not None:
+            self.applicability.__post_init__()
+        if self.disposition not in DISPOSITIONS:
+            raise SchemaError(f"result.disposition must be one of {DISPOSITIONS}")
+        if self.mechanisms is not None and (not isinstance(self.mechanisms, list)
+                or any(not isinstance(m, str) or not m.strip() for m in self.mechanisms)):
+            raise SchemaError("result.mechanisms must be a list of non-empty strings")
 
 
 @dataclass
@@ -87,6 +168,7 @@ class Event:
     kind: str
     who: str
     detail: str = ""
+    snapshot: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -125,6 +207,8 @@ class Entry:
     #: BEFORE the entry is claimed, so an experiment this machine cannot run is
     #: refused with a reason instead of dispatched and discovered.
     hardware: str = ""
+    gates: list[Gate] = field(default_factory=list)
+    context: Applicability = field(default_factory=Applicability)
 
     # -- defect evidence ---------------------------------------------------
     # Required (non-empty) on any track declaring `requires_defect_evidence`;
@@ -153,6 +237,53 @@ class Entry:
     history: list[Event] = field(default_factory=list)
     body: str = ""                      # free prose, carried verbatim
 
+    def __post_init__(self):
+        if isinstance(self.context, dict):
+            self.context = Applicability.from_dict(self.context)
+        if not isinstance(self.context, Applicability):
+            raise SchemaError("entry.context must be a context object")
+        self.context.__post_init__()
+        if self.result is not None:
+            self.result.__post_init__()
+        if not isinstance(self.gates, list):
+            raise SchemaError("gates must be a list")
+        try:
+            self.gates = [Gate(**g) if isinstance(g, dict) else g for g in self.gates]
+        except TypeError as exc:
+            raise SchemaError(f"invalid gate record: {exc}") from exc
+        validate_gates(self.gates)
+
+    def gate_readiness(self, required_names=()) -> str:
+        validate_gates(self.gates)
+        named = {g.name: g for g in self.gates}
+        required = set(required_names) | {g.name for g in self.gates if g.required}
+        if not self.gates and not required:
+            return "unconfigured"
+        outcomes = [named[n].state if n in named else "pending" for n in required]
+        for outcome in ("failed", "blocked", "pending"):
+            if outcome in outcomes:
+                return outcome
+        return "ready" if required else "unconfigured"
+
+    @property
+    def readiness(self) -> str:
+        return self.gate_readiness()
+    @property
+    def context_changed(self) -> bool:
+        """A scoped result is outside the current context; review/reprice, not reopen."""
+        return bool(self.result and self.result.applicability is not None
+                    and not self.result.applicability.matches(self.context))
+
+
+    def closure_mechanisms(self) -> list[str]:
+        if self.result is not None and self.result.mechanisms is not None:
+            return self.result.mechanisms
+        return self.mechanisms
+
+    def result_applies_to(self, candidate: Entry) -> bool:
+        return bool(self.result and (self.result.applicability is None
+                    or self.result.applicability.matches(candidate.context)))
+
     # -- transitions ------------------------------------------------------
 
     def apply(self, machine, dest: str, who: str, why: str = "",
@@ -163,6 +294,7 @@ class Entry:
         core never assumes a filesystem layout the domain owns.
         """
         transition = machine.transition(self.status, dest)
+        self.__post_init__()
         if transition.reason_required and not why.strip():
             raise TransitionError(
                 f"{self.id}: {self.status} -> {dest} requires a reason "
@@ -175,6 +307,16 @@ class Entry:
                 raise TransitionError(
                     f"{self.id}: closing as {dest!r} needs a result with an "
                     "evidence memo")
+            result.__post_init__()
+            validate_gates(self.gates)
+            if result.verdict != dest:
+                raise TransitionError("result verdict must match destination status")
+            if dest in ("confirmed", "fixed"):
+                required = set(machine.required_gates) | {
+                    gate.name for gate in self.gates if gate.required}
+                if required and self.gate_readiness(required) != "ready":
+                    raise TransitionError(
+                        f"{self.id}: incomplete required gates prevent {dest}")
             if status.requires_evidence:
                 if not result.memo:
                     raise TransitionError(
@@ -185,7 +327,7 @@ class Entry:
                         f"{self.id}: evidence memo {result.memo!r} does not "
                         "exist. An entry closed against a memo nobody wrote is "
                         "a Closed row pointing at nothing (H74, H117).")
-            if status.requires_closure_kind:
+            if status.requires_closure_kind and result.disposition == "experiment":
                 if result.closure_kind not in CLOSURE_KINDS:
                     raise TransitionError(
                         f"{self.id}: closing as {dest!r} requires closure_kind "
@@ -201,6 +343,11 @@ class Entry:
                         "within what was measured, so it must state the "
                         "re-open condition -- name the band you measured and "
                         "what leaving it would cost (H136).")
+            scope = result.applicability or self.context
+            if not self.context.matches(scope):
+                raise TransitionError("result applicability cannot broaden or contradict entry context")
+            result.applicability = Applicability.from_dict(dataclasses.asdict(scope))
+            result.mechanisms = list(self.mechanisms)
             self.result = result
         elif dest == machine.initial and self.result is not None:
             # H137: reopen left the old Result in place and the linter then
@@ -208,7 +355,8 @@ class Entry:
             # history, where it stays readable, and the live field is cleared.
             self.history.append(Event(
                 _now(), "result-archived", who,
-                f"{self.result.verdict}: {self.result.summary or self.result.memo}"))
+                f"{self.result.verdict}: {self.result.summary or self.result.memo}",
+                snapshot=dataclasses.asdict(self.result)))
             self.result = None
 
         self.history.append(Event(_now(), f"{self.status}->{dest}", who, why))
@@ -301,6 +449,7 @@ class Store:
         return Entry.from_dict(yaml.safe_load(path.read_text()) or {})
 
     def save(self, entry: Entry) -> pathlib.Path:
+        entry.__post_init__()
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self.path(entry.id)
         path.write_text(yaml.safe_dump(entry.to_dict(), sort_keys=False,

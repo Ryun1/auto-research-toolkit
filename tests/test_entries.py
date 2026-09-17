@@ -144,3 +144,81 @@ def test_entry_creation_rejects_unknown_track(sandbox, store, capsys):
     assert cli.main([*args[:-2], "research", "Example"]) == 0
     assert [(entry.track, entry.title) for entry in store.all()] == [
         ("research", "Example")]
+
+
+@pytest.mark.parametrize("state", ["pending", "failed", "blocked"])
+@pytest.mark.parametrize("verdict", ["confirmed", "fixed"])
+def test_incomplete_required_gate_cannot_close(state, verdict):
+    from autoresearch.gates import Gate
+    machine = default_machine({verdict: {"requires_evidence": True}})
+    entry = Entry("Q1", "research", "candidate", status="in-progress",
+                  gates=[Gate("correctness", state)])
+    with pytest.raises(TransitionError, match="required gates"):
+        entry.apply(machine, verdict, "s", result=result(verdict=verdict))
+    assert entry.status == "in-progress" and entry.result is None
+
+
+def test_domain_required_gate_cannot_be_omitted_or_made_optional():
+    from autoresearch.gates import Gate
+    machine = default_machine()
+    machine.required_gates = ("correctness", "target")
+    entry = Entry("Q1", "research", "candidate", status="in-progress",
+                  gates=[Gate("correctness", "passed", ["evidence.json"])])
+    with pytest.raises(TransitionError, match="required gates"):
+        entry.apply(machine, "confirmed", "s", result=result())
+    entry.gates.append(Gate("target", required=False))
+    with pytest.raises(TransitionError, match="required gates"):
+        entry.apply(machine, "confirmed", "s", result=result())
+    entry.gates[1] = Gate("target", "passed", ["target.json"], required=False)
+    entry.apply(machine, "confirmed", "s", result=result())
+    assert entry.status == "confirmed"
+
+
+@pytest.mark.parametrize("gates", [
+    [{"name": "check"}, {"name": "check"}],
+    [{"name": "check", "state": "successful"}],
+    [{"name": "check", "state": "passed"}],
+    [{"name": "check", "state": "passed", "evidence": [" "]}],
+    [{"name": "check", "required": "false"}],
+])
+def test_invalid_gate_records_are_refused(gates):
+    with pytest.raises(SchemaError):
+        Entry.from_dict({"id": "Q1", "track": "research", "title": "t", "gates": gates})
+
+
+def test_legacy_entry_is_readable_but_not_validated_ready():
+    entry = Entry.from_dict({"id": "Q1", "track": "research", "title": "old"})
+    assert entry.readiness == "unconfigured"
+    assert entry.context.describe() == "unscoped"
+
+
+def test_closure_scope_and_mechanisms_survive_amendment_and_reopen(store):
+    from autoresearch.entries import Applicability
+    entry = make_entry(store, context=Applicability(source_revision="old", hardware="RTX"),
+                       mechanisms=["old-premise"], status="in-progress")
+    entry.apply(default_machine(), "refuted", "s",
+                result=result(verdict="refuted", closure_kind="mechanism"))
+    entry.context.source_revision = "new"
+    entry.mechanisms.append("new-premise")
+    store.save(entry)
+    entry = store.load(entry.id)
+    assert entry.result.applicability.source_revision == "old"
+    assert entry.closure_mechanisms() == ["old-premise"]
+    entry.apply(default_machine(), "queued", "s", why="new source")
+    store.save(entry)
+    archived = next(e.snapshot for e in store.load(entry.id).history
+                    if e.kind == "result-archived")
+    assert archived["applicability"]["source_revision"] == "old"
+    assert archived["mechanisms"] == ["old-premise"]
+
+
+def test_closure_cannot_broaden_explicit_entry_scope():
+    from autoresearch.entries import Applicability
+    entry = Entry("Q1", "research", "t", status="in-progress",
+                  context=Applicability(hardware="RTX"))
+    with pytest.raises(TransitionError, match="broaden"):
+        entry.apply(default_machine(), "confirmed", "s",
+                    result=result(applicability=Applicability()))
+    entry.apply(default_machine(), "confirmed", "s", result=result(
+        applicability=Applicability(hardware="RTX", workload="uniform16")))
+    assert entry.result.applicability.workload == "uniform16"

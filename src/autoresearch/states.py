@@ -67,6 +67,7 @@ class StateMachine:
     statuses: dict[str, Status]
     initial: str
     transitions: list[Transition] = field(default_factory=list)
+    required_gates: tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.initial not in self.statuses:

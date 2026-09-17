@@ -112,3 +112,39 @@ def test_distil_dry_run_writes_nothing(sandbox, store, capsys):
     out = capsys.readouterr().out
     assert "Q1" in out and "nothing was written" in out
     assert not any((sandbox.paths.root / "docs/skills").glob("*/SKILL.md"))
+
+
+def test_distil_preserves_usage_across_restart(sandbox, store, monkeypatch):
+    from autoresearch.budget import recorded_usage
+    from autoresearch.driver import brain as brain_mod
+    from autoresearch.driver.brain import Reply
+
+    close(sandbox, store, make_entry(store, "Q1"))
+
+    class Librarian:
+        def ask(self, role, brief, **kwargs):
+            return Reply(role=role, data={}, cost_usd=0.75, backend="local-fixture")
+
+    monkeypatch.setattr(brain_mod, "build_brain", lambda *a, **kw: Librarian())
+    result = _ar(sandbox, "skill", "distil")
+    assert recorded_usage(sandbox)["money"] == 0.75
+    assert result == 0
+
+
+def test_distil_retains_unknown_usage_on_failure(sandbox, monkeypatch):
+    import pytest
+
+    from autoresearch.budget import recorded_usage
+    from autoresearch.driver import brain as brain_mod
+    from autoresearch.driver.loop import Coordinator
+
+    monkeypatch.setattr(brain_mod, "build_brain", lambda *a, **kw: object())
+
+    def interrupted(self, iteration, budget, force=False):
+        iteration.cost_usd = None
+        raise RuntimeError("interrupted after unmetered work")
+
+    monkeypatch.setattr(Coordinator, "distil", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        _ar(sandbox, "skill", "distil")
+    assert recorded_usage(sandbox)["money"] is None

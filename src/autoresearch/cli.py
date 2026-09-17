@@ -20,9 +20,13 @@ import subprocess
 import sys
 import textwrap
 
+from . import attempts as attempts_mod
 from . import budget as budget_mod
+from . import bundles as bundles_mod
 from . import defects as defects_mod
 from . import escalate as escalate_mod
+from . import external as external_mod
+from . import gates as gates_mod
 from . import hardware as hw
 from . import rank as rank_mod
 from . import render
@@ -496,11 +500,8 @@ def cmd_measure(args):
 def cmd_rank(args):
     config = _load(args)
     entries = _store(config).all()
-    all_runs = runs_mod.read_all(config.paths.runs)
-    recorded = budget_mod.recorded_usage(config)
     domain = budget_mod.domain_budget(
-        config, spent_runs=len(all_runs) + recorded["runs"]
-        - budget_mod.recorded_run_overlap(config, all_runs))
+        config, spent_runs=budget_mod.total_runs(config))
     remaining = domain["runs"].remaining()
     explore = config.explore_fraction if args.explore is None else args.explore
     ranking = rank_mod.rank(entries, config, explore_fraction=explore,
@@ -523,13 +524,10 @@ def cmd_budget(args):
     store = _store(config)
     entries = store.all()
     all_runs = runs_mod.read_all(config.paths.runs)
-    # Consumption is read back from the iteration records, the same source the
-    # coordinator charges against, so `ar budget` and the loop cannot disagree
-    # about how much of a ceiling is left.
+    # Use the same durable reports and reservations as execution admission.
     recorded = budget_mod.recorded_usage(config)
     domain = budget_mod.domain_budget(
-        config, spent_runs=len(all_runs) + recorded["runs"]
-        - budget_mod.recorded_run_overlap(config, all_runs),
+        config, spent_runs=budget_mod.total_runs(config),
         spent_money=recorded["money"],
         spent_gpu_hours=recorded["gpu_hours"])
     iteration = budget_mod.iteration_budget(config)
@@ -540,18 +538,12 @@ def cmd_budget(args):
             and not config.track_for(e.id).machine.status(e.status).terminal]
     print(f"\n{len(held)} live claim(s)")
     claims = Claims(store, config, session=args.session)
-    attributed_runs = budget_mod.recorded_runs_by_entry(config)
     for entry in held:
-        # Match the claim instance, not earlier work under a reused session.
-        started = dt.datetime.fromisoformat(entry.claim.at).timestamp()
-        spent = sum(1 for r in all_runs
-                    if r.entry == entry.id and r.session == entry.claim.session
-                    and r.started >= started)
-        spent += attributed_runs.get(
-            (entry.id, entry.claim.session, entry.claim.at), 0.0)
+        spent = budget_mod.claim_runs(config, entry)
         print(f"  {entry.id}  {entry.claim.session}")
-        print("    " + budget_mod.claim_budget(entry, config).report()
-              .replace("\n", "\n    "))
+        claim = budget_mod.claim_budget(entry, config)
+        claim["runs"].spent = spent
+        print("    " + claim.report().replace("\n", "\n    "))
         over = claims.overrun(entry.id, runs_spent=spent)
         if over:
             print(f"    OVERRUN: {over[0]} {over[1]:g} > {over[2]:g}")
@@ -597,7 +589,9 @@ def cmd_loop(args):
     print(f"\n{len(history)} iteration(s); "
           f"stopped: {last.stop if last else 'no iterations run'}"
           f"{(' — ' + last.stop_detail) if last and last.stop_detail else ''}")
-    print(f"cost: ${sum(i.cost_usd for i in history):.2f}")
+    spent = [i.cost_usd for i in history]
+    print("cost: unknown (unmetered backend usage)" if None in spent
+          else f"cost: ${sum(spent):.2f}")
     return 0
 
 
@@ -832,9 +826,11 @@ def cmd_skill_distil(args):
     print(phase.name, f"read {phase.read}, did {phase.did}")
     for line in phase.detail:
         print(f"  {line}")
-    print(f"cost: ${it.cost_usd:.2f}  "
-          f"(recorded as iteration {it.n:04d}, out-of-band)")
+    print("cost: unknown (unmetered backend usage)" if it.cost_usd is None
+          else f"cost: ${it.cost_usd:.2f}  (recorded as iteration {it.n:04d}, "
+               "out-of-band)")
     return 0
+
 
 
 def cmd_research(args):
@@ -866,8 +862,9 @@ def cmd_research(args):
     print(phase.name, f"scouts {phase.read}, filed {phase.did}")
     for line in phase.detail:
         print(f"  {line}")
-    print(f"cost: ${it.cost_usd:.2f}  "
-          f"(recorded as iteration {it.n:04d}, out-of-band)")
+    print("cost: unknown (unmetered backend usage)" if it.cost_usd is None
+          else f"cost: ${it.cost_usd:.2f}  (recorded as iteration {it.n:04d}, "
+               "out-of-band)")
     return 0
 
 
@@ -881,8 +878,23 @@ def cmd_policy(args):
     return 1 if failures else 0
 
 
+def cmd_workspace(args):
+    from .workspaces import Pool
+
+    config = _load(args)
+    pool = Pool(config, args.session)
+    if args.workspace_action == "inspect":
+        result = pool.inspect(args.name)
+    else:
+        if args.session in {"cli", "unknown", ""}:
+            raise AutoresearchError("workspace recovery requires an explicit --session")
+        result = pool.recover(args.name, holder=args.holder, token=args.token,
+                              confirm_inactive=args.confirm_inactive)
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def _iso():
-    import datetime as dt
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
 
@@ -1134,6 +1146,23 @@ def build_parser() -> argparse.ArgumentParser:
     upd.add_argument("--dry-run", action="store_true", dest="dry_run",
                      help="show the plan and the pip command; change nothing")
     upd.set_defaults(func=cmd_harness_update)
+
+    workspace = sub.add_parser("workspace", help="inspect or archive an abandoned workspace")
+    wsub = workspace.add_subparsers(dest="workspace_action", required=True)
+    inspect = wsub.add_parser("inspect", help="inspect holder and obtain a recovery token")
+    inspect.add_argument("name")
+    inspect.set_defaults(func=cmd_workspace)
+    recover = wsub.add_parser("recover", help="archive evidence after confirming holder inactivity")
+    recover.add_argument("name")
+    recover.add_argument("--holder", required=True)
+    recover.add_argument("--token", required=True, help="token returned by workspace inspect")
+    recover.add_argument("--confirm-inactive", action="store_true", required=True)
+    recover.set_defaults(func=cmd_workspace)
+
+    bundles_mod.register_parser(sub)
+    gates_mod.register_parser(sub)
+    attempts_mod.register_parser(sub)
+    external_mod.register_parser(sub)
 
     return ap
 

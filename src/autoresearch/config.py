@@ -28,6 +28,8 @@ import yaml
 
 from .errors import ConfigError
 from .escalate import RemoteClass
+from .gates import Gate
+from .gates import definitions as gate_definitions
 from .goal import Goal
 from .hardware import Requirement
 from .lanes import Lanes
@@ -73,6 +75,10 @@ class Track:
     #: `ar validate` refuses an entry missing them, `ar harness export` refuses
     #: to publish one, and ingest upstream skips one -- each naming the field.
     requires_defect_evidence: bool = False
+    gates: list[Gate] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.machine.required_gates = tuple(g.name for g in self.gates if g.required)
 
     def is_id(self, entry_id: str) -> bool:
         return entry_id.startswith(self.prefix) and entry_id[len(self.prefix):].isdigit()
@@ -314,6 +320,7 @@ class DomainConfig:
                 title=spec.get("title", tid),
                 view=spec.get("view", f"docs/{tid}.md"),
                 machine=machine,
+                gates=gate_definitions(spec.get("gates", [])),
                 description=spec.get("description", ""),
                 migrate_from=spec.get("migrate_from", ""),
                 requires_defect_evidence=bool(spec.get(

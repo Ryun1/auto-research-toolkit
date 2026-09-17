@@ -126,12 +126,15 @@ def queue_view(track, entries, machine=None) -> str:
             f"One row per terminal entry ({len(closed)}). Pointers only: the "
             "reasoning lives in the memo.", ""]
     if closed:
-        out += ["| Entry | Status | Kind | Date | Evidence | Verdict |",
-                "|---|---|---|---|---|---|"]
+        out += ["| Entry | Status | Kind | Disposition | Applicability | Readiness | Date | Evidence | Verdict |",
+                "|---|---|---|---|---|---|---|---|---|"]
         for e in sorted(closed, key=lambda e: e.number):
             r = e.result
             out.append(
                 f"| {e.id} | {e.status} | {(r.closure_kind if r else '') or '—'} "
+                f"| {r.disposition if r else '—'} "
+                f"| {r.applicability.describe() if r and r.applicability else 'unscoped (legacy)'} "
+                f"| {e.gate_readiness(machine.required_gates)} "
                 f"| {(r.at[:10] if r else '')} | `{r.memo if r else ''}` "
                 f"| {((r.summary if r else '') or '—').splitlines()[0][:120]} |")
     else:
@@ -140,15 +143,16 @@ def queue_view(track, entries, machine=None) -> str:
 
     out += ["## Open", "", f"{len(open_)} entry/entries.", ""]
     for e in sorted(open_, key=lambda e: e.number):
-        out += _entry_section(e)
+        out += _entry_section(e, machine.required_gates)
     if not open_:
         out.append("_No open entries._")
     return "\n".join(out).rstrip() + "\n"
 
 
-def _entry_section(e) -> list[str]:
+def _entry_section(e, required_gates=()) -> list[str]:
     out = [f"### {e.id} — {e.title}", ""]
-    rows = [("Status", e.status)]
+    rows = [("Status", e.status), ("Readiness", e.gate_readiness(required_gates)),
+            ("Context", e.context.describe())]
     if e.claim:
         budget = ", ".join(filter(None, [
             e.claim.budget,
@@ -167,6 +171,10 @@ def _entry_section(e) -> list[str]:
         rows.append(("Tags", ", ".join(f"`{t}`" for t in e.tags)))
     for label, value in rows:
         out.append(f"- **{label}:** {value}")
+    for gate in e.gates:
+        out.append(f"- **Acceptance {gate.name}:** {gate.state} "
+                   f"({'required' if gate.required else 'optional'})"
+                   + (" — " + "; ".join(gate.evidence) if gate.evidence else ""))
     for label, value in (("Hypothesis", e.hypothesis), ("Prediction", e.prediction),
                          ("Bar", e.bar), ("Why filed", e.why_filed)):
         if value:
@@ -225,15 +233,23 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0,
         out.append(f"## {track.title} — {len(mine)} entries read")
         out.append("  " + ("  ".join(f"{k}:{v}" for k, v in sorted(counts.items()))
                            or "(none)"))
+        readiness = {}
+        for e in mine:
+            value = e.gate_readiness(machine.required_gates)
+            readiness[value] = readiness.get(value, 0) + 1
+        out.append("  readiness: " + ("  ".join(
+            f"{key}:{value}" for key, value in sorted(readiness.items())) or "(none)"))
         held = [e for e in mine if e.claim and not machine.status(e.status).terminal]
         out.append(f"  live claims: {len(held)}")
         for e in held:
-            out.append(f"    {e.id}  {e.claim.session}  since {e.claim.at[:16]}")
+            out.append(f"    {e.id}  {e.claim.session}  since {e.claim.at[:16]} "
+                       f" [{e.gate_readiness(machine.required_gates)}]")
         queued = sorted((e for e in mine if e.status == machine.initial),
                         key=lambda e: -getattr(e, "_score", 0))
         out.append(f"  queued heads ({len(queued)} queued):")
         for e in queued[:3]:
-            out.append(f"    {e.id}  {e.title[:80]}")
+            out.append(f"    {e.id}  {e.title[:80]} "
+                       f" [{e.gate_readiness(machine.required_gates)}]")
         if not queued:
             out.append("    (none — the queue is empty, not merely all held)")
         out.append("")

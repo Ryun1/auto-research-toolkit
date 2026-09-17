@@ -25,7 +25,9 @@ nobody checks, and a warning nobody can act on is worse than nothing (H138).
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
+import math
 import time
 from dataclasses import dataclass, field
 
@@ -39,16 +41,19 @@ class Meter:
     ceiling: float | None
     spent: float = 0.0
     unit: str = ""
+    unknown: bool = False
 
     @property
     def unlimited(self) -> bool:
         return self.ceiling is None
 
     def remaining(self) -> float:
+        if self.unknown and not self.unlimited:
+            return 0.0
         return float("inf") if self.unlimited else max(0.0, self.ceiling - self.spent)
 
     def would_exceed(self, amount: float = 1.0) -> bool:
-        return not self.unlimited and (self.spent + amount) > self.ceiling
+        return not self.unlimited and (self.unknown or (self.spent + amount) > self.ceiling)
 
     def spend(self, amount: float = 1.0, note: str = "") -> float:
         if self.would_exceed(amount):
@@ -63,6 +68,9 @@ class Meter:
         return self.remaining()
 
     def report(self) -> str:
+        if self.unknown:
+            return (f"{self.name:24} unknown usage; reconcile missing costs before "
+                    "spending under a finite ceiling")
         if self.unlimited:
             return f"{self.name:24} {self.spent:>10,.4g} spent   (no ceiling)"
         pct = 100.0 * self.spent / self.ceiling if self.ceiling else 0.0
@@ -131,7 +139,7 @@ def iteration_budget(config) -> Budget:
     })
 
 
-def domain_budget(config, spent_runs: float = 0.0, spent_money: float = 0.0,
+def domain_budget(config, spent_runs: float = 0.0, spent_money: float | None = 0.0,
                   spent_gpu_hours: float = 0.0) -> Budget:
     """What the whole campaign may spend. Money is a human gate."""
     budget = Budget("domain", {
@@ -139,8 +147,9 @@ def domain_budget(config, spent_runs: float = 0.0, spent_money: float = 0.0,
                       spent=spent_runs, unit="runs"),
         "gpu_hours": Meter("gpu_hours", config.budgets.get("domain_max_gpu_hours"),
                            spent=spent_gpu_hours, unit="gpu-h"),
-        "money": Meter("money", config.policy.spend_ceiling, spent=spent_money,
-                       unit=config.policy.currency),
+        "money": Meter("money", config.policy.spend_ceiling,
+                       spent=0.0 if spent_money is None else spent_money,
+                       unknown=spent_money is None, unit=config.policy.currency),
     })
     return budget
 
@@ -148,8 +157,28 @@ def domain_budget(config, spent_runs: float = 0.0, spent_money: float = 0.0,
 #: what one iteration's record says it consumed, keyed by the meter it feeds
 USAGE_FIELDS = {"money": "cost_usd", "runs": "runs", "gpu_hours": "gpu_hours"}
 
+def usage_number(value):
+    if isinstance(value, bool):
+        raise ValueError("boolean usage is not a number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("usage must be finite and nonnegative")
+    return number
 
-def recorded_usage(config) -> dict[str, float]:
+
+
+def require_money(config, spent_money: float | None) -> None:
+    """Refuse new spending when finite campaign money is unknown or exhausted."""
+    ceiling = config.policy.spend_ceiling
+    if ceiling is None:
+        return
+    if spent_money is None:
+        raise AutoresearchError("unknown monetary usage; reconcile measured costs before spending")
+    if spent_money >= ceiling:
+        raise AutoresearchError("campaign monetary ceiling exhausted")
+
+
+def recorded_usage(config) -> dict[str, float | None]:
     """What this campaign has already consumed, read back from the iteration
     records on disk.
 
@@ -157,16 +186,20 @@ def recorded_usage(config) -> dict[str, float]:
     `ar loop`, a campaign ceiling is not a ceiling -- it is a per-invocation
     allowance anyone can renew by pressing up-arrow.
 
-    The run ledger cannot answer this on its own: workers can report consumed
-    runs without supplying records, and GPU-hours also live in iteration
-    reports. Consumers adding ledger counts must subtract
-    `recorded_run_overlap` so retained measurements are charged only once.
+    Runs can be reported without supplying records. External handoffs record
+    GPU-hours in attempts; dispatched workers report them in iterations.
+    Run consumers use total_runs to reconcile reports, evidence and reservations.
     Historical usage without explicit run IDs remains conservatively charged.
     """
     usage = dict.fromkeys(USAGE_FIELDS, 0.0)
+    from . import attempts
+    for row in attempts.records(config):
+        if row["kind"] == "external":
+            try:
+                usage["gpu_hours"] += usage_number(row.get("gpu_hours", 0))
+            except (ValueError, TypeError) as exc:
+                raise AutoresearchError(f"invalid external GPU usage in attempt {row['id']}: {exc}") from exc
     directory = config.paths.iterations
-    if not directory.exists():
-        return usage
     for path in sorted(directory.glob("*.json")):
         try:
             record = json.loads(path.read_text())
@@ -179,7 +212,13 @@ def recorded_usage(config) -> dict[str, float]:
             from exc
         for meter, field_name in USAGE_FIELDS.items():
             try:
-                usage[meter] += float(record.get(field_name) or 0.0)
+                value = record.get(field_name, 0.0)
+                if meter == "money" and value is None:
+                    usage[meter] = None
+                else:
+                    amount = usage_number(value)
+                    if usage[meter] is not None:
+                        usage[meter] += amount
             except (TypeError, ValueError, AttributeError) as exc:
                 # The malformed-figure branch used to `continue`, so a figure
                 # recorded_run_overlap refuses came back as 0.0 here -- the
@@ -215,7 +254,7 @@ def recorded_runs_by_entry(config) -> dict[tuple[str, str, str], float]:
                 if (not isinstance(entry_id, str) or not isinstance(row, dict)
                         or not isinstance(row.get("session"), str)):
                     raise ValueError(f"runs_by_entry[{entry_id!r}] is malformed")
-                runs = float(row.get("runs") or 0.0)
+                runs = usage_number(row.get("runs", 0.0))
                 claim_at = row.get("claim_at")
                 if claim_at is None:
                     continue
@@ -245,7 +284,7 @@ def recorded_run_overlap(config, records) -> float:
         try:
             record = json.loads(path.read_text())
             ids = record.get("run_ids", [])
-            consumed = float(record.get("runs") or 0.0)
+            consumed = usage_number(record.get("runs", 0.0))
             if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
                 raise ValueError("run_ids must be a list of strings")
             matching = remaining.intersection(ids)
@@ -254,6 +293,61 @@ def recorded_run_overlap(config, records) -> float:
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             raise AutoresearchError(f"{path}: cannot reconcile run accounting ({exc})") from exc
     return overlap
+
+
+def total_runs(config, records=None) -> float:
+    """Reconcile retained evidence, reservations and iteration reports once."""
+    from . import attempts, runs
+    measured, skipped = runs.read_with_skipped(config.paths.runs)
+    rows = attempts.records(config)
+    by_id = {r.id: r for r in measured}
+    linked = set()
+    for row in rows:
+        for run_id in row["run_ids"]:
+            if run_id in linked:
+                raise AutoresearchError(f"run {run_id} linked to multiple attempts")
+            linked.add(run_id)
+    unlinked = [r for r in by_id.values() if r.id not in linked]
+    usage = recorded_usage(config)
+    total = sum(r["charged_runs"] for r in rows) + len(unlinked) + skipped + usage["runs"]
+    total -= recorded_run_overlap(config, unlinked)
+    remaining = {r["id"]: r["charged_runs"] for r in rows}
+    for path in sorted(config.paths.iterations.glob("*.json")):
+        record = json.loads(path.read_text())
+        ids = record.get("attempt_ids", [])
+        if not isinstance(ids, list) or any(not isinstance(i, str) for i in ids):
+            raise AutoresearchError(f"{path}: invalid attempt_ids")
+        allowance = usage_number(record.get("runs", 0))
+        for attempt_id in dict.fromkeys(ids):
+            discount = min(remaining.pop(attempt_id, 0), allowance)
+            total -= discount
+            allowance -= discount
+    return total
+
+
+def claim_runs(config, entry) -> float:
+    """Charge only the current claim identity; historical unattributed rows stay global."""
+    from . import attempts, runs
+    if not entry.claim:
+        return 0.0
+    claim = entry.claim
+    key = (entry.id, claim.session, claim.at)
+    rows = [r for r in attempts.records(config)
+            if (r["entry"], r["session"], r["claim_at"]) == key]
+    linked = {i for row in rows for i in row["run_ids"]}
+    started = dt.datetime.fromisoformat(claim.at)
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=dt.UTC)
+    observed = [r for r in runs.read_all(config.paths.runs)
+                if r.entry == entry.id and r.session == claim.session
+                and r.started >= started.timestamp() and r.id not in linked]
+    reported = recorded_runs_by_entry(config).get(key, 0)
+    # New dispatch reports explicitly link their attempt; historical reports do not.
+    for path in config.paths.iterations.glob("*.json"):
+        record = json.loads(path.read_text())
+        ids = set(record.get("attempt_ids", []))
+        reported -= min(reported, sum(r["charged_runs"] for r in rows if r["id"] in ids))
+    return sum(r["charged_runs"] for r in rows) + max(reported, len(observed))
 
 
 # -- the third exit --------------------------------------------------------

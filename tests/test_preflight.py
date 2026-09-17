@@ -158,7 +158,7 @@ def test_feasible_or_missing_hook_preserves_dispatch(sandbox, store, configured)
     assert iteration.verdicts == {"Q1": "inconclusive"}
     assert all(budget[key].spent == 1 for key in ("fanout", "spawns", "runs"))
     assert store.load("Q1").claim is None
-    assert iteration.runs == 0
+    assert iteration.runs == 1  # the attempt reservation is spent even for a static reply
 
 
 def test_blocked_card_leaves_capacity_for_next_card(sandbox, store):

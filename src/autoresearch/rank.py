@@ -153,7 +153,7 @@ class Ranking:
         return "\n".join(out)
 
 
-def calibrate(entries, machine_for) -> dict:
+def calibrate(entries, machine_for, candidate=None) -> dict:
     """Observed confirm-rate per mechanism tag, from closed entries.
 
     This is why migrating the historical corpus matters: 257 reached verdicts is
@@ -166,8 +166,12 @@ def calibrate(entries, machine_for) -> dict:
         machine = machine_for(entry.id)
         if not machine.status(entry.status).terminal or not entry.result:
             continue
+        if entry.result.disposition != "experiment":
+            continue
+        if candidate is not None and not entry.result_applies_to(candidate):
+            continue
         good = entry.result.verdict in ("confirmed", "fixed")
-        for mechanism in entry.mechanisms:
+        for mechanism in entry.closure_mechanisms():
             tally.setdefault(mechanism, []).append(1 if good else 0)
     return {m: {"rate": sum(v) / len(v), "n": len(v)} for m, v in tally.items()}
 
@@ -179,11 +183,11 @@ def _dead_mechanisms(entries, machine_for):
         machine = machine_for(entry.id)
         if not machine.status(entry.status).terminal or not entry.result:
             continue
-        if entry.result.verdict != "refuted":
+        if entry.result.verdict != "refuted" or entry.result.disposition != "experiment":
             continue
         bucket = hard if entry.result.closure_kind == "mechanism" else soft
-        for mechanism in entry.mechanisms:
-            bucket.setdefault(mechanism, entry.id)
+        for mechanism in entry.closure_mechanisms():
+            bucket.setdefault(mechanism, []).append(entry)
     return hard, soft
 
 
@@ -237,13 +241,15 @@ def rank(entries, config, *, prior_weight: float = 3.0,
             if not capability.ok:
                 card.excluded = (f"host cannot run {entry.hardware!r}: "
                                  + "; ".join(capability.problems))
-        else:
-            dead = [m for m in entry.mechanisms if m in hard_dead]
+        if not card.excluded:
+            dead = next(((m, closed) for m in entry.mechanisms
+                         for closed in hard_dead.get(m, [])
+                         if closed.result_applies_to(entry)), None)
             if dead:
+                mechanism, closed = dead
                 card.excluded = (
-                    f"mechanism {dead[0]!r} was refuted by {hard_dead[dead[0]]} "
-                    "with closure_kind=mechanism, which holds outside the range "
-                    "measured")
+                    f"mechanism {mechanism!r} was refuted by {closed.id} "
+                    "with closure_kind=mechanism within matching applicability")
         if card.excluded:
             excluded.append(card)
             continue
@@ -254,7 +260,9 @@ def rank(entries, config, *, prior_weight: float = 3.0,
         # of history the prior dominates. Bayesian in spirit, deliberately
         # simple, and auditable by hand -- which a fitted model would not be.
         confidence = entry.confidence
-        observed = [calibration[m] for m in entry.mechanisms if m in calibration]
+        applicable_calibration = calibrate(entries, machine_for, candidate=entry)
+        observed = [applicable_calibration[m] for m in entry.mechanisms
+                    if m in applicable_calibration]
         if observed:
             n = sum(o["n"] for o in observed)
             rate = sum(o["rate"] * o["n"] for o in observed) / n
@@ -275,7 +283,9 @@ def rank(entries, config, *, prior_weight: float = 3.0,
 
         # Soft overlap: a slope/cell refutation touching this mechanism means
         # the band matters, not that the direction is dead.
-        touching = [m for m in entry.mechanisms if m in soft_dead]
+        touching = [m for m in entry.mechanisms
+                    if any(closed.result_applies_to(entry)
+                           for closed in soft_dead.get(m, []))]
         overlap = 1.0 / (1.0 + len(touching))
 
         card.terms = {"confidence": confidence, "impact": impact, "cost": cost,
@@ -288,12 +298,12 @@ def rank(entries, config, *, prior_weight: float = 3.0,
     scored.sort(key=lambda s: -s.score)
     notes = []
     if hard_dead:
-        notes.append(f"{len(hard_dead)} mechanism(s) closed by a "
-                     f"closure_kind=mechanism refutation and hard-excluded")
+        notes.append(f"{len(hard_dead)} mechanism(s) have hard refutations; "
+                     "exclusion requires matching applicability (legacy unscoped "
+                     "closures apply everywhere)")
     if soft_dead:
-        notes.append(f"{len(soft_dead)} mechanism(s) closed by slope/cell and "
-                     f"penalised rather than excluded — they re-open outside "
-                     f"the band measured")
+        notes.append(f"{len(soft_dead)} mechanism(s) have slope/cell refutations; "
+                     "overlap penalties require matching applicability")
     return Ranking(scored=scored, excluded=excluded, calibration=calibration,
                    notes=notes, explore_fraction=explore_fraction)
 

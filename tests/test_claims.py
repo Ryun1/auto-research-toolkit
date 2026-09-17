@@ -87,3 +87,48 @@ def test_overrun_reports_the_meter_that_stopped_the_work(sandbox, store):
     assert claims.overrun("Q1", runs_spent=1) is None
     meter, spent, ceiling = claims.overrun("Q1", runs_spent=3)
     assert (meter, spent, ceiling) == ("max_runs", 3, 2)
+
+
+def test_gate_mutation_is_owner_only_atomic_and_recorded(sandbox, store):
+    import json
+
+    from autoresearch.gates import Gate, update
+    make_entry(store, gates=[Gate("correctness")])
+    owner = Claims(store, sandbox, "a")
+    owner.claim("Q1")
+    def change(e):
+        return update(e, "correctness", "passed", ["evidence.json"])
+    with pytest.raises(ClaimError):
+        Claims(store, sandbox, "b").mutate("Q1", "gate-updated", "verified", change)
+    assert store.load("Q1").readiness == "pending"
+    owner.mutate("Q1", "gate-updated", "verified", change)
+    back = store.load("Q1")
+    assert back.readiness == "ready"
+    audit = json.loads(back.history[-1].detail)
+    assert audit["changes"]["gates"]["before"][0]["state"] == "pending"
+    assert audit["changes"]["gates"]["after"][0]["evidence"] == ["evidence.json"]
+
+
+def test_release_pinned_to_prior_claim_does_not_release_reassignment(sandbox, store):
+    make_entry(store)
+    owner = Claims(store, sandbox, "a")
+    first = owner.claim("Q1")
+    owner.release("Q1", "yielding")
+    second = owner.claim("Q1")
+    second.claim.at = "2099-01-01T00:00:00+00:00"
+    store.save(second)
+    with pytest.raises(ClaimError, match="changed since assignment"):
+        owner.release("Q1", "late result", expected_claim_at=first.claim.at)
+    assert store.load("Q1").claim.at == second.claim.at
+
+
+def test_failed_gate_change_leaves_persisted_record_untouched(sandbox, store):
+    from autoresearch.errors import SchemaError
+    from autoresearch.gates import Gate, update
+    make_entry(store, gates=[Gate("correctness")])
+    before = store.path("Q1").read_bytes()
+    with pytest.raises(SchemaError):
+        Claims(store, sandbox, "curator").mutate(
+            "Q1", "gate-updated", "bad evidence",
+            lambda e: update(e, "correctness", "passed", []))
+    assert store.path("Q1").read_bytes() == before

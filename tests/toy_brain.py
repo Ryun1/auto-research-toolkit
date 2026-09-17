@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shlex
 import subprocess
 import sys
 
@@ -46,7 +47,7 @@ class ToyBrain:
             Role.LIBRARIAN: self._distil,
             Role.QC: lambda p: {"problems": [], "harness_debt": [], "verdict": "clean"},
         }[role]
-        return Reply(role=role, data=handler(payload))
+        return Reply(role=role, data=handler(payload), cost_usd=0.0)
 
     def _generate(self, payload):
         if payload.get("generator_index", 0) != 0:
@@ -85,10 +86,17 @@ class ToyBrain:
         workspace = pathlib.Path(payload["workspace"])
         knobs = json.loads(entry["sources"][0]) if entry.get("sources") else {}
         args = [f"--knob={k}={v}" for k, v in knobs.items()]
+        # Run the brief's record_command (it carries the dispatch slot's
+        # --session, which settlement now requires on linked run rows) and
+        # append the same knobs the old hand-rolled argv passed.
+        # `ar` on PATH may be the BSD archiver (H149); route through the
+        # interpreter the tests already import the toolkit with.
+        argv = shlex.split(payload["record_command"])
+        argv[0] = sys.executable
+        argv.insert(1, "-m")
+        argv.insert(2, "autoresearch.cli")
         proc = subprocess.run(
-            [sys.executable, "-m", "autoresearch.cli",
-             "--session", f"worker-{entry['id']}",
-             "measure", "--entry", entry["id"], "--", *args],
+            argv + args,
             cwd=workspace, capture_output=True, text=True)
         line = proc.stdout.strip()
         if proc.returncode != 0:

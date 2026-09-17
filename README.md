@@ -208,7 +208,17 @@ ar migrate     convert an existing prose corpus into records (one way)
 ar render      write the generated queue views
 ar validate    check records, views, runs and policy
 ar policy      show the never-rules and prove each refuses something
+ar exec         reserve and run one bounded local command under a live claim
+ar attempt      execution ledger: list, show, checkpoint
+ar external     assign work to an external coordinator, settle or cancel it
+ar gates        per-entry acceptance gates: configure, update, show
+ar evidence     portable integrity-only evidence bundles: pack, verify, import
+ar workspace    inspect or archive an abandoned workspace slot
 ```
+
+The installed `autoresearch` command avoids the system `ar` archiver name
+collision. New domains also receive `bin/autoresearch`, bound to the Python
+interpreter used to initialize them.
 
 `ar migrate` is an import, not an update: existing entry IDs and duplicate IDs
 across selected sources are refused before any entries are written. `--dry-run`
@@ -322,11 +332,18 @@ way:
   which is otherwise refused outright. (Run them concurrently under one name and
   those same checks pass when they should refuse — which is why the two rules
   are a pair.)
-- **After a crash**, `ar reap --ttl-hours 0 <id>` frees a claim whose holder is
-  gone, and `git worktree prune` followed by
-  `git branch --list 'ar/*' | xargs -n1 git branch -D` clears the pool. Anything
-  a worker wrote only inside its slot is unrecoverable — which is why a memo
-  backing a closure has to live under the domain root.
+- **After a crash**, `ar reap --ttl-hours 0 <id>` frees a claim whose holder is gone.
+  A workspace slot left behind by a dead session is cleared with `ar workspace
+  inspect NAME` and then `ar workspace recover NAME --holder <holder> --token <token>
+  --confirm-inactive`: the inspect step returns a receipt with a recovery token, the
+  recover step archives the slot (evidence included) under `.ar/workspaces/recovered/`
+  instead of deleting it, and refuses to act unless you confirm the holder is inactive
+  (H15). Workspace operation locks release on process death. If recovery itself
+  is interrupted, retry refuses and names the original archive and receipt;
+  an operator must reconcile that transaction before reusing the slot. It does
+  not create a second empty archive or silently delete the retained evidence.
+  Bulk branch deletion is not recovery, and a memo backing a closure still has
+  to live under the domain root.
 
 Iteration records are read back at startup, so numbering continues and the
 `yield_floor` stop keeps its window across the handoff. Reusing a recorded
@@ -551,6 +568,30 @@ already paid for. A `slope` or `cell` refutation only **penalises**, because it
 re-opens outside its band, and excluding it would be exactly the over-claim the
 taxonomy exists to prevent.
 
+A refutation may declare **applicability** alongside its closure kind:
+`baseline` identity, `source_revision`, `workload`, `hardware` and typed scalar
+`parameters`. Overlap filtering consults every explicitly scoped dimension, so a
+closure measured on one machine, at one upstream revision, or inside one
+parameter band does not silently kill a hypothesis scoped elsewhere — and an
+explicitly scoped refutation is applied only where its dimensions match. A
+closing result also carries a disposition: `experiment` (default),
+`superseded`, or `already-shipped`. Non-experiment dispositions are recorded as
+supersession facts; they create neither negative calibration nor mechanism
+overlap, because "the frontier already shipped it" is not evidence the idea
+failed.
+
+## Acceptance gates
+
+An entry may declare **gates**: named, ordered stages (`pending | passed |
+failed | blocked`), each optionally required and carrying its evidence paths.
+A domain sets required gate names per track (`[[tracks.gates]]`); a closure to
+`confirmed`/`fixed` is refused while any required gate is incomplete — so a
+Python model passing its algebra cannot be recorded as a GPU-ready result.
+`ar gates update <id> <name> --state passed --evidence <path> --why <text>`
+records progress; `readiness` is derived (`unconfigured | pending | blocked |
+failed | ready`) and rendered on the board and queue. Entries with no gate
+definitions close as before but never render as ready.
+
 ## Ranking, and the reserve for amplitude
 
 ```
@@ -605,10 +646,41 @@ command's: the brief arrives on **stdin**, `{role}`, `{prompt_file}` (the
 core-owned role prompt), `{workspace}` and `{cost_file}` are substituted into
 argv, the reply is stdout (JSON parsed by the same tolerant reader as every
 other role), and the backend *may* write a number into `{cost_file}` to be
-metered. A backend that does not meter runs free as far as the ceiling knows,
-and its record rows say `cost_usd=0` saying exactly that. Every backend shares
-one money ceiling, so two spenders halve it rather than each holding a copy.
+metered. A backend that meters nothing does not silently read as free: an
+unset `{cost_file}` records `cost_usd: null`, and a finite money ceiling
+refuses further spend until the usage is reconciled. Unknown cost is not zero;
+known usage below the ceiling may continue. Measured zero remains valid and
+costs nothing. Every backend shares one money ceiling, so two spenders
+halve it rather than each holding a copy.
 
+## Bounded execution and external coordination
+
+Two verbs make an execution budget real rather than declarative:
+
+- **`ar exec`** reserves one attempt *before* launching (fail-closed against
+  claim, domain, concurrency and money ceilings), runs it with a timeout and
+  captured logs, and settles it as `completed | failed | cancelled |
+  interrupted`. Crashes and interrupts consume attempts like any other
+  settlement; a restart reads the same ledger, so a ceiling cannot be reset by
+  restarting. `ar attempt list/show/checkpoint` inspects the ledger.
+- **`ar external assign/complete/cancel/show`** hands one entry's work to an
+  external agent — a coding harness's native subagents, for example — with a
+  stable assignment identity, an explicit scope and ceiling, and a receipt.
+  `complete` settles through the same ownership checks and evidence retention
+  as an in-loop worker; `cancel` recovers the assignment and preserves
+  unharvested evidence. This is a handoff protocol, not a sandbox: policy
+  checking and human-only gates are unchanged, and the coordinator that
+  dispatches the work remains responsible for what it dispatches.
+
+## Portable evidence bundles
+
+`ar evidence pack` snapshots exact bytes (explicit paths, a run's declared
+outputs, optional source snapshots) into a deterministic ZIP with a SHA-256
+manifest; `ar evidence verify` checks archive safety and hashes; `ar evidence
+import` validates the whole bundle and atomically retains it under a
+content-addressed path, idempotently and without manufacturing run records.
+The manifest proves integrity of the bytes it names — never trusted origin,
+executed identity, or ranked eligibility.
 ## Roles
 
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:

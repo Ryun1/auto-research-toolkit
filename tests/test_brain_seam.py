@@ -92,15 +92,18 @@ def test_a_cost_file_that_is_not_a_number_is_refused(sandbox):
                ".write_text('lots')\n"
                "print('[]')\n", *FLAGS]
     brain = ProcessBrain(command, root=sandbox.paths.root)
-    with pytest.raises(AutoresearchError, match="not a number"):
+    with pytest.raises(AutoresearchError):
         brain.ask("scout", "[]")
 
 
-def test_an_absent_cost_file_means_zero_and_the_record_says_so(sandbox):
-    from autoresearch.driver.brain import ProcessBrain
+def test_an_absent_cost_file_blocks_further_spend_under_a_ceiling(sandbox):
+    from autoresearch.driver.brain import CostLedger, ProcessBrain
+    ledger = CostLedger(1.0)
     brain = ProcessBrain([sys.executable, "-c", "print('[]')"],
-                         root=sandbox.paths.root)
-    assert brain.ask("scout", "[]").cost_usd == 0.0
+                         root=sandbox.paths.root, ledger=ledger)
+    assert brain.ask("scout", "[]").cost_usd is None
+    with pytest.raises(AutoresearchError):
+        brain.ask("scout", "[]")
 
 
 # -- routing -----------------------------------------------------------------

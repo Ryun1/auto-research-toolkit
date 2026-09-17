@@ -40,7 +40,7 @@ from .errors import ClaimError
 
 
 def _now_iso() -> str:
-    return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+    return dt.datetime.now(dt.UTC).isoformat(timespec="microseconds")
 
 
 def _age_hours(iso: str) -> float:
@@ -171,28 +171,60 @@ class Claims:
             self.store.save(entry)
             return entry
 
-    def release(self, entry_id: str, why: str):
-        """Hand a claim back. A supported move, with a mandatory reason.
+    def release(self, entry_id: str, why: str, expected_claim_at=None, event=None):
+        """Hand back an owned claim, optionally pinned to its original lease."""
+        with self._lock():
+            return self.release_locked(entry_id, why, expected_claim_at, event=event)
 
-        H78: with no release, an agent that claimed out-of-lane work had to
-        "close it dishonestly or squat" -- both corrupt the record.
+    def release_locked(self, entry_id: str, why: str, expected_claim_at=None, event=None):
+        """Release under a caller-held `_lock`, without reacquiring it."""
+        if not why.strip():
+            raise ClaimError("releasing a claim requires a reason")
+        entry = self.store.load(entry_id)
+        self.require_owner(entry, expected_claim_at)
+        track = self.config.track_for(entry_id)
+        entry.apply(track.machine, track.machine.initial,
+                    who=self.session, why=why)
+        entry.history.append(Event(_now_iso(), "released", self.session, why))
+        if event is not None:
+            entry.history.append(event)
+        entry.claim = None
+        self.store.save(entry)
+        return entry
+
+    def require_owner(self, entry, expected_claim_at=None):
+        if not entry.claim or entry.claim.session != self.session:
+            holder = entry.claim.session if entry.claim else "nobody"
+            raise ClaimError(
+                f"{entry.id} is held by {holder!r}, not by {self.session!r}; "
+                "a session may change only its own claim")
+        if expected_claim_at is not None and entry.claim.at != expected_claim_at:
+            raise ClaimError(f"{entry.id}: claim changed since assignment")
+
+    def mutate(self, entry_id: str, kind: str, why: str, change,
+               expected_claim_at=None):
+        """Apply a record change atomically, preserving ownership and history.
+
+        Unclaimed records may be curated; an active claim is owner-only.
+        `change` receives the freshly loaded entry and must not save it itself.
         """
         if not why.strip():
-            raise ClaimError(
-                "releasing a claim requires a reason; it is read, and it is what "
-                "keeps a release from being a way to drop hard work")
+            raise ClaimError("record mutation requires a reason")
         with self._lock():
             entry = self.store.load(entry_id)
             track = self.config.track_for(entry_id)
-            if not entry.claim or entry.claim.session != self.session:
-                holder = entry.claim.session if entry.claim else "nobody"
-                raise ClaimError(
-                    f"{entry_id} is held by {holder!r}, not by {self.session!r}; "
-                    "a session releases only its own claim")
-            entry.apply(track.machine, track.machine.initial,
-                        who=self.session, why=why)
-            entry.history.append(Event(_now_iso(), "released", self.session, why))
-            entry.claim = None
+            if expected_claim_at is not None or (
+                    entry.claim and not track.machine.status(entry.status).terminal):
+                self.require_owner(entry, expected_claim_at)
+            before = entry.to_dict()
+            change(entry)
+            after = entry.to_dict()
+            changed = {key: {"before": before.get(key), "after": after.get(key)}
+                       for key in before.keys() | after.keys()
+                       if key != "history" and before.get(key) != after.get(key)}
+            detail = json.dumps({"why": why, "changes": changed}, sort_keys=True)
+            entry.history.append(Event(_now_iso(), kind, self.session, detail))
+            entry.updated = _now_iso()
             self.store.save(entry)
             return entry
 

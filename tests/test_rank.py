@@ -256,3 +256,74 @@ def test_a_bad_explore_fraction_is_refused_as_an_autoresearch_error(sandbox, sto
     from autoresearch.errors import ConfigError
     with pytest.raises(ConfigError, match="explore_fraction"):
         rank(store.all(), sandbox, explore_fraction=1.0)
+
+
+def test_hardware_qualified_candidate_still_passes_mechanism_filter(sandbox, store):
+    from autoresearch.hardware import Host, Requirement
+    sandbox.hardware["small"] = Requirement(name="small", min_memory_gb=1)
+    close(store, "Q1", "refuted", kind="mechanism", mechanisms=["dead"])
+    make_entry(store, "Q2", hardware="small", mechanisms=["dead"], impact=1.0)
+    host = Host(os="Darwin", arch="arm64", chip="M5", vendor="apple",
+                cpu_threads=10, memory_gb=16, memory_available_gb=8)
+    ranking = rank(store.all(), sandbox, host=host)
+    assert not ranking.scored
+    assert "Q1" in next(c.excluded for c in ranking.excluded if c.entry_id == "Q2")
+
+
+@pytest.mark.parametrize("kind", ["mechanism", "cell"])
+def test_scoped_closures_require_all_dimensions_and_parameter_types(sandbox, store, kind):
+    from autoresearch.entries import Applicability
+    from autoresearch.states import default_machine
+    scope = dict(baseline="pristine", source_revision="abc", hardware="RTX",
+                 workload="uniform", parameters={"batch": 16})
+    closed = make_entry(store, "Q1", status="in-progress", mechanisms=["m"],
+                        context=Applicability(**scope))
+    closed.apply(default_machine(), "refuted", "s", result=Result(
+        "refuted", "memo", "2026-01-01", "s", closure_kind=kind,
+        reopen_condition="new cell"))
+    store.save(closed)
+    make_entry(store, "Q2", mechanisms=["m"], context=Applicability(**scope), impact=1)
+    for index, change in enumerate((
+            {"hardware": "M5"}, {"source_revision": "def"}, {"workload": "mixed"},
+            {"baseline": "shipped"}, {"parameters": {"batch": "16"}},
+            {"parameters": {}}, {"hardware": ""}), start=3):
+        make_entry(store, f"Q{index}", mechanisms=["m"],
+                   context=Applicability(**(scope | change)), impact=1, confidence=0.7)
+    ranking = rank(store.all(), sandbox)
+    scored = {card.entry_id: card for card in ranking.scored}
+    assert set(scored) >= {f"Q{i}" for i in range(3, 10)}
+    for i in range(3, 10):
+        assert scored[f"Q{i}"].terms["overlap"] == 1
+        assert scored[f"Q{i}"].terms["confidence"] == 0.7
+    if kind == "mechanism":
+        assert "Q2" not in scored
+    else:
+        assert scored["Q2"].terms["overlap"] == 0.5
+
+
+@pytest.mark.parametrize("disposition", ["superseded", "already-shipped"])
+def test_nonexperiment_disposition_is_not_negative_evidence(sandbox, store, disposition):
+    from autoresearch.states import default_machine
+    entry = make_entry(store, "Q1", mechanisms=["m"], status="in-progress")
+    entry.apply(default_machine(), "refuted", "s", result=Result(
+        "refuted", "memo", "2026-01-01", "s", disposition=disposition))
+    store.save(entry)
+    make_entry(store, "Q2", mechanisms=["m"], impact=1, confidence=0.8)
+    ranking = rank(store.all(), sandbox)
+    assert [card.entry_id for card in ranking.scored] == ["Q2"]
+    assert ranking.scored[0].terms["confidence"] == 0.8
+    assert ranking.scored[0].terms["overlap"] == 1
+    assert ranking.calibration == {}
+
+
+def test_newly_scoped_closure_does_not_hide_later_matching_closure(sandbox, store):
+    from autoresearch.entries import Applicability
+    first = close(store, "Q1", "refuted", kind="mechanism", mechanisms=["m"])
+    first.result.applicability = Applicability(hardware="M5")
+    store.save(first)
+    second = close(store, "Q2", "refuted", kind="mechanism", mechanisms=["m"])
+    second.result.applicability = Applicability(hardware="RTX")
+    store.save(second)
+    make_entry(store, "Q3", mechanisms=["m"], context=Applicability(hardware="RTX"))
+    ranking = rank(store.all(), sandbox)
+    assert "Q2" in next(card.excluded for card in ranking.excluded if card.entry_id == "Q3")
