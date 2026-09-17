@@ -210,6 +210,11 @@ ar validate    check records, views, runs and policy
 ar policy      show the never-rules and prove each refuses something
 ```
 
+`ar migrate` is an import, not an update: existing entry IDs and duplicate IDs
+across selected sources are refused before any entries are written. `--dry-run`
+performs the same collision checks. Resolve collisions in the source corpus;
+use `ar entry amend` for deliberate changes to existing records.
+
 ## Hardware awareness
 
 The harness inspects the machine it is on, records it, refuses work it cannot

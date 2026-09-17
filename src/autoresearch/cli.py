@@ -614,6 +614,7 @@ def cmd_migrate(args):
             f"declared: {sorted(config.tracks)}")
     store = _store(config)
     total, problems = 0, []
+    pending = {}
     for track in config.tracks.values():
         if args.track and track.id != args.track:
             continue
@@ -632,10 +633,16 @@ def cmd_migrate(args):
         print(result.report())
         problems += [d.line() for d in result.disagreements]
         problems += result.missing_evidence
-        if not args.dry_run:
-            for entry in result.entries:
-                store.save(entry)
+        for entry in result.entries:
+            if store.exists(entry.id) or entry.id in pending:
+                raise AutoresearchError(
+                    f"migration would overwrite entry {entry.id!r}; "
+                    "no entries written. Resolve duplicate sources or existing records first.")
+            pending[entry.id] = entry
         total += len(result.entries)
+    if not args.dry_run:
+        for entry in pending.values():
+            store.save(entry)
     print(f"\n{total} entries "
           + ("would be written (dry run)" if args.dry_run
              else f"written to {config.paths.entries}"))

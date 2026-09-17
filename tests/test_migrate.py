@@ -176,3 +176,23 @@ def test_unknown_track_is_refused_before_migration(sandbox, capsys):
     assert cli.main([*args[:-1], "research"]) == 0
     from autoresearch.entries import Store
     assert Store(sandbox.paths.entries).load("Q01").title == "imported idea"
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_migration_collision_preserves_all_existing_records(sandbox, dry_run):
+    from autoresearch import cli
+    from autoresearch.entries import Entry, Store
+
+    store = Store(sandbox.paths.entries)
+    path = store.save(Entry(id="Q2", track="research", title="Current finding"))
+    before = path.read_bytes()
+    source = sandbox.paths.root / "migration-source.txt"
+    source.write_text("## Q1 — new idea\n\n- **Status:** queued\n\n"
+                      "## Q2 — obsolete idea\n\n- **Status:** queued\n")
+    args = ["--domain", str(sandbox.paths.root), "migrate",
+            "--track", "research", "--view", str(source)]
+    if dry_run:
+        args.append("--dry-run")
+    assert cli.main(args) == 2
+    assert path.read_bytes() == before
+    assert not store.exists("Q1")
