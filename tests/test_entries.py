@@ -131,3 +131,16 @@ def test_unknown_field_is_refused(store):
 def test_malformed_id_is_reported(store):
     with pytest.raises(SchemaError, match="not <PREFIX><digits>"):
         _ = Entry(id="nope", track="r", title="t").number  # noqa: B018 -- property raises
+
+
+def test_entry_creation_rejects_unknown_track(sandbox, store, capsys):
+    from autoresearch import cli
+
+    args = ["--domain", str(sandbox.paths.root), "entry", "new",
+            "--track", "bogus", "Example"]
+    assert cli.main(args) == 2
+    assert "bogus" in capsys.readouterr().err
+    assert store.all() == []
+    assert cli.main([*args[:-2], "research", "Example"]) == 0
+    assert [(entry.track, entry.title) for entry in store.all()] == [
+        ("research", "Example")]

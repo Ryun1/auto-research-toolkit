@@ -217,6 +217,10 @@ def cmd_render(args):
 
 def cmd_entry_new(args):
     config = _load(args)
+    if args.track not in config.tracks:
+        raise AutoresearchError(
+            f"track {args.track!r} is not declared by this domain; "
+            f"declared: {sorted(config.tracks)}")
     store = _store(config)
     track = config.tracks[args.track]
     entry = Entry(
