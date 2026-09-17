@@ -125,3 +125,26 @@ def test_best_run_skips_rows_it_cannot_score():
 
 def test_best_run_of_nothing_is_none():
     assert best_run([], GOAL) is None
+
+
+def test_non_object_rows_are_skipped_or_named_in_strict_mode(tmp_path):
+    from autoresearch.runs import read_with_skipped
+
+    path = tmp_path / "mixed.jsonl"
+    path.write_text('[1, 2]\n')
+    append(path, record(id="valid"))
+    rows, skipped = read_with_skipped(tmp_path)
+    assert [row.id for row in rows] == ["valid"]
+    assert skipped == 1
+    with pytest.raises(SchemaError, match=r"mixed\.jsonl:1:"):
+        read_with_skipped(tmp_path, strict=True)
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_invalid_utf8_names_file_and_line(tmp_path, strict):
+    path = tmp_path / "broken.jsonl"
+    append(path, record())
+    with path.open("ab") as stream:
+        stream.write(b"\xff\xfe\n")
+    with pytest.raises(SchemaError, match=r"broken\.jsonl:2:"):
+        read_all(tmp_path, strict=strict)

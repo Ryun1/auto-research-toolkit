@@ -185,7 +185,12 @@ def read_with_skipped(directory, strict: bool = False) -> tuple[list, int]:
         return [], 0
     out, skipped = [], 0
     for path in sorted(directory.glob("*.jsonl")):
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            lineno = exc.object.count(b"\n", 0, exc.start) + 1
+            raise SchemaError(f"{path}:{lineno}: {exc}") from exc
+        for lineno, line in enumerate(text.splitlines(), 1):
             line = line.strip()
             if not line:
                 continue
@@ -193,6 +198,11 @@ def read_with_skipped(directory, strict: bool = False) -> tuple[list, int]:
                 payload = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise SchemaError(f"{path}:{lineno}: {exc}") from exc
+            if not isinstance(payload, dict):
+                if strict:
+                    raise SchemaError(f"{path}:{lineno}: run record must be a JSON object")
+                skipped += 1
+                continue
             if not strict and payload.get("schema") != SCHEMA:
                 skipped += 1        # a foreign row: not ours to interpret
                 continue
