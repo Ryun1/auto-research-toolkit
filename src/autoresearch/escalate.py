@@ -209,22 +209,14 @@ def recommend(*, trigger: str | None, local: Throughput, units_needed: float,
                 "not the answer. Change the problem, not the machine."])
 
     if spend_ceiling is not None and chosen_cost > spend_ceiling:
-        affordable = [c for c in fitting
-                      if c.usd_per_hour * local_hours / c.measured_ratio
-                      <= spend_ceiling]
-        if not affordable:
-            return Escalation(
-                REFUSE, trigger=trigger, best=chosen, usd=chosen_cost,
-                hours=chosen_hours,
-                detail=f"the cheapest class fitting the deadline costs "
-                       f"${chosen_cost:,.2f}, over the "
-                       f"${spend_ceiling:,.2f} ceiling",
-                lines=lines + ["Raising the ceiling is a human decision; this "
-                               "stops rather than assuming it."])
-        chosen = min(affordable, key=lambda c: c.usd_per_hour * local_hours
-                     / c.measured_ratio)
-        chosen_hours = local_hours / chosen.measured_ratio
-        chosen_cost = chosen_hours * chosen.usd_per_hour
+        return Escalation(
+            REFUSE, trigger=trigger, best=chosen, usd=chosen_cost,
+            hours=chosen_hours,
+            detail=f"the cheapest class fitting the deadline costs "
+                   f"${chosen_cost:,.2f}, over the "
+                   f"${spend_ceiling:,.2f} ceiling",
+            lines=lines + ["Raising the ceiling is a human decision; this "
+                           "stops rather than assuming it."])
 
     return Escalation(
         GO, trigger=trigger, best=chosen, usd=chosen_cost, hours=chosen_hours,

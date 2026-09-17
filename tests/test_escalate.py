@@ -127,9 +127,12 @@ def test_spend_ceiling_refuses_rather_than_assuming():
 def test_a_faster_class_that_fits_beats_a_refusing_cheapest():
     """H10: the cheapest measured class missing the wall clock is not a
     refusal while a faster measured class fits it and the ceiling."""
-    out = go(classes=[FAST, CHEAP], hours_available=9.0, spend_ceiling=10.0)
+    slow = RemoteClass("slow-cheap", 0.01, measured_ratio=3.0,
+                       measured_on="slow-run")
+    out = go(classes=[FAST, slow], hours_available=5.0, spend_ceiling=1.0)
     assert out.verdict == GO, out.report()
     assert out.best.name == "rtx-4090"
+    assert out.hours <= 5.0 and out.usd <= 1.0
 
 
 def test_refusal_says_nothing_measured_fits():
