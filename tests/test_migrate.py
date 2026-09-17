@@ -161,3 +161,18 @@ def test_reopened_claim_does_not_manufacture_a_disagreement(tmp_path):
     e = {x.id: x for x in out.entries}["Q01"]
     assert any(ev.kind == "reopened" and "premise discharged" in ev.detail
                for ev in e.history)
+
+
+def test_unknown_track_is_refused_before_migration(sandbox, capsys):
+    from autoresearch import cli
+
+    source = sandbox.paths.root / "migration-source.md"
+    source.write_text("## Q01 — imported idea\n\n- **Status:** queued\n")
+    args = ["--domain", str(sandbox.paths.root), "migrate",
+            "--view", str(source), "--track", "bogus"]
+    assert cli.main(args) == 2
+    assert "bogus" in capsys.readouterr().err
+    assert not list(sandbox.paths.entries.glob("*.yaml"))
+    assert cli.main([*args[:-1], "research"]) == 0
+    from autoresearch.entries import Store
+    assert Store(sandbox.paths.entries).load("Q01").title == "imported idea"

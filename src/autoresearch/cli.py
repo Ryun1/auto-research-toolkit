@@ -604,6 +604,10 @@ def cmd_migrate(args):
     from .migrate import migrate as migrate_prose
 
     config = _load(args)
+    if args.track is not None and args.track not in config.tracks:
+        raise AutoresearchError(
+            f"track {args.track!r} is not declared by this domain; "
+            f"declared: {sorted(config.tracks)}")
     store = _store(config)
     total, problems = 0, []
     for track in config.tracks.values():
