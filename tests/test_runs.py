@@ -148,3 +148,12 @@ def test_invalid_utf8_names_file_and_line(tmp_path, strict):
         stream.write(b"\xff\xfe\n")
     with pytest.raises(SchemaError, match=r"broken\.jsonl:2:"):
         read_all(tmp_path, strict=strict)
+
+
+def test_invalid_rows_cannot_win_or_satisfy_goal():
+    good = record(metrics={"ops": 10.0, "peak": 1.0}, id="good")
+    invalid = [record(metrics={"ops": 0.0, "peak": 0.0}),
+               record(metrics={"ops": 0.1, "peak": 1.0}, provenance={})]
+    assert best_run(invalid, GOAL) is None
+    value, winner = best_run([good, *invalid], GOAL)
+    assert (value, winner.id) == (10.0, "good")

@@ -152,7 +152,7 @@ def best_run(records, goal):
     """
     best = None
     for record in records:
-        if record.status != OK:
+        if record.status != OK or record.problems(goal):
             continue
         try:
             value = goal.objective_value(record.metrics)
