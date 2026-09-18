@@ -125,6 +125,23 @@ class Goal:
     derived: dict[str, str] = field(default_factory=dict)
     stop_when: str | None = None
     yield_floor: YieldFloor = field(default_factory=YieldFloor)
+    #: Gate names that must read "passed" on the entry owning the best run
+    #: before the loop may record goal-met. Field evidence (eip8200-research):
+    #: its goal text required a kernel-checked proof, yet the loop recorded
+    #: `goal-met` from the objective expression alone -- the record diagnosed
+    #: the mismatch in stop_detail and the next iterations stopped anyway. A
+    #: stop that records a win the goal text does not allow is the defect, so
+    #: the linkage is declared here and checked in the one place the loop can
+    #: decide to end; an unearned win is recorded as running-with-reason.
+    required_gates: tuple[str, ...] = ()
+    #: Escape hatch for a goal whose target is legitimately exactly zero. At
+    #: zero-on-zero any comparison expression is satisfied vacuously, so a loop
+    #: with `stop_when: "objective < target"` stops on iteration one having
+    #: learned nothing (eip8200-research displayed those near-zero gaps as
+    #: "-0"). The default rule refuses a zero target outright via
+    #: `distance_to`; this flag covers custom `stop_when` expressions. Set it
+    #: true only when zero really is the target.
+    allow_degenerate_target: bool = False
 
     def __post_init__(self):
         if self.direction not in DIRECTIONS:
@@ -202,9 +219,16 @@ class Goal:
         ns = self.namespace(measurements)
         ns["objective"] = expr.evaluate(self.objective, ns)
         ns["target"] = target
-        ns["distance"] = self.distance(measurements, target)
         if self.stop_when:
+            # A custom expression decides; the normalised distance is only
+            # injected when the expression reads it. Computing it anyway made
+            # a zero target refuse even a `stop_when` that never uses
+            # `distance` -- which is exactly the case allow_degenerate_target
+            # exists to arbitrate.
+            if "distance" in expr.names(self.stop_when):
+                ns["distance"] = self.distance(measurements, target)
             return bool(expr.evaluate(self.stop_when, ns))
+        ns["distance"] = self.distance(measurements, target)
         return ns["distance"] <= 0
 
     # -- construction ----------------------------------------------------
@@ -247,6 +271,27 @@ class Goal:
             confirmed_per_iteration=float(raw_floor.get("confirmed_per_iteration", 0.0)),
             over_iterations=int(raw_floor.get("over_iterations", 0)))
 
+        raw_gates = data.get("required_gates") or []
+        if not isinstance(raw_gates, list):
+            raise GoalError(
+                f"goal {gid!r}: required_gates must be a list of gate names, "
+                f"got {type(raw_gates).__name__}")
+        gates: list[str] = []
+        for name in raw_gates:
+            if not isinstance(name, str) or not name.strip():
+                raise GoalError(
+                    f"goal {gid!r}: required_gates entries must be nonempty "
+                    f"strings, got {name!r}")
+            if name in gates:
+                raise GoalError(f"goal {gid!r}: required_gates names {name!r} twice")
+            gates.append(name)
+
+        degenerate = data.get("allow_degenerate_target", False)
+        if not isinstance(degenerate, bool):
+            raise GoalError(
+                f"goal {gid!r}: allow_degenerate_target must be a bool, got "
+                f"{type(degenerate).__name__}")
+
         return cls(
             id=gid,
             objective=objective,
@@ -256,4 +301,6 @@ class Goal:
             description=data.get("description", ""),
             derived=dict(data.get("derived") or {}),
             stop_when=data.get("stop_when"),
-            yield_floor=floor)
+            yield_floor=floor,
+            required_gates=tuple(gates),
+            allow_degenerate_target=degenerate)

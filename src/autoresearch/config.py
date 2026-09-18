@@ -50,7 +50,7 @@ DISTIL_EVERY = 5
 
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
-              "skills", "upstream", "brain"}
+              "skills", "upstream", "brain", "plugins", "session"}
 
 #: Option keys a `[brain]` table may carry for the built-in TypeSafe brain
 #: (`value = "typesafe"`), beyond `default` / role names / `authorize_spend`.
@@ -302,6 +302,16 @@ class DomainConfig:
             problems.append(
                 f"two tracks share an id prefix {prefixes}; entry ids would be "
                 "ambiguous and the wrong track would answer for them")
+        # A required gate no track defines would hold the loop open forever --
+        # should_stop would run with the stop refused and nothing able to pass
+        # it. Checked here because Goal cannot see the tracks at load.
+        gate_names = {g.name for t in self.tracks.values() for g in t.gates}
+        for name in self.goal.required_gates:
+            if name not in gate_names:
+                problems.append(
+                    f"goal.required_gates names {name!r}, which no track's "
+                    f"[[tracks.gates]] defines; declared: "
+                    f"{sorted(gate_names) or '(none)'}")
         return problems
 
     # -- construction -----------------------------------------------------
@@ -396,8 +406,8 @@ class DomainConfig:
             distil_every=_distil_every(coordinator),
             dispatch=_dispatch_mode(coordinator),
             plugins=_plugins(data),
-            session_parent=_session(data)["parent"],
-            session_settle_hours=_session(data)["settle_hours"],
+            session_parent=_session(data.get("session") or {})["parent"],
+            session_settle_hours=_session(data.get("session") or {})["settle_hours"],
             hardware={name: Requirement.from_dict(name, spec)
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)

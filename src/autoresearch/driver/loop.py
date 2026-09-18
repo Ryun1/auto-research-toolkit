@@ -230,6 +230,29 @@ class Coordinator:
         return runs_mod.best_run(runs_mod.read_all(self.config.paths.runs),
                                  self.config.goal)
 
+    def _unmet_required_gates(self, best) -> tuple[str, ...]:
+        """Required gate names the best run's owning entry has not passed.
+
+        `best` carries the run record, and the record names its entry; the
+        entry carries the gate outcomes. A run that names no entry, or names
+        one the store cannot produce, counts as every gate unmet: a
+        measurement nobody can trace to its evidence cannot inherit a proof.
+
+        Empty when the goal declares no `required_gates`, so a goal without
+        the linkage stops exactly as before."""
+        required = self.config.goal.required_gates
+        if not required or best is None:
+            return ()
+        record = best[1]
+        if not record.entry:
+            return required
+        try:
+            entry = self.store.load(record.entry)
+        except Exception:            # unreadable evidence is no evidence
+            return required
+        states = {g.name: g.state for g in entry.gates}
+        return tuple(name for name in required if states.get(name) != "passed")
+
     @staticmethod
     def _norm_title(title) -> str:
         return str(title).strip().lower()
@@ -1327,7 +1350,8 @@ class Coordinator:
             target=it.target,
             verdicts_per_iteration=[i.confirmed for i in self.history
                                     if i.kind == "iteration"] + [it.confirmed],
-            budgets=[self.domain_budget])
+            budgets=[self.domain_budget],
+            unmet_required_gates=self._unmet_required_gates(best))
         outstanding = [e for e, v in it.verdicts.items() if v == "assigned"]
         if self.config.dispatch == "native" and outstanding:
             # The work this iteration dispatched is happening in native

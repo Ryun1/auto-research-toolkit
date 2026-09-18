@@ -386,19 +386,49 @@ class StopDecision:
 
 
 def should_stop(config, *, measurements=None, target=None,
-                verdicts_per_iteration=None, budgets=()) -> StopDecision:
+                verdicts_per_iteration=None, budgets=(),
+                unmet_required_gates=()) -> StopDecision:
     """Met, yielding below the floor, or out of budget -- otherwise keep going.
 
     This is deliberately the only place the loop can decide to end, so "when do
     we stop" has one answer rather than one per caller.
+
+    Two guards keep the met exit honest. `unmet_required_gates` carries the
+    required gate names the best run's owning entry has not passed: a goal may
+    demand more than its objective expression shows (eip8200-research recorded
+    `goal-met` while its goal text required a kernel-checked proof), and a win
+    the goal text does not allow is recorded as running-with-reason, never as
+    a win. And a met that is only zero meeting zero is refused unless
+    `goal.allow_degenerate_target` -- every comparison expression is satisfied
+    vacuously at zero-on-zero, so the loop would stop on iteration one having
+    learned nothing.
     """
     goal = config.goal
     if measurements is not None and target is not None:
         try:
             if goal.is_met(measurements, target):
                 value = goal.objective_value(measurements)
+                # `.6g`, not `,.0f`: the old format rounded a 0.1 gap to "-0",
+                # which is how eip8200-research's record showed a goal-met
+                # line that explained nothing.
+                if unmet_required_gates:
+                    return StopDecision(
+                        RUNNING,
+                        f"objective {value:.6g} meets target {target:.6g} but "
+                        f"required gate(s) not passed: "
+                        f"{', '.join(unmet_required_gates)} -- the goal text "
+                        "demands evidence the expression cannot show")
+                if (value == 0 and target == 0
+                        and not goal.allow_degenerate_target):
+                    return StopDecision(
+                        RUNNING,
+                        f"objective {value:.6g} meets target {target:.6g} "
+                        "only at zero-on-zero, which any stop_when expression "
+                        "satisfies vacuously; set "
+                        "`allow_degenerate_target: true` on the goal if zero "
+                        "really is the target")
                 return StopDecision(
-                    MET, f"objective {value:,.0f} meets target {target:,.0f}")
+                    MET, f"objective {value:.6g} meets target {target:.6g}")
         except Exception:            # a malformed measurement is not a stop
             pass
 
