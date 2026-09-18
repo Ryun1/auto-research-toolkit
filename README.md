@@ -661,17 +661,34 @@ route any role to any agent that can take a prompt and print a reply:
 # domain.toml
 [brain]
 default = "claude"                 # the built-in SDK brain
+judge   = "typesafe"               # the built-in TypeSafe (Jev) brain
 curator = ["pi", "-p"]             # any command
 scout   = ["bin/my-researcher"]
 ```
 
-**The SDK brain is fail-closed, because it is the one backend that spends API
-money.** A domain must name it deliberately — `[brain] authorize_spend = true`
-— or the caller must pass `--allow-paid-brain` to `ar loop`, `ar research` or
-`ar skill distil`. An absent `[brain]` table used to mean "one SDK brain for
-every role"; it now means a refusal that names both remedies. A domain that
-routes every role to commands never approaches the meter and needs no
-authorization.
+**The built-in brains are fail-closed, because they are the backends that
+spend API money.** A domain must name one deliberately —
+`[brain] authorize_spend = true` — or the caller must pass
+`--allow-paid-brain` to `ar loop`, `ar research` or `ar skill distil`. An
+absent `[brain]` table used to mean "one SDK brain for every role"; it now
+means a refusal that names both remedies. A domain that routes every role to
+commands never approaches the meter and needs no authorization.
+
+**The `typesafe` brain** (`TypeSafeBrain` in `driver/brain.py`) serves roles
+through [TypeSafe's](https://docs.typesafe.ai/introduction) System One API:
+Jev evaluates typed questions (`choice`, `score`, `noul`) against the brief
+as a state and returns structured answers — no text generation, no tools. It
+serves exactly the two roles that are pure judgement over a brief the
+coordinator already assembled — `judge` (one choice question per top-ranked
+entry; answers become the veto list `apply_veto` already polices, with the
+probabilities as the recorded justification) and `qc` (one noul question per
+mechanical problem, keeping the real ones; it cannot file harness debt, which
+needs a repro, so it never does). Every other role refuses at ask time, and
+the phase records the refusal. It reads `TYPESAFE_API_KEY` (refusing at
+startup without it — a backend the loop cannot call is a loop that cannot
+start) and prices its cost from the API's token usage when the table supplies
+`typesafe_input_per_mtok` / `typesafe_output_per_mtok`; unpriced, the cost is
+unknown and the shared ceiling treats it like any other backend's.
 
 The command contract (`ProcessBrain` in `driver/brain.py`) mirrors the measure
 command's: the brief arrives on **stdin**, `{role}`, `{prompt_file}` (the
@@ -756,7 +773,8 @@ executed identity, or ranked eligibility.
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:
 `generator`, `judge`, `worker`, `curator`, `librarian`, `qc`, `scout`. The brain
 is swappable -- `SDKBrain` runs them through the Claude Agent SDK,
-`ProcessBrain` runs them through any command (see above), and `ScriptedBrain`
+`TypeSafeBrain` serves `judge` and `qc` through TypeSafe's System One API (see
+above), `ProcessBrain` runs them through any command (see above), and `ScriptedBrain`
 runs the whole loop with no model, which is what makes `ar loop` a unit test
 rather than a bill. `docs/ARCHITECTURE.md` diagrams what each role reads, what
 it may return, and where the coordinator refuses it.

@@ -39,6 +39,7 @@ flowchart TB
     subgraph brainlayer["Brain (the one seam)"]
         direction LR
         sdk["SDKBrain<br/>Claude Agent SDK"]
+        typesafe["TypeSafeBrain<br/>Jev: judge, qc"]
         process["ProcessBrain<br/>any command"]
         scripted["ScriptedBrain<br/>offline, no model"]
     end

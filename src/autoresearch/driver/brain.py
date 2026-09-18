@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pathlib
 import re
 import subprocess
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -338,6 +341,261 @@ class ProcessBrain:
                      raw=result.stdout, cost_usd=cost, backend=self.name)
 
 
+class TypeSafeBrain:
+    """Jev, through the TypeSafe System One API: a dedicated third backend.
+
+    Jev is not a text model. It evaluates typed questions (`choice`, `score`,
+    `noul`) against a state and returns structured answers -- no prose, no
+    tools, no agent loop. That makes it a poor generator, worker, scout or
+    librarian (all four must produce text or act), and a good fit for the two
+    roles that are pure judgement over a brief the coordinator already
+    assembled:
+
+    - `judge` -- one `choice` question per top-ranked entry (promote / demote /
+      none), converted to the veto list `apply_veto` already polices. The
+      justification the contract demands is synthesized from the calibrated
+      probabilities, so it is recorded evidence, not generated prose. A veto
+      fires only when the chosen action out-probabilities `none`.
+    - `qc` -- one `noul` question per mechanical problem the checks already
+      raised, keeping the real ones. It cannot file harness debt: a debt item
+      needs a repro the model would have to compose, and Jev composes nothing.
+      `harness_debt` is therefore always empty, visibly.
+
+    Every other role refuses at ask time -- a refusal the phase records, never
+    an empty result that reads as a clean pass (H98). The brief arrives as
+    JSON (the coordinator's `_brief`) and is sent as the API's `state`; the
+    coordinator's instructions ride along inside it.
+
+    Fail-closed like the SDK brain: building this brain without
+    `TYPESAFE_API_KEY` set is a refusal at build, and `[brain]` must say
+    `authorize_spend = true` before `build_brain` will build it at all.
+
+    Cost: the API reports token usage, not dollars. Without per-mtok prices
+    (`typesafe_input_per_mtok` / `typesafe_output_per_mtok`) the cost is
+    unknown, and the shared ledger treats an unknown cost under a finite
+    ceiling exactly as it does for every other backend. A brief that maps to
+    no questions (an empty ranking, no mechanical problems) returns the
+    role's empty contract without spending an API call -- nothing to judge is
+    a measurement, not a skip.
+    """
+
+    #: Roles this backend can serve; everything else refuses.
+    SUPPORTED = (Role.JUDGE, Role.QC)
+
+    #: Top-ranked entries the judge reviews, one question each. A reorder from
+    #: position 200 is noise whatever the model says, and the shortlist this
+    #: feeds is `k` slots (the fanout, typically 3).
+    JUDGE_REVIEW_CAP = 12
+
+    API_URL = "https://api.typesafe.ai/v1/systemone"
+
+    def __init__(self, model="jev-latest", url=None, input_per_mtok=None,
+                 output_per_mtok=None, ledger: CostLedger | None = None,
+                 timeout=30.0, name="typesafe", api_key=None):
+        self.model = model
+        self.url = url or self.API_URL
+        self.input_per_mtok = input_per_mtok
+        self.output_per_mtok = output_per_mtok
+        self.ledger = ledger
+        self.timeout = timeout
+        self.name = name
+        self.spent_usd = 0.0
+        self.api_key = api_key or os.environ.get("TYPESAFE_API_KEY")
+        if not self.api_key:
+            raise AutoresearchError(
+                "the typesafe brain is selected but TYPESAFE_API_KEY is not "
+                "set; the loop cannot start with a backend it cannot call")
+
+    # -- the Brain protocol ---------------------------------------------------
+
+    def ask(self, role: str, brief: str, *, workspace=None,
+            max_turns=None) -> Reply:
+        if role not in self.SUPPORTED:
+            raise AutoresearchError(
+                f"the typesafe brain cannot serve {role!r}: Jev answers typed "
+                f"questions, it does not generate text or run tools. Roles it "
+                f"serves: {', '.join(self.SUPPORTED)}.")
+        try:
+            state = json.loads(brief) if isinstance(brief, str) else brief
+        except ValueError:
+            state = brief          # a prose brief is a valid state too
+        questions = self._questions(role, state)
+        if not questions:
+            return Reply(role=role, data=self._contract(role, state, {}),
+                         raw="", cost_usd=0.0, backend=self.name)
+        if self.ledger is not None:
+            remaining = self.ledger.remaining()
+            if remaining is not None and remaining <= 0:
+                raise AutoresearchError("monetary ceiling exhausted")
+        response = self._post({"state": state, "model": self.model,
+                               "questions": questions})
+        answers = response.get("answers")
+        if not isinstance(answers, dict):
+            raise AutoresearchError(f"typesafe ({role}) returned no answers map")
+        missing = set(questions) - set(answers)
+        if missing:
+            raise AutoresearchError(
+                f"typesafe ({role}) did not answer {sorted(missing)}")
+        cost = self._cost(response.get("usage"))
+        if self.ledger is not None:
+            self.ledger.spend(cost)
+        self.spent_usd = (None if cost is None or self.spent_usd is None
+                          else self.spent_usd + cost)
+        return Reply(role=role, data=self._contract(role, state, answers),
+                     raw=json.dumps(response, default=str), cost_usd=cost,
+                     backend=self.name)
+
+    # -- questions per role ----------------------------------------------------
+
+    def _questions(self, role: str, state) -> dict:
+        state = state if isinstance(state, dict) else {}
+        if role == Role.JUDGE:
+            return self._judge_questions(state)
+        return self._qc_questions(state)
+
+    def _judge_questions(self, state: dict) -> dict:
+        ranking = state.get("ranking") or []
+        reserves = set(state.get("explore_reserve") or []) \
+            | set(state.get("coverage_reserve") or [])
+        questions = {}
+        for i, row in enumerate(ranking[:self.JUDGE_REVIEW_CAP]):
+            entry_id = str(row.get("id", "")).strip()
+            if not entry_id:
+                continue
+            note = ""
+            if entry_id in reserves:
+                note = (" It takes an explore/coverage reserve slot, which "
+                        "sits low on score by design -- not by itself a "
+                        "reason to demote.")
+            questions[f"reorder_{entry_id}"] = {
+                "type": "choice",
+                "instructions": (
+                    f"Entry {entry_id} ({row.get('title', '')!r}) ranks at "
+                    f"position {i + 1} of {len(ranking)} with score "
+                    f"{row.get('score')}.{note} Should the ranking be "
+                    "reordered for this entry?"),
+                "criteria": {
+                    "promote": "The recorded evidence justifies ranking it first",
+                    "demote": "The recorded evidence justifies ranking it last",
+                    "none": "The formula's ordering is right",
+                },
+            }
+        return questions
+
+    def _qc_questions(self, state: dict) -> dict:
+        questions = {}
+        for i, problem in enumerate(state.get("mechanical_problems") or []):
+            questions[f"problem_{i}"] = {
+                "type": "noul",
+                "instructions": (
+                    "Is this a real defect in the harness rather than a "
+                    f"transient or benign condition? Problem: "
+                    f"{str(problem)[:500]}"),
+                "criteria": {
+                    "true": "A real defect worth recording",
+                    "false": "Transient or benign; not a defect",
+                },
+            }
+        return questions
+
+    # -- answers to the role contract -------------------------------------------
+
+    def _contract(self, role: str, state, answers: dict):
+        state = state if isinstance(state, dict) else {}
+        if role == Role.JUDGE:
+            return self._judge_vetoes(state, answers)
+        return self._qc_contract(state, answers)
+
+    def _judge_vetoes(self, state: dict, answers: dict) -> list:
+        ranking_ids = {str(row.get("id")) for row in state.get("ranking") or []}
+        vetoes = []
+        for key, answer in answers.items():
+            if not key.startswith("reorder_"):
+                continue
+            entry_id = key[len("reorder_"):]
+            if entry_id not in ranking_ids:
+                continue
+            action = answer.get("choice")
+            if action not in ("promote", "demote"):
+                continue
+            probabilities = answer.get("probabilities") or {}
+            if probabilities.get(action, 0) <= probabilities.get("none", 0):
+                continue
+            confidence = answer.get("confidence")
+            confidence = (f", confidence {confidence:.2f}"
+                          if isinstance(confidence, (int, float)) else "")
+            vetoes.append({
+                "entry_id": entry_id,
+                "action": action,
+                "justification": (
+                    f"jev {self.model}: p={probabilities.get(action, 0):.2f}"
+                    f"{confidence} for {action} over none"),
+            })
+        return vetoes
+
+    def _qc_contract(self, state: dict, answers: dict) -> dict:
+        problems = state.get("mechanical_problems") or []
+        kept = []
+        for key, answer in answers.items():
+            if not key.startswith("problem_"):
+                continue
+            noul = answer.get("noul")
+            if isinstance(noul, bool) or not isinstance(noul, (int, float)):
+                raise AutoresearchError(
+                    f"typesafe (qc) returned a non-numeric noul for {key}: "
+                    f"{noul!r}")
+            if noul > 0.5:
+                kept.append(problems[int(key[len("problem_"):])])
+        # Jev generates no text, so it cannot compose the repro a harness-debt
+        # filing demands; it triages, it does not report. Always empty, on
+        # purpose, so the shape stays what the coordinator's contract expects.
+        return {"problems": kept, "harness_debt": [],
+                "verdict": "problems" if kept else "clean"}
+
+    # -- the wire ----------------------------------------------------------------
+
+    def _cost(self, usage) -> float | None:
+        """Dollars from token usage when the domain priced the model; unknown
+        (None) otherwise. The ledger, not this brain, decides what an unknown
+        cost means under a ceiling."""
+        if not isinstance(usage, dict) \
+                or self.input_per_mtok is None or self.output_per_mtok is None:
+            return None
+        tokens_in = usage.get("input_tokens")
+        tokens_out = usage.get("output_tokens")
+        if not isinstance(tokens_in, (int, float)) \
+                or not isinstance(tokens_out, (int, float)):
+            return None
+        return (tokens_in * self.input_per_mtok
+                + tokens_out * self.output_per_mtok) / 1e6
+
+    def _post(self, payload: dict) -> dict:
+        """One POST to the System One endpoint. A seam of its own so tests can
+        stand in for the wire without an HTTP stub."""
+        request = urllib.request.Request(
+            self.url, data=json.dumps(payload, default=str).encode(),
+            headers={"Authorization": f"Bearer {self.api_key}",
+                     "Content-Type": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as r:
+                body = r.read().decode()
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read()[:200].decode(errors="replace")
+            except OSError:
+                detail = ""
+            raise AutoresearchError(
+                f"typesafe request failed: HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise AutoresearchError(f"typesafe request failed: {exc}") from exc
+        try:
+            return json.loads(body)
+        except ValueError as exc:
+            raise AutoresearchError(
+                f"typesafe returned unparsable JSON: {body[:200]!r}") from exc
+
+
 class RoutingBrain:
     """Dispatch by role: `routes[role]` when the domain named one, else the
     default. The loop never learns a backend exists."""
@@ -357,43 +615,54 @@ def build_brain(config, model: str | None = None,
                 allow_paid: bool | None = None):
     """Build the brain a domain's `[brain]` table describes.
 
-    `"claude"` names the built-in SDK brain; any list of strings is a command
-    per the `ProcessBrain` contract. Every backend shares one `CostLedger`, so
-    the ceiling is campaign-wide no matter how many backends can spend.
+    `"claude"` names the built-in SDK brain, `"typesafe"` the built-in
+    TypeSafe (Jev) brain; any list of strings is a command per the
+    `ProcessBrain` contract. Every backend shares one `CostLedger`, so the
+    ceiling is campaign-wide no matter how many backends can spend.
 
-    The SDK brain spends API money, so it is **fail-closed**: a domain must
-    name it deliberately with `[brain] authorize_spend = true`, or the caller
-    must pass `allow_paid=True` (`--allow-paid-brain`). An absent table is
-    read as a decision for the SDK brain -- which is now a refusal, not a
-    default bill.
+    Both built-in brains spend API money, so they are **fail-closed**: a
+    domain must name one deliberately with `[brain] authorize_spend = true`,
+    or the caller must pass `allow_paid=True` (`--allow-paid-brain`). An
+    absent table is read as a decision for the SDK brain -- which is now a
+    refusal, not a default bill.
     """
     spec = config.brain or {}
     # The flag GRANTS; it never revokes. argparse's store_true default is
     # False, not None, so a caller that did not pass the flag must not undo a
     # domain's own `authorize_spend = true`.
     authorized = bool(spec.get("authorize_spend", False)) or bool(allow_paid)
-    wants_sdk = [key for key, value in
-                 (("default", spec.get("default", "claude")),
-                  *((role, value) for role, value in spec.items()
-                    if role not in ("default", "authorize_spend")))
-                 if value == "claude"]
-    if wants_sdk and not authorized:
+    paid = ("claude", "typesafe")
+    # Role routes only: `default`, `authorize_spend` and the `typesafe_*`
+    # options are settings, never backends.
+    roles = {key: value for key, value in spec.items()
+             if key not in ("default", "authorize_spend")
+             and not key.startswith("typesafe_")}
+    wants_paid = [key for key, value in
+                  [("default", spec.get("default", "claude")), *roles.items()]
+                  if value in paid]
+    if wants_paid and not authorized:
         raise AutoresearchError(
-            "the built-in Claude SDK brain spends API money and is refused "
-            "until you say so: set `[brain] authorize_spend = true` in "
-            "domain.toml, or pass --allow-paid-brain. Route the roles that "
-            "need judgement to native agents with "
+            "the built-in Claude SDK and TypeSafe brains spend API money and "
+            "are refused until you say so: set `[brain] authorize_spend = "
+            "true` in domain.toml, or pass --allow-paid-brain. Route the "
+            "roles that need judgement to native agents with "
             "`brain.<role> = [\"<command>\"]` instead; "
-            f"table keys naming the SDK brain: {sorted(set(wants_sdk))}")
+            f"table keys naming a paid brain: {sorted(set(wants_paid))}")
     ledger = CostLedger(max_budget_usd if max_budget_usd is not None
                         else config.policy.spend_ceiling)
 
     def one(value):
         if value == "claude":
             return SDKBrain(config, model=model, ledger=ledger)
+        if value == "typesafe":
+            return TypeSafeBrain(
+                model=spec.get("typesafe_model", "jev-latest"),
+                url=spec.get("typesafe_url"),
+                input_per_mtok=spec.get("typesafe_input_per_mtok"),
+                output_per_mtok=spec.get("typesafe_output_per_mtok"),
+                ledger=ledger)
         return ProcessBrain(value, root=config.paths.root, ledger=ledger)
 
     default = one(spec.get("default", "claude"))
-    routes = {role: one(value) for role, value in spec.items()
-              if role not in ("default", "authorize_spend")}
+    routes = {role: one(value) for role, value in roles.items()}
     return RoutingBrain(routes, default)

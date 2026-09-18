@@ -52,6 +52,13 @@ _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
               "skills", "upstream", "brain"}
 
+#: Option keys a `[brain]` table may carry for the built-in TypeSafe brain
+#: (`value = "typesafe"`), beyond `default` / role names / `authorize_spend`.
+#: An unrecognized `typesafe_*` key is refused at load, not ignored -- a
+#: misspelled price is a cost meter that silently reads zero.
+TYPESAFE_BRAIN_KEYS = {"typesafe_model", "typesafe_url",
+                       "typesafe_input_per_mtok", "typesafe_output_per_mtok"}
+
 
 @dataclass
 class Track:
@@ -175,9 +182,10 @@ class DomainConfig:
     #: absent directory reads as zero skills, never as an error.
     skills: Skills = field(default_factory=Skills)
     coordinator: dict = field(default_factory=dict)
-    #: which backend serves each role. `"claude"` names the built-in SDK brain;
-    #: a list of strings is a command run per the ProcessBrain contract in
-    #: `driver/brain.py`. Validated at load -- an unknown role or placeholder
+    #: which backend serves each role. `"claude"` names the built-in SDK brain,
+    #: `"typesafe"` the built-in TypeSafe (Jev) brain; a list of strings is a
+    #: command run per the ProcessBrain contract in `driver/brain.py`.
+    #: Validated at load -- an unknown role or placeholder
     #: here is a loop that cannot start, so say so before anything spends.
     brain: dict = field(default_factory=dict)
     #: share of each shortlist reserved for the largest `impact`, ignoring
@@ -400,12 +408,15 @@ class DomainConfig:
 def _brain_spec(data) -> dict:
     """Read and check the top-level `brain` table.
 
-    Keys are `default`, a role name, or `authorize_spend`; values are
-    `"claude"` (the built-in SDK brain), a non-empty list of strings -- the
-    command the ProcessBrain contract runs -- or, for `authorize_spend`, a
-    boolean. The SDK brain is fail-closed: without `authorize_spend = true`,
-    a domain naming it is refused at load, because a default that can incur
-    API charges without saying so is a bill waiting to happen.
+    Keys are `default`, a role name, `authorize_spend`, or one of
+    `TYPESAFE_BRAIN_KEYS`; values are `"claude"` (the built-in SDK brain),
+    `"typesafe"` (the built-in TypeSafe/Jev brain), a non-empty list of
+    strings -- the command the ProcessBrain contract runs -- or, for
+    `authorize_spend` and the `typesafe_*` options, a bool / string / number
+    per key. Both built-in brains can incur API charges and are fail-closed:
+    without `authorize_spend = true`, a domain naming one is refused at load,
+    because a default that can spend without saying so is a bill waiting to
+    happen.
     """
     from .driver.brain import Role
 
@@ -417,18 +428,34 @@ def _brain_spec(data) -> dict:
                     f"brain.authorize_spend: must be true or false, got {value!r}")
             spec[key] = value
             continue
+        if key in TYPESAFE_BRAIN_KEYS:
+            if key in ("typesafe_model", "typesafe_url") \
+                    and (not isinstance(value, str) or not value.strip()):
+                raise ConfigError(f"brain.{key}: must be a non-empty string")
+            if key.endswith("_per_mtok") \
+                    and (isinstance(value, bool)
+                         or not isinstance(value, (int, float)) or value < 0):
+                raise ConfigError(
+                    f"brain.{key}: must be a nonnegative number of US dollars "
+                    f"per million tokens, got {value!r}")
+            spec[key] = value
+            continue
+        if key.startswith("typesafe_"):
+            raise ConfigError(
+                f"brain.{key}: unknown typesafe option; allowed: "
+                f"{sorted(TYPESAFE_BRAIN_KEYS)}")
         if key != "default" and key not in Role.ALL:
             raise ConfigError(
                 f"brain.{key}: not a role; keys are 'default' or one of "
                 f"{', '.join(Role.ALL)}")
-        if value == "claude":
+        if value in ("claude", "typesafe"):
             spec[key] = value
             continue
         if (not isinstance(value, list) or not value
                 or not all(isinstance(part, str) for part in value)):
             raise ConfigError(
-                f"brain.{key}: must be \"claude\" or a non-empty list of "
-                f"strings, got {value!r}")
+                f"brain.{key}: must be \"claude\", \"typesafe\", or a "
+                f"non-empty list of strings, got {value!r}")
         unknown = ({match for part in value
                     for match in re.findall(r"\{(\w+)\}", part)}
                    - BRAIN_PLACEHOLDERS)
