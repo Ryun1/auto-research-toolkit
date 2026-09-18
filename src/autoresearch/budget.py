@@ -173,7 +173,9 @@ def require_money(config, spent_money: float | None) -> None:
     if ceiling is None:
         return
     if spent_money is None:
-        raise AutoresearchError("unknown monetary usage; reconcile measured costs before spending")
+        raise AutoresearchError(
+            "unknown monetary usage; reconcile measured costs before spending "
+            "-- unpriced spend may be waiting in state/usage.jsonl (`ar usage list`)")
     if spent_money >= ceiling:
         raise AutoresearchError("campaign monetary ceiling exhausted")
 
@@ -199,6 +201,20 @@ def recorded_usage(config) -> dict[str, float | None]:
                 usage["gpu_hours"] += usage_number(row.get("gpu_hours", 0))
             except (ValueError, TypeError) as exc:
                 raise AutoresearchError(f"invalid external GPU usage in attempt {row['id']}: {exc}") from exc
+    # A tombstoned attempt's consumption is an asserted figure, not a
+    # measurement -- but it is charged exactly as stated, because the record
+    # it replaced could not declare its own.
+    for tomb in attempts.tombstones(config):
+        usage["runs"] += tomb["charged_runs"]
+    # Out-of-band spend -- a curator's decision API, a hand-paid rental, any
+    # spender the brain's cost file never saw -- is money all the same. An
+    # unpriced row leaves the ceiling unknown, never free.
+    from . import usage as usage_mod
+    ledger_money, unpriced = usage_mod.effective(config)
+    if unpriced:
+        usage["money"] = None
+    elif usage["money"] is not None and ledger_money is not None:
+        usage["money"] += ledger_money
     directory = config.paths.iterations
     for path in sorted(directory.glob("*.json")):
         try:

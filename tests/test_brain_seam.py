@@ -120,7 +120,7 @@ def test_roles_route_to_the_backend_the_domain_named(sandbox):
 def test_build_brain_routes_per_role_and_shares_one_ceiling(sandbox):
     from autoresearch.driver.brain import ProcessBrain, SDKBrain, build_brain
     sandbox.brain = {"default": "claude", "curator": echo_command()}
-    brain = build_brain(sandbox, max_budget_usd=5.0)
+    brain = build_brain(sandbox, max_budget_usd=5.0, allow_paid=True)
     assert isinstance(brain.routes["curator"], ProcessBrain)
     assert isinstance(brain.default, SDKBrain)
     # Both backends read the same ledger, so a ceiling is campaign-wide
@@ -131,7 +131,7 @@ def test_build_brain_routes_per_role_and_shares_one_ceiling(sandbox):
 def test_spend_through_one_backend_shrinks_the_other_backend_s_ceiling(sandbox):
     from autoresearch.driver.brain import build_brain
     sandbox.brain = {"default": "claude", "curator": echo_command()}
-    brain = build_brain(sandbox, max_budget_usd=1.0)
+    brain = build_brain(sandbox, max_budget_usd=1.0, allow_paid=True)
     reply = brain.ask("curator", "[]")
     assert reply.cost_usd == 0.25
     assert brain.default.ledger.remaining() == pytest.approx(0.75)
@@ -140,7 +140,7 @@ def test_spend_through_one_backend_shrinks_the_other_backend_s_ceiling(sandbox):
 def test_overrides_only_table_still_gets_a_default(sandbox):
     from autoresearch.driver.brain import ProcessBrain, RoutingBrain, build_brain
     sandbox.brain = {"curator": echo_command()}
-    brain = build_brain(sandbox)
+    brain = build_brain(sandbox, allow_paid=True)
     assert isinstance(brain, RoutingBrain)
     assert isinstance(brain.routes["curator"], ProcessBrain)
     assert brain.routes.get("judge") is None, "judge falls to the default brain"
@@ -193,3 +193,57 @@ def test_brain_table_rejects_a_malformed_command():
 def test_brain_table_rejects_an_unknown_placeholder():
     with pytest.raises(ConfigError, match="unknown placeholder.*promt_file"):
         _brain_spec({"curator": ["agent", "--prompt", "{promt_file}"]})
+
+
+# -- the SDK brain is fail-closed: API money is authorized, not defaulted ----
+
+def test_an_absent_brain_table_refuses_the_sdk_brain(sandbox):
+    """The incumbent default was one SDK brain for every role -- which meant
+    `ar loop` could start spending API money without anyone saying so. Now the
+    absence is a refusal that names both remedies."""
+    from autoresearch.driver.brain import build_brain
+    with pytest.raises(AutoresearchError, match="authorize_spend"):
+        build_brain(sandbox)
+    with pytest.raises(AutoresearchError, match="allow-paid-brain"):
+        build_brain(sandbox)
+
+
+def test_authorization_is_explicit_from_config_or_flag(sandbox):
+    from autoresearch.driver.brain import SDKBrain, build_brain
+    sandbox.brain = {"authorize_spend": True}
+    assert isinstance(build_brain(sandbox).default, SDKBrain)
+    sandbox.brain = {}
+    assert isinstance(build_brain(sandbox, allow_paid=True).default, SDKBrain)
+
+
+def test_the_flag_grants_and_never_revokes_domain_authorization(sandbox):
+    """argparse's store_true default is False, not None: a plain `ar loop`
+    must not undo the domain's own `authorize_spend = true`."""
+    from autoresearch.driver.brain import SDKBrain, build_brain
+    sandbox.brain = {"authorize_spend": True}
+    assert isinstance(build_brain(sandbox, allow_paid=False).default, SDKBrain)
+
+
+def test_authorize_spend_must_be_a_boolean():
+    from autoresearch.config import ConfigError, _brain_spec
+    with pytest.raises(ConfigError, match="authorize_spend"):
+        _brain_spec({"authorize_spend": "yes"})
+    assert _brain_spec({"authorize_spend": True}) == {"authorize_spend": True}
+
+
+def test_a_process_brain_domain_needs_no_authorization(sandbox):
+    """A domain that routes every role to commands never approaches the API
+    meter, so the fail-closed gate must not be in its way."""
+    from autoresearch.driver.brain import ProcessBrain, RoutingBrain, build_brain
+    sandbox.brain = {"default": echo_command()}
+    brain = build_brain(sandbox)
+    assert isinstance(brain, RoutingBrain)
+    assert isinstance(brain.default, ProcessBrain)
+
+
+def test_one_sdk_role_is_enough_to_require_authorization(sandbox):
+    from autoresearch.driver.brain import build_brain
+    sandbox.brain = {"default": echo_command(), "judge": "claude"}
+    with pytest.raises(AutoresearchError, match="judge"):
+        build_brain(sandbox)
+    assert build_brain(sandbox, allow_paid=True).routes["judge"].backend == "claude-sdk"

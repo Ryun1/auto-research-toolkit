@@ -50,7 +50,7 @@ DISTIL_EVERY = 5
 
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
-              "skills", "upstream"}
+              "skills", "upstream", "brain"}
 
 
 @dataclass
@@ -194,6 +194,13 @@ class DomainConfig:
     #: whether a phase runs at all, and discovering it was misspelled mid-loop
     #: costs the iteration that would have distilled.
     distil_every: int = DISTIL_EVERY
+    #: how dispatch hands work out. `"worker"` (default) runs workers in this
+    #: process through the brain; `"native"` reserves each card through the
+    #: external handoff and leaves the work to the surrounding harness's own
+    #: subagents -- no model dispatch, no API spend, verdicts applied by
+    #: `ar external complete`. Validated at load: a misspelled mode is a loop
+    #: that silently became a different loop.
+    dispatch: str = "worker"
     #: what each experiment class needs of the machine, checked before it runs
     hardware: dict = field(default_factory=dict)
     #: rentable classes, each costed only if someone measured its ratio
@@ -350,6 +357,7 @@ class DomainConfig:
             brain=_brain_spec(data.get("brain")),
             explore_fraction=_explore_fraction(coordinator),
             distil_every=_distil_every(coordinator),
+            dispatch=_dispatch_mode(coordinator),
             hardware={name: Requirement.from_dict(name, spec)
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)
@@ -360,14 +368,23 @@ class DomainConfig:
 def _brain_spec(data) -> dict:
     """Read and check the top-level `brain` table.
 
-    Keys are `default` or a role name; values are `"claude"` (the built-in SDK
-    brain) or a non-empty list of strings, the command the ProcessBrain
-    contract runs. Absent table means every role on the default backend.
+    Keys are `default`, a role name, or `authorize_spend`; values are
+    `"claude"` (the built-in SDK brain), a non-empty list of strings -- the
+    command the ProcessBrain contract runs -- or, for `authorize_spend`, a
+    boolean. The SDK brain is fail-closed: without `authorize_spend = true`,
+    a domain naming it is refused at load, because a default that can incur
+    API charges without saying so is a bill waiting to happen.
     """
     from .driver.brain import Role
 
     spec = {}
     for key, value in dict(data or {}).items():
+        if key == "authorize_spend":
+            if not isinstance(value, bool):
+                raise ConfigError(
+                    f"brain.authorize_spend: must be true or false, got {value!r}")
+            spec[key] = value
+            continue
         if key != "default" and key not in Role.ALL:
             raise ConfigError(
                 f"brain.{key}: not a role; keys are 'default' or one of "
@@ -424,6 +441,24 @@ def _distil_every(coordinator: dict) -> int:
         raise ConfigError(
             f"coordinator.distil_every must be a non-negative integer, got {raw!r}; "
             "0 turns distillation off")
+    return raw
+
+
+DISPATCH_MODES = ("worker", "native")
+
+
+def _dispatch_mode(coordinator: dict) -> str:
+    """Read and check `[coordinator] dispatch`.
+
+    `"worker"` runs this process's brain; `"native"` hands each shortlisted
+    card to the surrounding harness's own subagents through the external
+    handoff. Anything else is a loop that became a different loop at
+    dispatch time -- refused at load instead.
+    """
+    raw = coordinator.get("dispatch", "worker")
+    if raw not in DISPATCH_MODES:
+        raise ConfigError(
+            f"coordinator.dispatch must be one of {DISPATCH_MODES}, got {raw!r}")
     return raw
 
 

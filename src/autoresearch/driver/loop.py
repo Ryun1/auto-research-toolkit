@@ -539,9 +539,80 @@ class Coordinator:
         phase.seconds = time.time() - start
         return phase, shortlist
 
+    def _dispatch_native(self, it: Iteration, shortlist, budget, phase,
+                         start: float) -> Phase:
+        """Hand each shortlisted card to the surrounding harness's subagents.
+
+        No model runs in this process: the phase reserves a bounded external
+        assignment per card (claim, run ceiling, wall clock, workspace,
+        output contract) and leaves the work to native agents, which settle
+        through `ar external complete`. The run allocation is charged by
+        `attempts.reserve` against the claim and campaign ceilings at reserve
+        time -- a crash never refunds it -- so the iteration's runs meter is
+        deliberately not charged here a second time.
+
+        The iteration ends at dispatch: nothing it can curate or distil has
+        come back yet. `run_iteration` stops the loop on the outstanding
+        assignments; the next invocation's orient sees the applied verdicts.
+        """
+        from .. import external as external_mod
+
+        def max_runs_for(card) -> int:
+            """The card's declared cost, in run units, at least one."""
+            return max(1, int(card.terms.get("cost", 1.0)))
+
+        assigned = []
+        for card in shortlist:
+            reason = preflight.blocked_reason(
+                self.config, self.store.load(card.entry_id))
+            if reason is not None:
+                phase.detail.append(f"{card.entry_id}: {reason}")
+                it.verdicts[card.entry_id] = "blocked"
+                continue
+            try:
+                budget.spend("fanout", note=card.entry_id)
+                budget.spend("spawns", note=f"native worker {card.entry_id}")
+                # Parity with worker dispatch: the iteration's runs meter is
+                # charged for the allocation, while attempts.reserve charges
+                # the same units against the claim and campaign ceilings.
+                budget.spend("runs", max_runs_for(card), note=card.entry_id)
+            except BudgetExceeded as exc:
+                phase.detail.append(str(exc))
+                break
+            try:
+                claimed = self.claims.claim(
+                    card.entry_id,
+                    why=f"ranked #{shortlist.index(card) + 1} in iteration {it.n}")
+            except AutoresearchError as exc:
+                phase.detail.append(f"{card.entry_id}: {exc}")
+                continue
+            max_runs = max_runs_for(card)
+            try:
+                row = external_mod.assign(
+                    self.config, card.entry_id, self.session,
+                    claimed.claim.max_hours * 3600, max_runs)
+            except AutoresearchError as exc:
+                self.claims.release(card.entry_id, why=str(exc))
+                phase.detail.append(f"{card.entry_id}: {exc}")
+                continue
+            it.attempt_ids.append(row["id"])
+            it.verdicts[card.entry_id] = "assigned"
+            phase.did += 1
+            assigned.append(row)
+            ceiling = row.get("ceiling") or {}
+            phase.detail.append(
+                f"{card.entry_id}: assignment {row['id']} reserved "
+                f"{max_runs} run(s) until {ceiling.get('expires', '?')}; "
+                f"brief: ar external show {row['id']}")
+        phase.read = len(shortlist)
+        phase.seconds = time.time() - start
+        return phase
+
     def dispatch(self, it: Iteration, shortlist, budget, pool) -> Phase:
         phase = it.phase("dispatch")
         start = time.time()
+        if self.config.dispatch == "native":
+            return self._dispatch_native(it, shortlist, budget, phase, start)
         jobs = []
         dispatched_claims = {}
         dispatch_attempts = {}
@@ -1133,11 +1204,26 @@ class Coordinator:
                 _, shortlist = self.rank(it, budget)
             if self._time_left(it, budget, "dispatch"):
                 self.dispatch(it, shortlist, budget, pool)
-            self.curate(it, budget)
-            # Not clock-gated: like curate, it closes out work already paid for,
-            # and a verdict that never became knowledge is the run charged twice.
-            self.distil(it, budget)
-            self.qc(it, budget)
+            native = self.config.dispatch == "native"
+            outstanding = [e for e, v in it.verdicts.items() if v == "assigned"]
+            if native and outstanding:
+                # Nothing this iteration dispatched has come back: work is
+                # happening in native agents outside this process, so there is
+                # nothing to close out yet. Skipped, never silent -- the
+                # record names why, which is what makes this distinguishable
+                # from a phase that did not run.
+                for name, why in (
+                        ("curate", f"{len(outstanding)} assignment(s) outstanding"),
+                        ("distil", f"{len(outstanding)} assignment(s) outstanding"),
+                        ("qc", "settle assignments first; qc runs with the verdicts")):
+                    skipped = it.phase(name)
+                    skipped.detail.append(f"native dispatch: {why}")
+            else:
+                self.curate(it, budget)
+                # Not clock-gated: like curate, it closes out work already paid for,
+                # and a verdict that never became knowledge is the run charged twice.
+                self.distil(it, budget)
+                self.qc(it, budget)
         finally:
             # H91: teardown documented in a runbook and wired into no loop left
             # 64 of 64 merged worktrees on disk.
@@ -1152,6 +1238,16 @@ class Coordinator:
             verdicts_per_iteration=[i.confirmed for i in self.history
                                     if i.kind == "iteration"] + [it.confirmed],
             budgets=[self.domain_budget])
+        outstanding = [e for e, v in it.verdicts.items() if v == "assigned"]
+        if self.config.dispatch == "native" and outstanding:
+            # The work this iteration dispatched is happening in native
+            # agents outside this process. Looping now would re-rank a queue
+            # whose claims are still held; the honest stop names the handoff
+            # and the verb that resumes it.
+            decision = budget_mod.StopDecision(
+                "native-handoff",
+                detail=f"{len(outstanding)} assignment(s) outstanding: "
+                       "settle with `ar external complete`, then run `ar loop` again")
         it.stop, it.stop_detail = decision.reason, decision.detail
         it.objective = best[0] if best else None
         it.finished = _iso()

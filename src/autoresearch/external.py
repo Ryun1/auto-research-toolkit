@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+import os
 from pathlib import Path
 
 from . import attempts, budget, runs
@@ -128,6 +129,38 @@ def _appended(config, row, workspace, before):
     return directory, records
 
 
+def _fold_back_verdict(config, identity, entry_id, verdict):
+    """Fold an externally-settled verdict into the iteration record that
+    dispatched it.
+
+    A handoff iteration otherwise reads `confirmed=0` forever -- the verdict
+    was applied in another process, and the yield floor reads only iteration
+    records -- so a native loop that is actually repaying its machine time
+    gets stopped for yielding nothing. The record is the campaign's ledger:
+    updating the entry it dispatched from `assigned` to the settled verdict
+    is what makes the record true, not an amendment of it.
+    """
+    for path in sorted(config.paths.iterations.glob("*.json")):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue          # an unreadable record is refused loudly at startup
+        if identity not in (record.get("attempt_ids") or []):
+            continue
+        verdicts = record.get("verdicts") or {}
+        if verdicts.get(entry_id) != "assigned":
+            return
+        verdicts[entry_id] = verdict
+        record["verdicts"] = verdicts
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            temporary.write_text(json.dumps(record, indent=2, default=str))
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return
+
+
 def complete(config, identity, session, report):
     if not isinstance(report, dict):
         raise AutoresearchError("completion report must be a JSON object")
@@ -198,6 +231,7 @@ def complete(config, identity, session, report):
             verdict = coordinator._apply_verdict_locked(row["entry"], report, phase, receipt_id=identity)
             row.update(verdict=verdict, detail=phase.detail)
             attempts.save(config, row)
+            _fold_back_verdict(config, identity, row["entry"], verdict)
         return attempts.settle(config, identity, session, "completed",
                                consumed=row["charged_runs"], run_ids=row["run_ids"], verdict=verdict)
 

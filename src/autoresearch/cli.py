@@ -33,6 +33,7 @@ from . import render
 from . import runs as runs_mod
 from . import skills as skills_mod
 from . import upstream as upstream_mod
+from . import usage as usage_mod
 from .claims import Claims
 from .config import DomainConfig, discover
 from .entries import Entry, Event, Result, Store
@@ -572,13 +573,58 @@ def cmd_budget(args):
     return 0
 
 
+def cmd_usage(args):
+    """Out-of-band spend: record it, list it, price what was unknown."""
+    config = _load(args)
+    if args.usage_cmd == "record":
+        cost = None if args.unknown else args.cost
+        row = usage_mod.append(config, args.session, args.tool, args.kind,
+                               cost, args.note)
+        print(json.dumps(row, indent=2))
+        if cost is None:
+            print("unpriced: this spend is unknown, not free; a finite money "
+                  "ceiling refuses further spend until `ar usage reconcile`")
+        return 0
+    if args.usage_cmd == "list":
+        money, unpriced = usage_mod.effective(config)
+        rows = usage_mod.rows(config)
+        print(json.dumps({"rows": rows, "money": money,
+                          "unpriced": [r["lineno"] for r in unpriced]}, indent=2))
+        return 0
+    row = usage_mod.reconcile(config, args.lineno, args.cost, args.session,
+                              args.note)
+    print(json.dumps(row, indent=2))
+    return 0
+
+
+def _print_assignments(config, iteration):
+    """The native-handoff manifest: what the surrounding harness's subagents
+    are to pick up, one line each, with the receipt verb for each."""
+    from .attempts import load as load_attempt
+    rows = [load_attempt(config, attempt_id)
+            for attempt_id in iteration.attempt_ids]
+    if not rows:
+        return
+    print("\nassignments for native agents (work happens outside this "
+          "process; settle each with `ar external complete <id> --report "
+          "report.json --session <session>`, then run `ar loop` again):")
+    for row in rows:
+        ceiling = row.get("ceiling") or {}
+        print(f"  {row['id']}  entry {row['entry']}  "
+              f"runs<={row.get('reserved_runs')}  "
+              f"expires {ceiling.get('expires', '?')}  "
+              f"workspace {row.get('workspace', '?')}\n"
+              f"    brief: ar external show {row['id']}")
+
+
 def cmd_loop(args):
     """Run the coordinator. The unattended entry point."""
     from .driver.brain import build_brain
     from .driver.loop import Coordinator
 
     config = _load(args)
-    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd)
+    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd,
+                        allow_paid=getattr(args, "allow_paid_brain", None))
 
     coordinator = Coordinator(config, brain, session=args.session,
                               probe_target=_make_probe(config))
@@ -589,6 +635,8 @@ def cmd_loop(args):
     print(f"\n{len(history)} iteration(s); "
           f"stopped: {last.stop if last else 'no iterations run'}"
           f"{(' — ' + last.stop_detail) if last and last.stop_detail else ''}")
+    if last is not None and last.stop == "native-handoff":
+        _print_assignments(config, last)
     spent = [i.cost_usd for i in history]
     print("cost: unknown (unmetered backend usage)" if None in spent
           else f"cost: ${sum(spent):.2f}")
@@ -808,7 +856,8 @@ def cmd_skill_distil(args):
             print(f"  {name}: {'; '.join(reasons)}")
         print("\nnothing was written (--dry-run)")
         return 0
-    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd)
+    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd,
+                        allow_paid=getattr(args, "allow_paid_brain", None))
     coordinator = Coordinator(config, brain, session=args.session)
     it = Iteration(n=coordinator._last_recorded_n() + 1, kind="out-of-band")
     it.target = coordinator._target()
@@ -846,7 +895,8 @@ def cmd_research(args):
     from .driver.loop import Coordinator, Iteration, _iso
 
     config = _load(args)
-    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd)
+    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd,
+                        allow_paid=getattr(args, "allow_paid_brain", None))
     coordinator = Coordinator(config, brain, session=args.session)
     it = Iteration(n=coordinator._last_recorded_n() + 1, kind="out-of-band")
     it.target = coordinator._target()
@@ -1001,6 +1051,9 @@ def build_parser() -> argparse.ArgumentParser:
     loop.add_argument("--model")
     loop.add_argument("--max-usd", type=float, dest="max_usd",
                       help="hard ceiling on model spend; defaults to policy.spend_ceiling")
+    loop.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain",
+                      help="authorize the built-in Claude SDK brain to spend API money "
+                           "for this run (otherwise domain.toml must set [brain] authorize_spend)")
     loop.set_defaults(func=cmd_loop)
 
     research = sub.add_parser(
@@ -1013,6 +1066,9 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--model")
     research.add_argument("--max-usd", type=float, dest="max_usd",
                           help="hard ceiling on model spend; defaults to policy.spend_ceiling")
+    research.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain",
+                          help="authorize the built-in Claude SDK brain to spend API money "
+                               "for this run (otherwise domain.toml must set [brain] authorize_spend)")
     research.set_defaults(func=cmd_research)
 
     entry = sub.add_parser("entry", help="file, show and list entries")
@@ -1068,6 +1124,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="show what would be distilled; write nothing")
     sdistil.add_argument("--model")
     sdistil.add_argument("--max-usd", type=float, dest="max_usd")
+    sdistil.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain")
     sdistil.set_defaults(func=cmd_skill_distil)
     sretire = ssub.add_parser("retire")
     sretire.add_argument("name")
@@ -1163,6 +1220,25 @@ def build_parser() -> argparse.ArgumentParser:
     gates_mod.register_parser(sub)
     attempts_mod.register_parser(sub)
     external_mod.register_parser(sub)
+    usage = sub.add_parser("usage", help="out-of-band spend, metered like any other")
+    usub = usage.add_subparsers(dest="usage_cmd", required=True)
+    urec = usub.add_parser("record", help="append one spend row")
+    urec.add_argument("--tool", required=True, help="what spent it, e.g. jev or vast")
+    urec.add_argument("--kind", required=True, choices=sorted(usage_mod.KINDS))
+    urec.add_argument("--cost", type=float, help="what it cost in the domain's currency")
+    urec.add_argument("--unknown", action="store_true",
+                      help="the price is not knowable yet; the money ceiling goes unknown, not free")
+    urec.add_argument("--session", required=True)
+    urec.add_argument("--note", required=True)
+    urec.set_defaults(func=cmd_usage, usage_cmd="record")
+    usub.add_parser("list", help="every row, and what is still unpriced"
+                    ).set_defaults(func=cmd_usage, usage_cmd="list")
+    urec_ = usub.add_parser("reconcile", help="price one unpriced row")
+    urec_.add_argument("lineno", type=int, help="the row's line number, from `ar usage list`")
+    urec_.add_argument("--cost", type=float, required=True)
+    urec_.add_argument("--session", required=True)
+    urec_.add_argument("--note", required=True)
+    urec_.set_defaults(func=cmd_usage, usage_cmd="reconcile")
 
     return ap
 

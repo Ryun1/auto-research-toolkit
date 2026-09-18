@@ -209,8 +209,9 @@ ar render      write the generated queue views
 ar validate    check records, views, runs and policy
 ar policy      show the never-rules and prove each refuses something
 ar exec         reserve and run one bounded local command under a live claim
-ar attempt      execution ledger: list, show, checkpoint
+ar attempt      execution ledger: list, show, checkpoint, reconcile
 ar external     assign work to an external coordinator, settle or cancel it
+ar usage        record, list and price out-of-band spend
 ar gates        per-entry acceptance gates: configure, update, show
 ar evidence     portable integrity-only evidence bundles: pack, verify, import
 ar workspace    inspect or archive an abandoned workspace slot
@@ -510,7 +511,7 @@ forever, drift silently."
 
 ```
 $ ar harness check
-installed   core 0.1.0 (editable from /Users/ryan/amanita/auto-research-toolkit) @ fb9f8166a0e2
+installed   core 0.1.0 (editable from ~/auto-research-toolkit) @ fb9f8166a0e2
 upstream    https://github.com/Ryun1/auto-research-toolkit  main @ 0c35928c41e2
 update available
 
@@ -633,13 +634,21 @@ Every role is judgement delegated through one seam, and the seam does not know
 what an agent is. By default roles run on the built-in SDK brain; a domain can
 route any role to any agent that can take a prompt and print a reply:
 
-```yaml
-# goal.yaml
-brain:
-  default: claude                 # the built-in SDK brain
-  curator: ["pi", "-p"]           # any command
-  scout:   ["bin/my-researcher"]
+```toml
+# domain.toml
+[brain]
+default = "claude"                 # the built-in SDK brain
+curator = ["pi", "-p"]             # any command
+scout   = ["bin/my-researcher"]
 ```
+
+**The SDK brain is fail-closed, because it is the one backend that spends API
+money.** A domain must name it deliberately — `[brain] authorize_spend = true`
+— or the caller must pass `--allow-paid-brain` to `ar loop`, `ar research` or
+`ar skill distil`. An absent `[brain]` table used to mean "one SDK brain for
+every role"; it now means a refusal that names both remedies. A domain that
+routes every role to commands never approaches the meter and needs no
+authorization.
 
 The command contract (`ProcessBrain` in `driver/brain.py`) mirrors the measure
 command's: the brief arrives on **stdin**, `{role}`, `{prompt_file}` (the
@@ -671,6 +680,44 @@ Two verbs make an execution budget real rather than declarative:
   unharvested evidence. This is a handoff protocol, not a sandbox: policy
   checking and human-only gates are unchanged, and the coordinator that
   dispatches the work remains responsible for what it dispatches.
+
+### Native dispatch: the loop hands off, native agents do the work
+
+`[coordinator] dispatch = "native"` makes the loop's dispatch phase reserve one
+bounded external assignment per shortlisted card — the same claim, run ceiling,
+wall clock and workspace a core worker would get — and then stop the iteration
+there (`stop: native-handoff`), printing a manifest of what to pick up. No
+model runs in the coordinator's process: the surrounding harness runs its own
+subagents, which settle each assignment with `ar external complete --report`,
+and the next `ar loop` invocation's orient sees the applied verdicts. The
+judgement roles (generate, judge, curate, distil, qc) still run through
+whatever backend `[brain]` routes them to — route them to commands, or let the
+parent file entries and prices itself. This is the answer to a real failure:
+`bin/ar loop` selecting the SDK brain meant the unattended path reached for API
+spend nobody had approved.
+
+### Out-of-band spend is metered too: `ar usage`
+
+A spender the brain's cost file never sees — a curator's decision API, a
+hand-paid GPU rental — is invisible to a money ceiling, and a ceiling that
+cannot see a spender is not a ceiling. `ar usage record --tool jev --kind api
+--cost 0.42 --session s --note "why"` appends a row to `state/usage.jsonl`
+(committed with the corpus, like every meter), and `ar budget` sums it into
+the campaign money ceiling. `--unknown` records spend whose price is not
+knowable yet: unknown is never free, and a finite ceiling refuses further
+spend until `ar usage reconcile <lineno> --cost N` prices the row by appending
+a correction. Rows feed the ceiling, so a malformed row is a named refusal,
+never a silent skip.
+
+And one more verb for the execution ledger: `ar attempt reconcile <id>
+--charged-runs N --reason ...` archives an attempt record the meter cannot
+trust (a legacy-schema row, for instance) behind a tombstone whose digest pins
+the preserved bytes. The record's spend is asserted by the operator, never
+inferred — truthful zero is a real answer, stated not defaulted — and the
+assertion feeds the campaign ceiling exactly as stated. Until reconciled, the
+invalid record refuses metered commands by name; `ar attempt list` reports it
+instead of dying, because a ledger one legacy row bricks is a ledger nobody
+can even enumerate to fix.
 
 ## Portable evidence bundles
 

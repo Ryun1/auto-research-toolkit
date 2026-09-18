@@ -128,3 +128,18 @@ def test_a_non_numeric_explore_fraction_is_refused_at_load(tmp_path):
     with pytest.raises(ConfigError, match="coordinator.explore_fraction"):
         DomainConfig.load(_minimal(
             tmp_path, '[coordinator]\nexplore_fraction = "a fifth"\n'))
+
+
+def test_a_brain_table_loads_from_domain_toml(toy, tmp_path):
+    """The README documents `[brain]`; the unknown-table check used to refuse
+    it, so ProcessBrain routing was only reachable by mutating the loaded
+    dataclass -- declared, never wired."""
+    import shutil
+    dest = tmp_path / "toy"
+    shutil.copytree(toy.paths.root, dest,
+                    ignore=shutil.ignore_patterns("__pycache__", ".ar"))
+    toml = dest / "domain.toml"
+    toml.write_text(toml.read_text() + '\n[brain]\ndefault = ["/bin/echo", "[]"]\n')
+    from autoresearch.config import DomainConfig
+    config = DomainConfig.load(dest)
+    assert config.brain == {"default": ["/bin/echo", "[]"]}

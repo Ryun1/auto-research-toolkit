@@ -187,3 +187,79 @@ def test_worker_nonexperiment_closure_preserves_scope(sandbox, store, dispositio
     assert result.disposition == disposition
     assert result.applicability.workload == "specific-case"
     assert "Q2" in {card.entry_id for card in rank.rank(store.all(), sandbox).scored}
+
+
+# -- reconciling a record the meter cannot trust (qsb H27) -------------------
+
+def write_legacy_attempt(sandbox, identity, body=None):
+    """A record in a schema older than the core's, like qsb's retained
+    qsb-attempt-1 rows: valid JSON, unusable as a meter."""
+    directory = attempts.directory(sandbox) / identity
+    directory.mkdir(parents=True)
+    row = body if body is not None else {
+        "schema": "qsb-attempt-1", "id": identity, "status": "completed",
+        "kind": "exec", "entry": "Q1", "session": "owner",
+        "charged_runs": 3, "run_ids": []}
+    (directory / "record.json").write_text(json.dumps(row))
+    return directory
+
+
+def test_one_legacy_record_names_itself_instead_of_bricking_the_ledger(
+        sandbox, store):
+    claim(sandbox, store)
+    identity = "a" * 32
+    write_legacy_attempt(sandbox, identity)
+    with pytest.raises(AutoresearchError, match="reconcile"):
+        attempts.records(sandbox)
+    found = attempts.problems(sandbox)
+    assert len(found) == 1 and found[0]["id"] == identity
+    assert "schema" in found[0]["reason"] or "identity" in found[0]["reason"]
+
+
+def test_reconcile_archives_the_record_and_asserts_its_spend(sandbox, store):
+    claim(sandbox, store)
+    identity = "b" * 32
+    write_legacy_attempt(sandbox, identity)
+    attempts.reconcile(sandbox, identity, "owner", 0,
+                       "legacy qsb-attempt-1 row; predates metering, zero spend confirmed")
+    quarantined = attempts.directory(sandbox) / identity
+    assert not (quarantined / "record.json").exists()
+    assert (quarantined / "quarantined" / "record.json").exists()
+    tomb = attempts.tombstones(sandbox)
+    assert len(tomb) == 1 and tomb[0]["id"] == identity
+    assert tomb[0]["charged_runs"] == 0
+    # The meter reads again, and the asserted zero spends nothing.
+    assert attempts.records(sandbox) == []
+    assert budget.recorded_usage(sandbox)["runs"] == 0.0
+
+
+def test_a_tombstones_asserted_consumption_charges_the_campaign(sandbox, store):
+    claim(sandbox, store)
+    identity = "c" * 32
+    write_legacy_attempt(sandbox, identity)
+    attempts.reconcile(sandbox, identity, "owner", 2, "two runs, spent outside the ledger")
+    assert budget.recorded_usage(sandbox)["runs"] == 2.0
+    assert budget.total_runs(sandbox) >= 2.0
+
+
+def test_reconcile_refuses_a_valid_record_and_a_mismatched_id(sandbox, store):
+    claim(sandbox, store)
+    reservation = attempts.reserve(sandbox, "Q1", "owner", 30)
+    with pytest.raises(AutoresearchError, match="valid attempt record"):
+        attempts.reconcile(sandbox, reservation["id"], "owner", 0, "why")
+    with pytest.raises(AutoresearchError, match="nothing to reconcile"):
+        attempts.reconcile(sandbox, "d" * 32, "owner", 0, "why")
+
+
+def test_a_tombstone_whose_evidence_moved_refuses_the_meter(sandbox, store):
+    claim(sandbox, store)
+    identity = "e" * 32
+    write_legacy_attempt(sandbox, identity)
+    attempts.reconcile(sandbox, identity, "owner", 0, "zero spend")
+    quarantined = (attempts.directory(sandbox) / identity / "quarantined" / "record.json")
+    quarantined.write_text("{}")
+    with pytest.raises(AutoresearchError, match="tombstone"):
+        attempts.tombstones(sandbox)
+    # And a corrupt tombstone must not be reconcilable away by listing alone:
+    with pytest.raises(AutoresearchError, match="tombstone"):
+        budget.recorded_usage(sandbox)

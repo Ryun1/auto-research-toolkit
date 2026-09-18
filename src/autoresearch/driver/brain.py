@@ -353,15 +353,38 @@ class RoutingBrain:
 
 
 def build_brain(config, model: str | None = None,
-                max_budget_usd: float | None = None):
+                max_budget_usd: float | None = None,
+                allow_paid: bool | None = None):
     """Build the brain a domain's `[brain]` table describes.
 
     `"claude"` names the built-in SDK brain; any list of strings is a command
     per the `ProcessBrain` contract. Every backend shares one `CostLedger`, so
-    the ceiling is campaign-wide no matter how many backends can spend. Absent
-    table means the incumbent: one SDK brain for every role.
+    the ceiling is campaign-wide no matter how many backends can spend.
+
+    The SDK brain spends API money, so it is **fail-closed**: a domain must
+    name it deliberately with `[brain] authorize_spend = true`, or the caller
+    must pass `allow_paid=True` (`--allow-paid-brain`). An absent table is
+    read as a decision for the SDK brain -- which is now a refusal, not a
+    default bill.
     """
-    spec = config.brain or {"default": "claude"}
+    spec = config.brain or {}
+    # The flag GRANTS; it never revokes. argparse's store_true default is
+    # False, not None, so a caller that did not pass the flag must not undo a
+    # domain's own `authorize_spend = true`.
+    authorized = bool(spec.get("authorize_spend", False)) or bool(allow_paid)
+    wants_sdk = [key for key, value in
+                 (("default", spec.get("default", "claude")),
+                  *((role, value) for role, value in spec.items()
+                    if role not in ("default", "authorize_spend")))
+                 if value == "claude"]
+    if wants_sdk and not authorized:
+        raise AutoresearchError(
+            "the built-in Claude SDK brain spends API money and is refused "
+            "until you say so: set `[brain] authorize_spend = true` in "
+            "domain.toml, or pass --allow-paid-brain. Route the roles that "
+            "need judgement to native agents with "
+            "`brain.<role> = [\"<command>\"]` instead; "
+            f"table keys naming the SDK brain: {sorted(set(wants_sdk))}")
     ledger = CostLedger(max_budget_usd if max_budget_usd is not None
                         else config.policy.spend_ceiling)
 
@@ -372,5 +395,5 @@ def build_brain(config, model: str | None = None,
 
     default = one(spec.get("default", "claude"))
     routes = {role: one(value) for role, value in spec.items()
-              if role != "default"}
+              if role not in ("default", "authorize_spend")}
     return RoutingBrain(routes, default)

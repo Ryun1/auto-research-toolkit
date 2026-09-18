@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import math
 import os
@@ -47,29 +48,148 @@ def claims(config, session):
     return Claims(Store(config.paths.entries), config, session)
 
 
-def records(config):
-    result = []
+def _problem(path: Path, row) -> str | None:
+    """Why this record cannot be trusted to feed a meter, or None."""
+    try:
+        if (row["schema"] != SCHEMA or row["id"] != path.parent.name
+                or not re.fullmatch(r"[a-f0-9]{32}", row["id"])
+                or row["status"] not in ACTIVE | TERMINAL
+                or row["kind"] not in {"exec", "dispatch", "external"}
+                or not isinstance(row["entry"], str) or not row["entry"]
+                or not isinstance(row["run_ids"], list)
+                or any(not isinstance(i, str) or not i for i in row["run_ids"])
+                or len(set(row["run_ids"])) != len(row["run_ids"])):
+            return "invalid identity, state or links"
+        session_required(row["session"])
+        dt.datetime.fromisoformat(row["claim_at"])
+        for key in ("charged_runs", "reserved_runs", "timeout_seconds"):
+            if budget.usage_number(row[key]) <= 0:
+                return f"invalid {key}"
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return str(exc)
+    return None
+
+
+def problems(config) -> list[dict]:
+    """Every attempt record that cannot feed a meter, with its reason.
+
+    Inspection is deliberately separate from metering: `ar attempt list`
+    reports these instead of dying on the first one, because a ledger one
+    legacy row bricks is a ledger nobody can even enumerate to fix.
+    """
+    out = []
     for path in sorted(directory(config).glob("*/record.json")):
         try:
             row = json.loads(path.read_text())
-            if (row["schema"] != SCHEMA or row["id"] != path.parent.name
-                    or not re.fullmatch(r"[a-f0-9]{32}", row["id"])
-                    or row["status"] not in ACTIVE | TERMINAL
-                    or row["kind"] not in {"exec", "dispatch", "external"}
-                    or not isinstance(row["entry"], str) or not row["entry"]
-                    or not isinstance(row["run_ids"], list)
-                    or any(not isinstance(i, str) or not i for i in row["run_ids"])
-                    or len(set(row["run_ids"])) != len(row["run_ids"])):
-                raise ValueError("invalid identity, state or links")
-            session_required(row["session"])
-            dt.datetime.fromisoformat(row["claim_at"])
-            for key in ("charged_runs", "reserved_runs", "timeout_seconds"):
-                if budget.usage_number(row[key]) <= 0:
-                    raise ValueError(f"invalid {key}")
-            result.append(row)
-        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-            raise AutoresearchError(f"invalid attempt record {path}: {exc}; reconcile before spending") from exc
+        except (OSError, ValueError) as exc:
+            out.append({"path": str(path), "id": None, "reason": f"unreadable: {exc}"})
+            continue
+        reason = _problem(path, row)
+        if reason is not None:
+            out.append({"path": str(path), "id": row.get("id"),
+                        "reason": reason})
+    return out
+
+
+def records(config):
+    found = problems(config)
+    if found:
+        raise AutoresearchError(
+            f"invalid attempt record {found[0]['path']}: {found[0]['reason']}; "
+            f"reconcile before spending ({len(found)} invalid record(s)): "
+            "`ar attempt reconcile <id> --charged-runs N --reason ...`")
+    result = []
+    for path in sorted(directory(config).glob("*/record.json")):
+        result.append(json.loads(path.read_text()))
     return result
+
+
+TOMBSTONE_SCHEMA = "ar-attempt-tombstone-1"
+
+
+def tombstones(config) -> list[dict]:
+    """Reconciled-away records whose asserted consumption feeds the ceiling.
+
+    A tombstone is an operator's statement, not a measurement: its
+    `charged_runs` is asserted, never inferred, and it is counted against the
+    campaign exactly as stated. The quarantined record's bytes must still hash
+    to the digest the tombstone recorded -- a tombstone whose evidence moved
+    proves nothing.
+    """
+    out = []
+    for path in sorted(directory(config).glob("*/tombstone.json")):
+        try:
+            row = json.loads(path.read_text())
+            if (row["schema"] != TOMBSTONE_SCHEMA or row["id"] != path.parent.name
+                    or not re.fullmatch(r"[a-f0-9]{32}", row["id"])
+                    or isinstance(row["charged_runs"], bool)
+                    or not isinstance(row["charged_runs"], int)
+                    or row["charged_runs"] < 0
+                    or not str(row["reason"]).strip()):
+                raise ValueError("invalid identity, consumption or reason")
+            original = path.parent / "quarantined" / "record.json"
+            if hashlib.sha256(original.read_bytes()).hexdigest() != row["record_sha256"]:
+                raise ValueError("quarantined record bytes do not match the tombstone digest")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise AutoresearchError(
+                f"invalid attempt tombstone {path}: {exc}; a tombstone feeds "
+                "the campaign ceiling, so a corrupt one must be fixed or "
+                "removed deliberately") from exc
+        out.append(row)
+    return out
+
+
+def reconcile(config, attempt_id, session, charged_runs, reason):
+    """Archive one invalid attempt record behind a tombstone naming its spend.
+
+    The record's bytes are preserved under `quarantined/`; the operator states
+    the consumption the record itself cannot declare. Truthful zero-spend is a
+    real answer -- a legacy-schema record that predates metering may genuinely
+    have consumed nothing -- but zero must be stated, not defaulted.
+    """
+    session_required(session)
+    if isinstance(charged_runs, bool) or not isinstance(charged_runs, int) or charged_runs < 0:
+        raise AutoresearchError("--charged-runs must be a nonnegative integer")
+    if not reason.strip():
+        raise AutoresearchError("reconcile requires a nonempty --reason")
+    if not re.fullmatch(r"[a-f0-9]{32}", str(attempt_id) or ""):
+        raise AutoresearchError("invalid attempt identity")
+    path = directory(config) / attempt_id / "record.json"
+    if not path.exists():
+        raise AutoresearchError(f"no attempt record at {path}; nothing to reconcile")
+    try:
+        row = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise AutoresearchError(
+            f"{path}: unreadable ({exc}); fix it or remove it deliberately "
+            "-- reconcile archives records, never deletes them") from exc
+    if not isinstance(row, dict) or row.get("id") != attempt_id:
+        raise AutoresearchError("attempt id does not match the record's identity")
+    if _problem(path, row) is None:
+        raise AutoresearchError(
+            f"{attempt_id} is a valid attempt record; nothing to reconcile "
+            "(settle or cancel it instead)")
+    data = path.read_bytes()
+    quarantine = path.parent / "quarantined"
+    quarantine.mkdir(exist_ok=True)
+    (quarantine / "record.json").write_bytes(data)
+    tomb = {"schema": TOMBSTONE_SCHEMA, "id": attempt_id,
+            "quarantined_at": now(), "by": session,
+            "charged_runs": charged_runs, "reason": reason,
+            "record_sha256": hashlib.sha256(data).hexdigest()}
+    target = path.parent / "tombstone.json"
+    fd, temporary = tempfile.mkstemp(prefix=".tombstone-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(tomb, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    path.unlink()
+    return tomb
 
 
 def load(config, attempt_id, session=None):
@@ -270,9 +390,20 @@ def _command(args):
         print(json.dumps(row, indent=2))
         return 0 if row["status"] == "completed" else 1
     if args.attempt_action == "list":
-        row = records(config)
+        out = {"records": records(config), "problems": problems(config),
+               "tombstones": []}
+        try:
+            out["tombstones"] = tombstones(config)
+        except AutoresearchError as exc:
+            # A corrupt tombstone feeds the ceiling, so metered commands must
+            # still refuse -- but inspection names it rather than dying.
+            out["tombstone_problems"] = [str(exc)]
+        row = out
     elif args.attempt_action == "show":
         row = load(config, args.id)
+    elif args.attempt_action == "reconcile":
+        row = reconcile(config, args.id, args.session, args.charged_runs,
+                        args.reason)
     else:
         row = checkpoint(config, args.id, args.session, args.note, confirm_inactive=args.confirm_inactive)
     print(json.dumps(row, indent=2))
@@ -287,11 +418,17 @@ def register_parser(subparsers):
     parser.set_defaults(func=_command, command="exec")
     parser = subparsers.add_parser("attempt", help="inspect persistent execution reservations")
     subs = parser.add_subparsers(dest="attempt_action", required=True)
-    for name in ("list", "show", "checkpoint"):
+    for name in ("list", "show", "checkpoint", "reconcile"):
         child = subs.add_parser(name)
-        if name != "list":
+        if name not in ("list",):
             child.add_argument("id")
         if name == "checkpoint":
             child.add_argument("--note", required=True)
             child.add_argument("--confirm-inactive", action="store_true")
+        if name == "reconcile":
+            child.add_argument("--charged-runs", type=int, required=True,
+                               help="runs this attempt consumed and is not counted "
+                                    "anywhere else; 0 is a real answer when you can "
+                                    "confirm it, never a default")
+            child.add_argument("--reason", required=True)
         child.set_defaults(func=_command, command="attempt")
