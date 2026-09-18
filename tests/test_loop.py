@@ -769,3 +769,60 @@ def test_the_prompts_only_name_brief_keys_the_brief_carries(sandbox):
     assert "`skills`" in role_prompt(Role.GENERATOR), \
         "the generator must be told the index exists, or it reads every body"
     assert "`skills`" in role_prompt(Role.WORKER)
+
+
+def test_a_proposal_without_mechanisms_is_refused_at_the_door(sandbox, store):
+    """The ecdsa failure: a filing path that defaulted `mechanisms` to empty
+    shipped 298 entries the ranker priced on nothing. A proposal missing its
+    scoring inputs is refused mechanically, with the reason on the record."""
+    import re
+    proposal = {
+        "title": "an unpriced idea",
+        "hypothesis": "it might work",
+        "confidence": 0.4, "impact": 0.05, "cost": 2.0,
+        # mechanisms missing: the refusal trigger
+        "why_filed": "looks fine",
+    }
+    coordinator = Coordinator(
+        sandbox, ScriptedBrain({**IDLE, Role.GENERATOR: [proposal]}))
+    history = coordinator.run(max_iterations=1)
+    phase = next(p for it in history for p in it.phases if p.name == "generate")
+    assert store.all() == [], "an unpriced proposal was filed"
+    assert any(re.search(r"refused: .*mechanisms", line) for line in phase.detail)
+
+
+def test_a_proposal_without_a_price_is_refused_with_the_field_named(sandbox, store):
+    import re
+    proposal = {
+        "title": "no impact",
+        "hypothesis": "h", "confidence": 0.4, "cost": 2.0,
+        "mechanisms": ["m"],
+    }
+    coordinator = Coordinator(
+        sandbox, ScriptedBrain({**IDLE, Role.GENERATOR: [proposal]}))
+    history = coordinator.run(max_iterations=1)
+    phase = next(p for it in history for p in it.phases if p.name == "generate")
+    assert store.all() == []
+    assert any(re.search(r"refused: .*impact", line) for line in phase.detail)
+
+
+def test_the_brief_carries_the_mechanism_coverage_map(sandbox, store):
+    """Generator and scout route on which mechanism tags the record has
+    actually tested; the map must distinguish tested from merely named."""
+    from conftest import close as _close
+    _close(sandbox, store, make_entry(store, "Q1", mechanisms=["known-tag"]),
+           verdict="refuted", closure_kind="cell",
+           reopen_condition="the cell moves")
+    briefs = []
+
+    def generator(brief):
+        briefs.append(brief)
+        return []
+
+    coordinator = Coordinator(
+        sandbox, ScriptedBrain({**IDLE, Role.GENERATOR: generator}))
+    coordinator.run(max_iterations=1)
+    payload = json.loads(briefs[0])
+    assert payload["mechanism_coverage"]["known-tag"] == {
+        "tested": 1, "confirmed": 0, "refuted": 1}
+    assert "novel-tag" not in payload["mechanism_coverage"]

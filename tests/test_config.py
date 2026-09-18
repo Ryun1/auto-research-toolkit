@@ -143,3 +143,49 @@ def test_a_brain_table_loads_from_domain_toml(toy, tmp_path):
     from autoresearch.config import DomainConfig
     config = DomainConfig.load(dest)
     assert config.brain == {"default": ["/bin/echo", "[]"]}
+
+
+# -- the coverage reserve, checked together with explore -------------------
+
+
+def test_a_domain_may_set_its_own_coverage_fraction(tmp_path):
+    config = DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\ncoverage_fraction = 0.3\n"))
+    assert config.coverage_fraction == 0.3
+
+
+def test_a_domain_that_says_nothing_gets_the_core_coverage_default(tmp_path):
+    from autoresearch.rank import COVERAGE_FRACTION
+    config = DomainConfig.load(_minimal(tmp_path))
+    assert config.coverage_fraction == COVERAGE_FRACTION
+
+
+def test_a_domain_may_disable_the_coverage_reserve_outright(tmp_path):
+    config = DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\ncoverage_fraction = 0\n"))
+    assert config.coverage_fraction == 0.0
+
+
+def test_an_out_of_range_coverage_fraction_is_refused_at_load(tmp_path):
+    with pytest.raises(ConfigError, match="coordinator.coverage_fraction"):
+        DomainConfig.load(_minimal(
+            tmp_path, "[coordinator]\ncoverage_fraction = 1.0\n"))
+
+
+def test_reserves_summing_to_a_whole_shortlist_are_refused_at_load(tmp_path):
+    """Two half-shortlist reserves leave no exploit lane. shortlist() clamps
+    what a caller passes anyway, but a config that declares it is a mistake,
+    and mistakes like that are refused before anything spends."""
+    with pytest.raises(ConfigError, match="whole shortlist"):
+        DomainConfig.load(_minimal(
+            tmp_path, "[coordinator]\nexplore_fraction = 0.5\n"
+                      "coverage_fraction = 0.5\n"))
+
+
+def test_the_default_coverage_fraction_participates_in_the_combined_check(tmp_path):
+    """A domain declaring explore_fraction 0.9 while saying nothing about
+    coverage must be refused at load, not discover the 0.9 + 0.2 sum the first
+    time the loop ranks."""
+    with pytest.raises(ConfigError, match="whole shortlist"):
+        DomainConfig.load(_minimal(
+            tmp_path, "[coordinator]\nexplore_fraction = 0.9\n"))

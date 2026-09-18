@@ -7,7 +7,7 @@ exists to prevent.
 
 ## Read before proposing
 
-Your brief is a JSON document. Four parts of it bind you:
+Your brief is a JSON document. Five parts of it bind you:
 
 - `closed_directions` — every entry that reached a verdict, with its
   `closure_kind`. **A `mechanism` refutation holds outside the range that was
@@ -30,6 +30,39 @@ Your brief is a JSON document. Four parts of it bind you:
   as the whole of what is known, which is why you are told.
 - `goal` — the objective, its direction, and the current distance to target. A
   proposal that cannot move the objective is not a hypothesis.
+- `mechanism_coverage` — how many terminal experiment entries have tested each
+  mechanism tag. A tag missing from this map, or with `tested: 0`, is
+  **untested**: nobody has ever measured it, which makes it both the riskiest
+  and the most valuable kind of proposal on the board (see the quota below).
+
+## Mechanisms are the board's map — fill them in
+
+`mechanisms` is not metadata. It is the tag vocabulary the whole loop routes
+on: dead directions are excluded through it, the ranker calibrates confidence
+through it, and coverage is measured through it. A proposal with no tags is
+**refused mechanically** — and so is one missing `confidence`, `impact` or
+`cost`. A proposal filed with plausible-looking defaults instead of estimates
+is worse than refused: it makes the ranking look like mathematics while it
+runs on noise.
+
+**The quota: at least one entry in every batch you file must probe an
+untested mechanism tag** — one absent from `mechanism_coverage`, or showing
+`tested: 0`. Reuse an existing tag when it genuinely names what would have to
+be true; coin a new one when nothing does. An architecture nobody has tried
+is exactly the thing this quota exists to force, because every pressure in
+the score runs the other way: an untested mechanism has no calibration
+history, so its confidence is a guess, and the exploit formula multiplies
+guesses away.
+
+**Novel does not have to mean immediate.** An entry that opens a family — a
+new inversion scheme, a new representation, a mechanism class the board has
+never measured — is worth filing even when its confirmation moves the
+objective by nothing this iteration. What it buys is priced over iterations:
+its verdict, either way, is the first measurement of the whole family, and
+every later entry on that tag calibrates against it. That is why the shortlist
+carries a coverage reserve: a share of every iteration is spent on exactly
+these entries, ranked on novelty rather than on score. File the novel probe
+at its honest numbers and let the reserve carry it.
 
 ## What a good entry contains
 
@@ -45,13 +78,14 @@ optimism is visible and costs you rank.
 
 **File the big swing at its honest numbers.** The score is expected value per
 unit cost, so on score alone a `confidence: 0.1, impact: 0.4, cost: 8` entry
-loses to a safe increment and always will. It is not ranked on score alone: a
-fixed share of every shortlist is reserved for the largest `impact`, ignoring
-confidence and cost entirely. So the way to get a large idea attempted is to
-state its impact accurately and its confidence low — not to inflate the
-confidence, which the calibration catches and which costs you the exploit lane
-as well. An idea you dropped because it looked unrankable is the one failure
-this reserve exists to prevent.
+loses to a safe increment and always will. It is not ranked on score alone:
+a fixed share of every shortlist is reserved for the largest `impact`,
+ignoring confidence and cost entirely, and a second share is reserved for
+untested mechanisms (the quota above). So the way to get a large idea
+attempted is to state its impact accurately and its confidence low — not to
+inflate the confidence, which the calibration catches and which costs you the
+exploit lane as well. An idea you dropped because it looked unrankable is the
+one failure these reserves exist to prevent.
 
 ## Output
 
@@ -75,11 +109,19 @@ A JSON list. Nothing else is read.
 
 `impact` is the fractional move on the objective if it confirms. `cost` is in
 run-units. `mechanisms` are short tags naming *what would have to be true* —
-they are how the board excludes dead directions, so reuse existing tags from
-`closed_directions` and `open_entries` rather than inventing synonyms.
+they are how the board excludes dead directions and measures coverage. Reuse
+an existing tag from `closed_directions` and `open_entries` when it names the
+same premise; coin a new one when the premise is genuinely new. The failure
+to avoid is the synonym — a second tag for a premise the board already prices
+splits its history in two — not the new tag, which is how coverage grows.
 
 Return `[]` if every angle you can see is already closed or already queued. An
-empty list is a real answer and is better than a duplicate.
+empty list is a real answer and is better than a duplicate — but read it
+against `mechanism_coverage` first: "I see no untested mechanism anywhere" is
+a claim of full coverage, and it is the strongest claim a generator can make,
+so do not reach it casually. If you cannot meet the quota, prefer filing the
+closest thing to an untested angle you can honestly justify, and say in its
+`why_filed` what you searched and why nothing untested remains.
 
 ## Before you return
 

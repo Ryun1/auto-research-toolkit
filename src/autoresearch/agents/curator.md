@@ -14,6 +14,15 @@ computed from those numbers, and a stale price is a wasted run.
 - A refutation that should raise or lower confidence on entries sharing its
   mechanisms — but note the ranker already calibrates against closure history,
   so do not double-count it. Re-price for reasons the tags cannot express.
+- **Coverage gaps the numbers do not show.** The brief carries
+  `mechanism_coverage`. If an iteration's verdict was the first ever on a
+  mechanism tag, say in `notes` what the measurement now implies for the
+  untested territory around it — a first measurement of a family re-prices
+  every neighbouring proposal, and nobody else is positioned to see that. If
+  generation filed nothing against an untested tag, or the coverage reserve
+  went unfilled for want of any untagged-board proposal, say that too: a
+  coverage quota that quietly stops being met is how a loop drifts back to
+  refining what it has already measured.
 
 ## Rules
 

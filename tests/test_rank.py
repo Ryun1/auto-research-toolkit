@@ -327,3 +327,124 @@ def test_newly_scoped_closure_does_not_hide_later_matching_closure(sandbox, stor
     make_entry(store, "Q3", mechanisms=["m"], context=Applicability(hardware="RTX"))
     ranking = rank(store.all(), sandbox)
     assert "Q2" in next(card.excluded for card in ranking.excluded if card.entry_id == "Q3")
+
+
+# -- the coverage reserve -------------------------------------------------
+# The exploit formula cannot price a genuinely novel mechanism: no terminal
+# entry has tested its tag, so its confidence is a guess and the formula
+# multiplies it away. These fix the reserve that keeps a lane open for the
+# mechanism family nobody has measured yet -- the failure the ecdsa corpus
+# demonstrated, where 1 of 470 entries carried a mechanism tag and the two
+# largest wins were novel mechanism families.
+
+def test_coverage_reserve_promotes_an_untested_mechanism(sandbox, store):
+    """A novel-mechanism probe the EV formula buries still gets its slot."""
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
+    picks = r.shortlist(3)
+    cov = [s for s in picks if s.coverage]
+    assert [s.entry_id for s in cov] == ["Q91"]
+    assert not cov[0].explore
+
+
+def test_a_tested_mechanism_is_not_coverage_eligible(sandbox, store):
+    """One terminal entry testing the tag is enough; coverage means untested,
+    not unpromising."""
+    close(store, "Q90", "confirmed", mechanisms=["new-inversion-class"])
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
+    assert all(not s.coverage for s in r.shortlist(3))
+
+
+def test_an_entry_without_mechanisms_is_never_coverage_eligible(sandbox, store):
+    """The reserve rewards a named novel mechanism, not a missing one: an
+    untagged entry is the filing failure the reserve exists to expose."""
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0)
+    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
+    assert all(not s.coverage for s in r.shortlist(3))
+    assert next(s for s in r.scored if s.entry_id == "Q91").untested == 0
+
+
+def test_coverage_reserve_falls_back_to_score_when_nothing_is_untested(sandbox, store):
+    _increments(store, n=3)
+    r = rank(store.all(), sandbox, explore_fraction=0.0, coverage_fraction=0.2)
+    assert [s.entry_id for s in r.shortlist(3)] == ["Q11", "Q12", "Q13"]
+    assert all(not s.coverage for s in r.shortlist(3))
+
+
+def test_one_entry_can_serve_both_reserves_but_takes_one_slot(sandbox, store):
+    """A high-impact untested mechanism is the ideal reserve pick: it should
+    not spend two slots."""
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.4, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
+    picks = r.shortlist(3)
+    assert len(picks) == 3
+    q91 = next(s for s in picks if s.entry_id == "Q91")
+    assert q91.coverage and not q91.explore
+    assert [s.entry_id for s in picks].count("Q91") == 1
+
+
+def test_a_single_slot_is_never_spent_on_the_coverage_lane(sandbox, store):
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
+    assert [s.entry_id for s in r.shortlist(1)] == ["Q11"]
+
+
+def test_the_reserves_together_never_take_the_whole_shortlist(sandbox, store):
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.4, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.4, coverage_fraction=0.4)
+    picks = r.shortlist(3)
+    assert [s.entry_id for s in picks if not s.explore and not s.coverage] \
+        == ["Q11"]
+
+
+def test_combined_reserves_are_refused_in_rank(sandbox, store):
+    _increments(store)
+    with pytest.raises(Exception) as exc:
+        rank(store.all(), sandbox, explore_fraction=0.6, coverage_fraction=0.6)
+    assert "whole shortlist" in str(exc.value)
+
+
+def test_coverage_picks_are_marked_and_explained(sandbox, store):
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
+    # Coverage slots fill before explore slots, so the pick sits between the
+    # score pick and the amplitude pick.
+    assert [s.entry_id for s in r.shortlist(3)] == ["Q11", "Q91", "Q12"]
+    assert "[coverage]" in r.explain()
+    assert "coverage reserve" in r.explain()
+    assert "new-inversion-class" not in r.explain()  # terms stay numeric
+
+
+def test_a_demoted_untested_entry_does_not_return_through_the_coverage_reserve(sandbox, store):
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.0, coverage_fraction=0.2)
+    out = apply_veto(r, [Veto("Q91", "demote", "its novelty claim is a synonym of a closed tag")])
+    assert "Q91" not in [s.entry_id for s in out.shortlist(3)]
+
+
+def test_shortlist_never_returns_more_than_k_cards(sandbox, store):
+    """The reserves are clamped so the shortlist stays exactly k cards even
+    when a fraction is degenerate; a direct Ranking caller gets the same
+    guarantee the validated config path gets."""
+    _increments(store)
+    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
+               mechanisms=["new-inversion-class"])
+    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
+    r.coverage_fraction = -0.5               # bypass rank()'s validation
+    assert len(r.shortlist(3)) == 3

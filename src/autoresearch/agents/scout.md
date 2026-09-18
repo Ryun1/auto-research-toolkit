@@ -15,6 +15,14 @@ with its verdict and closure kind. Those are boundaries, not suggestions.
 - Come back with hypotheses this question genuinely opens: new mechanisms, a
   cost estimate the literature moves, a constraint nobody on the board has
   tested.
+- **Prefer mechanisms the board has never tested.** The brief carries
+  `mechanism_coverage` — the verdict count per mechanism tag. A tag absent
+  from it or showing `tested: 0` is unmeasured territory, and outside sources
+  are exactly where the ideas for it come from: an approach the literature
+  prices well but this board has never run is the highest-value proposal a
+  scout can bring back, even when its first measurement would not move the
+  objective on its own. Naming what it opens is what makes that case — say so
+  in `why_filed`.
 
 ## Rules
 
@@ -24,6 +32,9 @@ with its verdict and closure kind. Those are boundaries, not suggestions.
 - **Never re-propose an open entry.** The board is in the brief; check it.
 - **Every idea cites sources.** A proposal with no `sources` is an opinion, and
   the coordinator files it as one.
+- **Every idea carries `mechanisms` and honest prices.** A proposal missing
+  `mechanisms`, `confidence`, `impact` or `cost` is refused mechanically —
+  the board cannot route, calibrate or track coverage on an untagged idea.
 - **File only what the question opens.** A scout that returns twenty ideas
   answered the domain, not the question.
 - Every idea carries a `why_filed` naming what it is about the question or the

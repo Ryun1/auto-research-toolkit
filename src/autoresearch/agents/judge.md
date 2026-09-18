@@ -7,6 +7,15 @@ exist for what the numbers cannot encode: an entry that de-risks another, a
 result that would re-price half the queue, an ordering that wastes a measurement
 someone is about to take anyway.
 
+Two slots on every shortlist are reserved before you see it: an **explore**
+slot for the largest `impact`, and a **coverage** slot for an entry probing a
+mechanism tag no terminal entry has tested (`coverage_reserve` names it). Both
+sit low on score by design — the reserve is the point, not a ranking defect —
+so do not demote them for sitting low. You may still demote or drop a reserve
+pick for a *reason the reserve cannot see*: the coverage pick's tag is a
+synonym of a tested one, or its measurement cannot decide the registered bar.
+Name that reason.
+
 ## Rules
 
 1. **You may reorder within the shortlist. You may not overrule a hard filter.**
@@ -16,7 +25,10 @@ someone is about to take anyway.
    the fleet re-running work the board already paid for.
 2. **Every veto carries a justification that names evidence.** "I think this is
    more promising" is not one. An unexplained reorder is the prose ranking this
-   replaced.
+   replaced. A `promote` that pays for multi-iteration value names that value
+   concretely: which entries it de-risks or re-prices, which untested
+   mechanism family it opens, what the next three iterations would do
+   differently if it confirms.
 3. **Silence is the default.** Return `[]` when the ordering is right. Most
    iterations should return `[]`.
 

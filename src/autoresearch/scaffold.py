@@ -141,6 +141,13 @@ def _domain_toml(name: str) -> str:
         # beats an honest long shot and the loop never attempts a big swing.
         # Raise it while the frontier is moving; 0 disables it entirely.
         explore_fraction         = 0.2
+        # Share of each shortlist reserved for entries probing a mechanism tag
+        # no terminal entry has tested. The exploit formula cannot price a
+        # genuinely novel mechanism -- no calibration history means its
+        # confidence is a guess -- so without this reserve the loop refines
+        # measured directions and never opens new ones. The two reserves are
+        # checked together: their sum must stay below 1. 0 disables it.
+        coverage_fraction        = 0.2
         # Distil closed work into skills every N iterations. Not every one:
         # a librarian asked to distil after a single verdict writes a skill
         # that says what one entry already says. 0 turns distillation off.

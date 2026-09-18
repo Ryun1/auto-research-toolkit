@@ -37,6 +37,19 @@ so it is not a second route past the hard filters above.
 (Called a reserve, not a lane, because `lanes.py` already owns "lane" for the
 findings/scaffolding publish boundary, which is a different thing entirely.)
 
+**A second fraction of the shortlist is reserved for coverage.** The explore
+reserve ranks on impact, but a genuinely novel mechanism cannot be priced at
+all: it has no calibration history, so its confidence is a guess and its
+impact an estimate, and both terms are exactly the ones the exploit formula
+multiplies away. On the corpus this core is derived from, the largest wins
+were novel mechanism families -- while the `mechanisms` field went unfilled
+on 469 of 470 entries, so even the explore reserve ranked on all-zero data
+and no mechanism ever got a lane. `coverage_fraction` hands a share of every
+shortlist to entries probing a mechanism tag that no terminal entry has ever
+tested. Both reserves are advisory in the same sense: they reorder ranked
+entries, never overrule a hard filter, and an unfilled reserve returns its
+slot to the score.
+
 **The formula proposes; a judge may reorder within the shortlist.** The numbers
 cannot encode everything -- that is why the human curator existed -- but a judge
 that can also *resurrect* a hard-filtered entry can undo the exclusion above, so
@@ -53,6 +66,17 @@ from .errors import ConfigError
 #: the fanouts actually run (k=3) it reserves one slot.
 EXPLORE_FRACTION = 0.2
 
+#: Share of the shortlist reserved for coverage: entries probing a mechanism
+#: tag no terminal entry has ever tested. The exploit formula cannot see
+#: novelty -- an untested tag has no calibration history, so its EV is a guess
+#: and loses to every measured increment -- and the explore reserve ranks on
+#: impact, which a genuinely novel architecture cannot be priced at yet. On
+#: the corpus this core is derived from, the two largest wins were novel
+#: mechanism families, while the loop's `mechanisms` field went unfilled
+#: (1 of 470 entries) and both reserves ranked on all-zero data. The reserve
+#: exists so that cannot repeat silently.
+COVERAGE_FRACTION = 0.2
+
 
 @dataclass
 class Score:
@@ -62,12 +86,15 @@ class Score:
     terms: dict = field(default_factory=dict)
     excluded: str | None = None      # the hard filter that removed it, if any
     explore: bool = False            # taken by the reserve, not by the score
+    coverage: bool = False           # taken by the coverage reserve
+    untested: int = 0                # mechanism tags no terminal entry tests
 
     def explain(self) -> str:
         if self.excluded:
             return f"{self.entry_id:6} EXCLUDED  {self.excluded}"
         terms = "  ".join(f"{k}={v:.4g}" for k, v in self.terms.items())
-        lane = "  [explore]" if self.explore else ""
+        lane = ("  [explore]" if self.explore else "") \
+            + ("  [coverage]" if self.coverage else "")
         return (f"{self.entry_id:6} {self.score:9.4f}  {terms}   "
                 f"{self.title[:60]}{lane}")
 
@@ -79,54 +106,78 @@ class Ranking:
     calibration: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     explore_fraction: float = 0.0
+    coverage_fraction: float = 0.0
 
     def shortlist(self, k: int) -> list[Score]:
-        """The top `k`, with a fraction of the slots reserved for amplitude.
+        """The top `k`, with fractions of the slots reserved for amplitude and
+        for coverage.
 
         `scored` stays in score order -- that is the auditable ranking, and the
-        judge reviews it -- so the reserve is applied here, at the point where
-        slots are actually spent.
+        judge reviews it -- so the reserves are applied here, at the point
+        where slots are actually spent.
 
         Rounding is deliberate: `int(k * f + 0.5)` rather than a floor, because
         a floor at the fanouts this loop actually runs (k=3, f=0.2 -> 0.6) would
         reserve nothing and the lane would exist only on paper. It is then
-        clamped to `k - 1`, which is what actually holds the two guarantees the
-        validators promise: at least one slot always goes to the score, and the
-        only slot in an iteration is never spent on a lottery ticket. Rounding
-        alone held neither -- `f=0.9, k=3` reserves all three, and `f=0.5, k=1`
-        reserves the one.
+        clamped, which is what actually holds the three guarantees the
+        validators promise: at least one slot always goes to the score, the
+        only slot in an iteration is never spent on a lottery ticket, and the
+        two reserves together cannot take the whole shortlist (`rank` refuses
+        `explore + coverage >= 1` at the config layer; this clamps what a
+        caller passes anyway).
+
+        The coverage reserve is applied first: a novel-mechanism probe is the
+        pick the exploit formula buries hardest (no calibration history means
+        its confidence is a guess), and an entry can serve both reserves at
+        once -- a high-impact untested mechanism takes one slot, not two.
         """
         if k <= 0:
             return []
         for card in self.scored:            # recomputed, so this is idempotent
             card.explore = False
+            card.coverage = False
         # Nothing to reserve when everything ranked is dispatched anyway: the
-        # pick would be labelled an explore entry that "sits low on score by
+        # pick would be labelled a reserve entry that "sits low on score by
         # design" when it is simply k-th.
         if len(self.scored) <= k:
             return list(self.scored)
-        reserve = min(int(k * self.explore_fraction + 0.5), k - 1)
-        picks = self.scored[:k - reserve]
-        if reserve:
+        cov_n = (max(0, min(int(k * self.coverage_fraction + 0.5), k - 1))
+                 if self.coverage_fraction else 0)
+        exp_n = (max(0, min(int(k * self.explore_fraction + 0.5),
+                            k - 1 - cov_n))
+                 if self.explore_fraction else 0)
+        n_scored = k - cov_n - exp_n
+        picks = self.scored[:n_scored]
+        if cov_n or exp_n:
             taken = {c.entry_id for c in picks}
-            # Impact alone. Confidence and cost are precisely the terms that
-            # bury a long shot, so the reserve must not consult them; ties break
-            # on score so the ordering stays deterministic.
-            #
             # A judge's `demote`/`drop` is honoured here too. `apply_veto`
             # implements both by moving the card to the tail of `scored`, which
-            # is exactly where the reserve looks, so without this filter a veto
-            # on a high-impact entry puts it straight back and the entry it was
-            # making room for stays out.
+            # is exactly where the reserves look, so without this filter a veto
+            # on a reserve-worthy entry puts it straight back and the entry it
+            # was making room for stays out.
             vetoed = ("demote", "drop")
-            rest = sorted((c for c in self.scored if c.entry_id not in taken
-                           and c.terms.get("veto") not in vetoed),
-                          key=lambda c: (-c.terms.get("impact", 0.0), -c.score))
-            for card in rest[:reserve]:
+            rest = [c for c in self.scored if c.entry_id not in taken
+                    and c.terms.get("veto") not in vetoed]
+            # Coverage: any entry probing a mechanism tag no terminal entry has
+            # tested, best score first -- among equally novel probes the
+            # formula's ordering is still the least-biased tiebreak.
+            for card in sorted((c for c in rest if c.untested),
+                               key=lambda c: -c.score)[:cov_n]:
+                card.coverage = True
+                picks.append(card)
+                taken.add(card.entry_id)
+            # Amplitude: impact alone. Confidence and cost are precisely the
+            # terms that bury a long shot, so the reserve must not consult
+            # them; ties break on score so the ordering stays deterministic.
+            rest = [c for c in rest if c.entry_id not in taken]
+            for card in sorted(rest,
+                               key=lambda c: (-c.terms.get("impact", 0.0),
+                                              -c.score))[:exp_n]:
                 card.explore = True
                 picks.append(card)
-            # A reserve nobody could fill is given back to the score, so a short
-            # queue is never shortlisted below `k` for want of a long shot.
+            # A reserve nobody could fill is given back to the score, so a
+            # short queue is never shortlisted below `k` for want of a long
+            # shot or an untested mechanism.
             if len(picks) < k:
                 chosen = {c.entry_id for c in picks}
                 picks += [c for c in self.scored
@@ -140,6 +191,10 @@ class Ranking:
         if self.explore_fraction:
             out += [f"explore reserve: {self.explore_fraction:.0%} of the "
                     f"shortlist, ranked on impact alone"]
+        if self.coverage_fraction:
+            out += [f"coverage reserve: {self.coverage_fraction:.0%} of the "
+                    f"shortlist, ranked among entries probing a mechanism tag "
+                    f"no terminal entry tests"]
         out += [""]
         out += ["  " + s.explain() for s in self.scored]
         if self.excluded:
@@ -193,21 +248,47 @@ def _dead_mechanisms(entries, machine_for):
 
 def rank(entries, config, *, prior_weight: float = 3.0,
          verdicts_since=None, budget_ok=None, host=None,
-         explore_fraction: float = 0.0) -> Ranking:
+         explore_fraction: float = 0.0,
+         coverage_fraction: float = 0.0) -> Ranking:
     """Score every claimable entry. Returns the ranking and why each entry sits
     where it does -- an unexplained ranking is one nobody can correct.
 
-    `explore_fraction` reserves that share of the shortlist for amplitude; see
-    the module docstring. It is off by default so a library caller gets the
-    score and nothing else; the loop and the CLI pass `EXPLORE_FRACTION`."""
+    `explore_fraction` reserves that share of the shortlist for amplitude;
+    `coverage_fraction` reserves a share for entries probing a mechanism tag no
+    terminal entry has tested. Both are off by default so a library caller
+    gets the score and nothing else; the loop and the CLI pass the defaults."""
     if not 0.0 <= explore_fraction < 1.0:
         raise ConfigError(
             f"explore_fraction must be in [0, 1), got {explore_fraction!r}; "
             "a reserve of the whole shortlist leaves no exploit lane, and the "
             "score is what connects an iteration to the objective")
+    if not 0.0 <= coverage_fraction < 1.0:
+        raise ConfigError(
+            f"coverage_fraction must be in [0, 1), got {coverage_fraction!r}; "
+            "a reserve of the whole shortlist leaves no exploit lane, and the "
+            "score is what connects an iteration to the objective")
+    if explore_fraction + coverage_fraction >= 1.0:
+        raise ConfigError(
+            f"explore_fraction {explore_fraction} + coverage_fraction "
+            f"{coverage_fraction} reserves the whole shortlist; at least one "
+            "slot must stay with the score, which is what connects an "
+            "iteration to the objective")
     machine_for = lambda eid: config.track_for(eid).machine   # noqa: E731
     calibration = calibrate(entries, machine_for)
     hard_dead, soft_dead = _dead_mechanisms(entries, machine_for)
+    # Coverage accounting: how many terminal experiment entries have tested
+    # each mechanism tag. A tag with a count of zero (or absent) is untested --
+    # the coverage reserve's eligibility test. Only experiment dispositions
+    # count: a harness fix or a superseded entry never tested a mechanism.
+    tested: dict[str, int] = {}
+    for entry in entries:
+        machine = machine_for(entry.id)
+        if not machine.status(entry.status).terminal or not entry.result:
+            continue
+        if entry.result.disposition != "experiment":
+            continue
+        for mechanism in entry.closure_mechanisms():
+            tested[mechanism] = tested.get(mechanism, 0) + 1
     # Closure dates, so staleness can ask "what has the board learned since this
     # entry was last priced" rather than "how much has it ever learned". The
     # first version compared against the total closed count, which on a corpus
@@ -293,6 +374,7 @@ def rank(entries, config, *, prior_weight: float = 3.0,
         card.score = confidence * impact / cost * staleness * overlap
         if touching:
             card.terms["soft_dead"] = float(len(touching))
+        card.untested = sum(1 for m in entry.mechanisms if not tested.get(m))
         scored.append(card)
 
     scored.sort(key=lambda s: -s.score)
@@ -305,7 +387,8 @@ def rank(entries, config, *, prior_weight: float = 3.0,
         notes.append(f"{len(soft_dead)} mechanism(s) have slope/cell refutations; "
                      "overlap penalties require matching applicability")
     return Ranking(scored=scored, excluded=excluded, calibration=calibration,
-                   notes=notes, explore_fraction=explore_fraction)
+                   notes=notes, explore_fraction=explore_fraction,
+                   coverage_fraction=coverage_fraction)
 
 
 @dataclass
@@ -358,4 +441,5 @@ def apply_veto(ranking: Ranking, vetoes: list[Veto]) -> Ranking:
 
     return Ranking(scored=scored, excluded=ranking.excluded,
                    calibration=ranking.calibration, notes=notes,
-                   explore_fraction=ranking.explore_fraction)
+                   explore_fraction=ranking.explore_fraction,
+                   coverage_fraction=ranking.coverage_fraction)

@@ -369,6 +369,11 @@ class Coordinator:
                  "summary": e.result.summary}
                 for e in entries
                 if e.result is not None],
+            # Coverage map: how many terminal experiment entries have tested
+            # each mechanism tag. A tag missing from this map, or with
+            # `"tested": 0`, is untested -- the coverage reserve's lane, and
+            # the one kind of proposal this board is shortest of.
+            "mechanism_coverage": self._mechanism_coverage(entries),
             "budget_remaining": {
                 name: meter.remaining()
                 for name, meter in self.domain_budget.meters.items()},
@@ -377,6 +382,59 @@ class Coordinator:
         return json.dumps(payload, indent=2, default=str)
 
     # -- phases ------------------------------------------------------------
+
+    def _mechanism_coverage(self, entries) -> dict:
+        """Terminal experiment verdicts per mechanism tag, for the briefs.
+
+        Generator, scout and judge all need the same fact -- which mechanism
+        tags the record has actually tested and which it has only named -- so
+        it is computed once here. Untested is the interesting row: a tag the
+        board keeps proposing but never measuring is exactly the failure the
+        coverage reserve exists to stop."""
+        out: dict[str, dict] = {}
+        for e in entries:
+            if e.result is None:
+                continue
+            machine = self.config.track_for(e.id).machine
+            if not machine.status(e.status).terminal:
+                continue
+            if e.result.disposition != "experiment":
+                continue
+            for m in e.closure_mechanisms():
+                row = out.setdefault(m, {"tested": 0, "confirmed": 0,
+                                         "refuted": 0})
+                row["tested"] += 1
+                if e.result.verdict in ("confirmed", "fixed"):
+                    row["confirmed"] += 1
+                elif e.result.verdict == "refuted":
+                    row["refuted"] += 1
+        return out
+
+    @staticmethod
+    def _proposal_problem(proposal: dict) -> str | None:
+        """The mechanical check on a filed proposal, or None if it passes.
+
+        The scoring inputs are not optional. On the corpus this core is
+        derived from, the filing path defaulted `impact` to 0 and `mechanisms`
+        to empty, 298 entries shipped with those defaults, and the ranking --
+        which is only as good as the numbers under it -- ranked on noise while
+        looking like mathematics. A proposal missing any of them is refused at
+        the door with the reason named, so the gap is visible in the phase
+        record instead of invisible in the prices."""
+        title = str(proposal.get("title", ""))[:60]
+        mechanisms = proposal.get("mechanisms")
+        if not isinstance(mechanisms, list) or not mechanisms \
+                or any(not str(m).strip() for m in mechanisms):
+            return (f"{title!r}: mechanisms must be a non-empty list of tags; "
+                    "without them the board cannot track coverage or exclude "
+                    "dead directions")
+        for name, what in (("confidence", "a probability in [0, 1]"),
+                           ("impact", "a fractional move on the objective"),
+                           ("cost", "a cost in run-units")):
+            value = proposal.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return f"{title!r}: {name} must be {what}, got {value!r}"
+        return None
 
     def orient(self, it: Iteration) -> Phase:
         phase = it.phase("orient")
@@ -422,11 +480,22 @@ class Coordinator:
                 break
             briefs.append(self._brief(
                 Role.GENERATOR, it, generator_index=i, generators=n,
-                instruction=("Propose hypotheses this board has not tried. Return "
-                             "a JSON list of entries with keys: title, hypothesis, "
-                             "prediction, bar, confidence (0-1), impact (fractional "
-                             "move on the objective), cost (in run-units), "
-                             "mechanisms (list of tags), why_filed.")))
+                instruction=("Propose hypotheses this board has not tried. "
+                             "Every entry MUST carry: title, hypothesis, "
+                             "prediction, bar, confidence (0-1), impact "
+                             "(fractional move on the objective), cost (in "
+                             "run-units), mechanisms (non-empty list of tags), "
+                             "why_filed -- a proposal missing any of these is "
+                             "refused mechanically. Check `mechanism_coverage` "
+                             "in the brief: at least one entry in your batch "
+                             "must probe a mechanism tag with `tested: 0` (or "
+                             "absent), naming a NEW tag if no existing one "
+                             "fits. A novel mechanism whose confirmation does "
+                             "not immediately move the objective is still "
+                             "worth filing at its honest numbers -- its "
+                             "refutation or confirmation prices the whole "
+                             "family, and the coverage reserve is how it gets "
+                             "attempted.")))
         numbered = list(enumerate(briefs))
         phase.read = len(briefs)
 
@@ -438,6 +507,10 @@ class Coordinator:
                 continue
             for proposal in (reply.data or []):
                 if not isinstance(proposal, dict) or not proposal.get("title"):
+                    continue
+                problem = self._proposal_problem(proposal)
+                if problem is not None:
+                    phase.detail.append(f"refused: {problem}")
                     continue
                 if self._norm_title(proposal["title"]) in existing:
                     continue          # two generators proposing one idea (H60)
@@ -493,14 +566,18 @@ class Coordinator:
                         budget["runs"].remaining())
         ranking = rank_mod.rank(entries, self.config, host=self.host,
                                 budget_ok=lambda e: e.cost <= remaining,
-                                explore_fraction=self.config.explore_fraction)
+                                explore_fraction=self.config.explore_fraction,
+                                coverage_fraction=self.config.coverage_fraction)
         phase.read = len(entries)
         k = int(budget["fanout"].remaining())
         # Computed before the judge so the brief can name the entries the
-        # reserve would take. An explore pick sits low on score by
+        # reserves would take. A reserve pick sits low on score by
         # construction, and a judge shown it unlabelled reads the ranking as
-        # broken and vetoes the one slot aimed at a big swing.
-        reserve = [c.entry_id for c in ranking.shortlist(k) if c.explore]
+        # broken and vetoes the one slot aimed at a big swing or an untested
+        # mechanism.
+        pre = ranking.shortlist(k)
+        reserve = [c.entry_id for c in pre if c.explore]
+        coverage = [c.entry_id for c in pre if c.coverage]
 
         # The judge may reorder within the shortlist; it may not overrule a
         # hard filter, and apply_veto refuses that outright.
@@ -513,13 +590,16 @@ class Coordinator:
                 excluded=[{"id": s.entry_id, "why": s.excluded}
                           for s in ranking.excluded],
                 explore_reserve=reserve,
+                coverage_reserve=coverage,
                 instruction=("Return a JSON list of vetoes, each {entry_id, "
                              "action: promote|demote|drop, justification}. "
                              "Return [] if the ordering is right. You may not "
                              "veto an excluded entry. `explore_reserve` names "
-                             "the entries taking the reserved slots, ranked on "
-                             "impact alone -- they sit low on score by design, "
-                             "which is not a reason to veto them.")))
+                             "the entries taking the amplitude slots, ranked on "
+                             "impact alone; `coverage_reserve` names the slots "
+                             "aimed at mechanism tags no terminal entry has "
+                             "tested. Both sit low on score by design, which "
+                             "is not a reason to veto them.")))
             self._charge(it, reply)
             vetoes = [rank_mod.Veto(v["entry_id"], v["action"], v.get("justification", ""))
                       for v in (reply.data or []) if isinstance(v, dict)]
@@ -536,6 +616,9 @@ class Coordinator:
         taken = [c.entry_id for c in shortlist if c.explore]
         if taken:
             phase.detail.append(f"explore reserve: {', '.join(taken)}")
+        taken = [c.entry_id for c in shortlist if c.coverage]
+        if taken:
+            phase.detail.append(f"coverage reserve: {', '.join(taken)}")
         phase.seconds = time.time() - start
         return phase, shortlist
 
@@ -948,11 +1031,14 @@ class Coordinator:
                              "title, hypothesis, prediction, bar, confidence "
                              "(0-1), impact (fractional move on the "
                              "objective), cost (in run-units), mechanisms "
-                             "(list of tags), sources (list of citations or "
-                             "URLs), why_filed. File only what the question "
-                             "opens; never re-propose an open entry or a "
-                             "closed direction. Return [] if it opens "
-                             "nothing.")))
+                             "(non-empty list of tags), sources (list of "
+                             "citations or URLs), why_filed -- a proposal "
+                             "missing any of these is refused mechanically. "
+                             "Favour proposals that open a mechanism tag "
+                             "`mechanism_coverage` shows untested. File only "
+                             "what the question opens; never re-propose an "
+                             "open entry or a closed direction. Return [] if "
+                             "it opens nothing.")))
         phase.read = len(briefs)
         existing = self._seen_titles()
 
@@ -971,6 +1057,10 @@ class Coordinator:
             filed = 0
             for proposal in proposals:
                 if not isinstance(proposal, dict) or not proposal.get("title"):
+                    continue
+                problem = self._proposal_problem(proposal)
+                if problem is not None:
+                    phase.detail.append(f"refused: {problem}")
                     continue
                 if self._norm_title(proposal["title"]) in existing:
                     continue          # two agents proposing one idea (H60)
