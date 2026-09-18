@@ -6,7 +6,8 @@ moves between machines.
 
 Everything here is drawn from `src/autoresearch/driver/loop.py` (the
 coordinator), `driver/brain.py` (the model seam), `states.py` (the lifecycle),
-`rank.py` (scoring and the reserve) and `workspaces.py` (the pool).
+`rank.py` (scoring, the risk dial and the domain score seam) and `workspaces.py`
+(the pool).
 
 ## 1. The three layers
 
@@ -29,7 +30,7 @@ flowchart TB
         direction LR
         coord["Coordinator<br/>driver/loop.py"]
         store["Store<br/>one record per entry"]
-        rank["rank.py<br/>formula over recorded numbers,<br/>plus reserves for amplitude and coverage"]
+        rank["rank.py<br/>formula over recorded numbers,<br/>risk dial, optional domain score seam"]
         budget["budget.py<br/>every ceiling is a meter,<br/>campaign spend read back from disk"]
         render["render.py<br/>every view is generated"]
         skills["skills.py<br/>distilled prose, cited to entries<br/>and refused when they move"]
@@ -74,7 +75,7 @@ flowchart LR
     start(["run_iteration(n)"]) --> orient
     orient["orient<br/>read record, resolve target,<br/>reap dead claims,<br/>report resumed history"]
     generate["generate<br/>N generators, in parallel"]
-    rankp["rank<br/>score, reserves for amplitude and coverage,<br/>then judge may reorder"]
+    rankp["rank<br/>score, risk dial splits root/branch,<br/>then judge may reorder"]
     dispatch["dispatch<br/>claim → worker → verdict"]
     curate["curate<br/>re-price what moved,<br/>write views"]
     distil["distil<br/>promote closed work into<br/>cited skills, on a cadence"]
@@ -126,6 +127,25 @@ Four things about this shape are deliberate:
 
 Every model call spends a `spawns` meter, QC's included, so the ceiling that
 makes a runaway iteration structurally impossible counts every role that ran.
+
+The rank phase is where the search becomes a **tree**. Every entry carries a
+`parent`: a branch off work already in the record (the child refines, narrows,
+or re-runs its parent with one premise exchanged) or a novel root. The
+coordinator owns the structure — an unknown parent, a lineage deeper than
+`tree_max_depth`, more siblings per parent than `tree_max_children`, or a
+branch crossing tracks is refused at filing, with a reason, in the generate
+phase's detail lines. The shortlist splits on the same field:
+`[coordinator] risk` (default 0.5 — the neutral 50/50 stance between improving
+the incumbent and opening new territory) decides what share of the slots goes
+to roots; within each partition the score decides; an unfilled share returns
+to the other partition; `k=1` is never spent on a partition. A domain may
+replace the formula's pricing with its own through `[commands] score =
+"bin/score"` — a seam shaped like `preflight` (stdin `{"risk", "entries"}`,
+stdout `{"scores": [{id, score, reason}]}`, claimable candidates only). The
+hard filters run before the seam either way, so neither the dial nor a
+domain's prices can resurrect a `mechanism`-refuted direction; and a seam
+failure refuses the rank phase and skips dispatch rather than falling back to
+the formula the domain replaced.
 
 ## 3. Roles, and what each may do
 

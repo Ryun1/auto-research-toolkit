@@ -30,7 +30,7 @@ from . import gates as gates_mod
 from . import hardware as hw
 from . import plugins as plugins_mod
 from . import rank as rank_mod
-from . import render
+from . import render, scoring
 from . import runs as runs_mod
 from . import skills as skills_mod
 from . import upstream as upstream_mod
@@ -509,23 +509,25 @@ def cmd_rank(args):
     domain = budget_mod.domain_budget(
         config, spent_runs=budget_mod.total_runs(config))
     remaining = domain["runs"].remaining()
-    explore = config.explore_fraction if args.explore is None else args.explore
-    coverage = (config.coverage_fraction if args.coverage is None
-                else args.coverage)
-    ranking = rank_mod.rank(entries, config, explore_fraction=explore,
-                            coverage_fraction=coverage,
+    risk = config.risk if args.risk is None else args.risk
+    ranking = rank_mod.rank(entries, config, risk=risk,
                             budget_ok=lambda e: e.cost <= remaining)
-    # Shortlisted first: `shortlist` is what marks the reserves, and the table
-    # is the ranking a human corrects. A reserve pick sits low in it by
-    # design, and one shown unmarked reads as the formula having gone wrong.
+    if "score" in config.commands:
+        # The human-correction surface shows what the loop would dispatch,
+        # which is the domain's prices when the seam is installed.
+        ranking = scoring.seam_ranking(config, ranking, entries, risk)
+        print(f"priced by domain seam: {config.commands['score']}\n")
+    # Shortlisted first: `shortlist` is where the risk dial spends its slots,
+    # and the table is the ranking a human corrects. A novel pick may sit low
+    # in it by design, and one shown unmarked reads as the formula having
+    # gone wrong.
     shortlist = ranking.shortlist(args.top) if args.top else []
     print(ranking.explain())
     if args.top:
         print(f"\nshortlist (top {args.top}):")
         for s in shortlist:
             print(f"  {s.entry_id}  {s.title}"
-                  + ("  [explore]" if s.explore else "")
-                  + ("  [coverage]" if s.coverage else ""))
+                  + ("  [novel]" if s.novel else "  [branch]"))
     return 0
 
 
@@ -567,7 +569,9 @@ def cmd_budget(args):
         config,
         measurements=best[1].metrics if best else None,
         target=target,
-        budgets=[domain])
+        budgets=[domain],
+        independent_confirmation=budget_mod.independent_confirmation(
+            config.goal, best, all_runs, target))
     print(f"\nstop decision: {decision}")
     # `target` is tested for truth, not for None: a zero target cannot be
     # normalised against, and `is_met` refuses it rather than dividing by it.
@@ -1063,19 +1067,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     rankp = sub.add_parser("rank", help="score the queue and explain the numbers")
     rankp.add_argument("--top", type=int, default=3)
-    rankp.add_argument("--explore", type=float, default=None, metavar="F",
-                       help="share of the shortlist reserved for the largest "
-                            "impact, ignoring confidence and cost; overrides "
-                            "the domain's coordinator.explore_fraction "
-                            f"(core default {rank_mod.EXPLORE_FRACTION}, "
-                            "0 disables)")
-    rankp.add_argument("--coverage", type=float, default=None, metavar="F",
-                       help="share of the shortlist reserved for entries "
-                            "probing a mechanism tag no terminal entry tests; "
-                            "overrides the domain's coordinator."
-                            "coverage_fraction "
-                            f"(core default {rank_mod.COVERAGE_FRACTION}, "
-                            "0 disables)")
+    rankp.add_argument("--risk", type=float, default=None, metavar="R",
+                       help="share of the shortlist aimed at novel branches "
+                            "(entries with no parent); overrides the domain's "
+                            f"coordinator.risk (core default {rank_mod.RISK})")
     rankp.set_defaults(func=cmd_rank)
 
     sub.add_parser("budget", help="every meter, and the stop decision"

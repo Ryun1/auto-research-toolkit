@@ -90,11 +90,13 @@ domain_max_runs       = 500
 
 [coordinator]
 workers_per_iteration = 3
-explore_fraction      = 0.2      # share of each shortlist reserved for amplitude
-coverage_fraction     = 0.2      # share reserved for untested mechanism tags
+risk                  = 0.5    # share of each shortlist aimed at novel branches (no parent)
+tree_max_depth        = 3      # cap on branch lineage depth; 0 disables
+tree_max_children     = 4      # cap on siblings per parent; 0 disables
 
 [commands]
 measure      = "bin/measure"
+score        = "bin/score"      # optional: the domain prices its own branches
 probe_target = "bin/probe-target"
 ```
 
@@ -111,6 +113,12 @@ goal:
   target:   {source: bin/probe-target, moving: true}
   stop_when: "objective < target"
   yield_floor: {confirmed_per_iteration: 0.15, over_iterations: 10}
+  # Hold a met target until a second, independent run row (different claim:
+  # different workspace session or entry) also meets it. AIRA measured the
+  # failure this guards at 9-13 points on MLE-bench (arXiv 2507.02554 §5.3):
+  # a search guided by its own proxy overfits, and the perceived score keeps
+  # rising after the true one has stopped.
+  confirm_independently: true
 ```
 
 ## Install
@@ -619,7 +627,7 @@ the objective and target at full precision (a `{:,.0f}` format displayed a
 0.1 gap as `-0`), and a `stop_when` expression satisfied by a zero-on-zero
 measurement is refused unless the goal sets `allow_degenerate_target: true`.
 
-## Ranking, and the reserves for amplitude and coverage
+## Ranking: the tree, the risk dial, and the domain's own score
 
 ```
 score = confidence × impact / cost × staleness × overlap
@@ -629,50 +637,69 @@ Expected value per unit cost, over numbers already in the record. That is
 risk-neutral, and risk-neutral EV/cost is **pure exploitation**: an honest long
 shot (confidence 0.10, impact 0.40, cost 8 → 0.005) loses to a safe increment
 (0.85, 0.02, 1 → 0.017) by 3.4×, and would need impact above 1.0 — more than the
-whole objective — to draw level. Nothing else in the formula corrects for it,
-because `staleness` and `overlap` are both bounded by 1: every term is a penalty
-and none is a bonus. Left alone, the loop cannot attempt a big swing.
+whole objective — to draw level. Left alone, the loop cannot attempt a big
+swing.
 
-So `[coordinator] explore_fraction` reserves that share of each shortlist for
-the largest **`impact`**, ignoring confidence and cost — precisely the terms
-that bury a long shot. Risk appetite is a domain decision, which is why it is a
-domain's to set: a domain chasing a frontier that moved 22.5% in 18.8 days wants
-a different one from a domain polishing a converged number. `0` is read as a
-decision, not as unset.
+**The search is a tree, and the record is the tree.** Every entry is either a
+**novel root** (no `parent`) or a **branch** (`parent` names an existing
+entry): a child refines, narrows, or re-runs its parent's work with one
+premise exchanged — a search step that swaps a part rather than turning a
+dial. A failed or inconclusive attempt continues as a child; a new territory
+opens as a root. The coordinator owns the structure: an unknown parent, a
+lineage deeper than `tree_max_depth`, or more siblings per parent than
+`tree_max_children` is refused at filing with a reason, and a branch stays on
+its parent's track. A branch names its intent with `kind` — `improve`,
+`debug`, or `probe` — and the kind scopes its memory the way AIRA measured it
+(arXiv 2507.02554 §4.1): a `debug` branch is handed its full ancestral chain
+so it never re-undoes a repair its parent already made, while the others see
+only their siblings' verdicts, which pushes diversity instead of mode
+collapse. The generator's brief carries each branchable parent's family
+verdicts plus a complexity cue (minimal/moderate/advanced, keyed to the
+parent's child count) so the next child's premise is as deep as the family
+has actually earned.
 
-**A second reserve covers what the formula cannot price at all.** A genuinely
-novel mechanism — a different algorithm class, a representation nobody on the
-board has tried — has no calibration history, so its `confidence` is a guess,
-and its `impact` is an estimate of a payoff that may only arrive *after* the
-family it opens has been measured a few times. Impact-ranked exploration does
-not reach it: a novel probe with modest or unestimable impact loses the explore
-slot to a priced long shot. On the corpus this core was extracted from, the
-`mechanisms` field went unfilled on 469 of 470 entries and the two largest
-wins were novel mechanism families — the loop refined one architecture for
-hundreds of iterations before concluding a different architecture class was
-required. `[coordinator] coverage_fraction` reserves a share of each shortlist
-for entries probing a mechanism tag **no terminal entry has ever tested**,
-chosen among them by score. The generator's brief carries
-`mechanism_coverage` — verdicts per tag — and is instructed to file at least
-one untested-mechanism probe per batch; a proposal missing `mechanisms`,
-`confidence`, `impact` or `cost` is refused at the door, so the ranking can
-never silently fall back to defaults the way that corpus did. The two
-fractions are checked together at load: their sum must stay below 1.
+**The risk dial splits the shortlist structurally.** `[coordinator] risk`
+(default `0.5` — the neutral stance: half the attention on improving the
+incumbent, half on pursuing novel branches) declares what share of each
+shortlist goes to roots; the rest goes to branches. Within each partition the
+score decides; an unfilled share returns to the other partition; a single-slot
+iteration (`k=1`) is never spent on a partition. Risk appetite is a domain
+decision, which is why it is a domain's to set: a domain chasing a frontier
+that moved 22.5% in 18.8 days wants a different one from a domain polishing a
+converged number. Both ends are legitimate stances — `0` refines the
+incumbent only, `1` opens new territory only. `ar rank --risk R` overrides it
+for one look.
 
-Three things the reserves deliberately do not do:
+**A domain may own the score itself.** `[commands] score = "bin/score"` hands
+the *pricing* of claimable branches to a domain command — the same seam shape
+as `bin/measure`. It receives `{"risk": <float>, "entries": [<entry dict>,
+...]}` on stdin (claimable candidates only — hard filters have already run)
+and must print `{"scores": [{"id", "score", "reason"}]}`, one row per entry.
+A nonzero exit, a missing id, or a non-finite score refuses the rank phase
+and the iteration dispatches nothing — there is no fallback to the formula a
+domain replaced. A multi-objective domain can make its scorer Pareto-aware;
+whether the goal is one scalar or a frontier is a domain decision, not core
+policy.
 
-- **They are not a second route past the hard filters.** They reorder among
-  *ranked* entries only, so a `mechanism`-refuted direction stays dead however
-  large its impact looks.
-- **They never take the whole shortlist, and never spend the only slot.**
-- **They honour a judge's `demote`/`drop`** — both of which `apply_veto`
-  implements by moving the card to the tail, which is exactly where the
-  reserves look.
+Three things neither the dial nor the seam deliberately do:
 
-`ar rank --explore F` and `--coverage F` override them for one look. The
-judge's brief names which entries hold reserved slots, because a reserve pick
-sits low on score *by construction* and a judge shown one unlabelled reads
-the ranking as broken.
+- **They are not a route past the hard filters.** Both operate among *ranked*
+  entries only, so a `mechanism`-refuted direction stays dead however large
+  its impact looks.
+- **The dial never spends the only slot.** The seam never runs when the dial
+  partitioning can be avoided: a queue no larger than the shortlist has
+  nothing to split.
+- **Both honour a judge's `demote`/`drop`** — `apply_veto` moves the card to
+  the tail, which is the tail of its partition, so neither can pick it back.
+
+The judge's brief marks which entries are novel, because a novel pick may sit
+low on score *by design* and a judge shown one unlabelled reads the ranking
+as broken. The generator's brief carries `mechanism_coverage` — verdicts per
+tag — and is instructed to file at least one untested-mechanism probe per
+batch; a proposal missing `mechanisms`, `confidence`, `impact` or `cost` is
+refused at the door, so the ranking can never silently fall back to defaults
+the way the corpus this core was extracted from did (1 mechanism tag on 470
+entries, the two largest wins novel mechanism families).
 
 ## The brain is a command, not a vendor
 

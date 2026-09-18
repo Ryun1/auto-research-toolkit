@@ -146,19 +146,16 @@ def _domain_toml(name: str) -> str:
         workers_per_iteration    = 3
         generators_per_iteration = 2
         max_parallel             = 3
-        # Share of each shortlist reserved for the largest `impact`, ignoring
-        # confidence and cost. The score is expected value per unit cost, which
-        # is risk-neutral, so without a reserve a cheap certain increment always
-        # beats an honest long shot and the loop never attempts a big swing.
-        # Raise it while the frontier is moving; 0 disables it entirely.
-        explore_fraction         = 0.2
-        # Share of each shortlist reserved for entries probing a mechanism tag
-        # no terminal entry has tested. The exploit formula cannot price a
-        # genuinely novel mechanism -- no calibration history means its
-        # confidence is a guess -- so without this reserve the loop refines
-        # measured directions and never opens new ones. The two reserves are
-        # checked together: their sum must stay below 1. 0 disables it.
-        coverage_fraction        = 0.2
+        # Share of each shortlist aimed at novel branches (entries with no
+        # parent -- new territory) versus refining the incumbent (branches off
+        # work already in the record). 0.5 is the neutral stance; raise it
+        # while the frontier is moving, lower it once a direction is winning
+        # and every slot is better spent deepening it.
+        risk                     = 0.5
+        # The tree. Branches are filed with a `parent`; these caps keep one
+        # lineage from growing unbounded. 0 disables either cap.
+        tree_max_depth           = 3
+        tree_max_children        = 4
         # Distil closed work into skills every N iterations. Not every one:
         # a librarian asked to distil after a single verdict writes a skill
         # that says what one entry already says. 0 turns distillation off.

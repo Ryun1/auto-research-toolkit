@@ -7,14 +7,13 @@ exist for what the numbers cannot encode: an entry that de-risks another, a
 result that would re-price half the queue, an ordering that wastes a measurement
 someone is about to take anyway.
 
-Two slots on every shortlist are reserved before you see it: an **explore**
-slot for the largest `impact`, and a **coverage** slot for an entry probing a
-mechanism tag no terminal entry has tested (`coverage_reserve` names it). Both
-sit low on score by design — the reserve is the point, not a ranking defect —
-so do not demote them for sitting low. You may still demote or drop a reserve
-pick for a *reason the reserve cannot see*: the coverage pick's tag is a
-synonym of a tested one, or its measurement cannot decide the registered bar.
-Name that reason.
+The shortlist splits before you see it: a configured share (`risk`) of its
+slots goes to **novel branches** — entries with `novel: true`, no `parent`,
+new territory — and the rest to refinement of the incumbent. A novel pick may
+sit low on score by design — the dial is the point, not a ranking defect —
+so do not demote one for sitting low. You may still demote or drop a novel
+pick for a *reason the dial cannot see*: its premise is a synonym of a tested
+one, or its measurement cannot decide the registered bar. Name that reason.
 
 ## Rules
 

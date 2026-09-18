@@ -333,14 +333,13 @@ class TypeSafeBrain:
         closed directions, the full ranking -- and a brief that size exceeds
         the API's token budget (HTTP 400 max_tokens_exceeded at ~258KB).
         These roles read only their question inputs, so only those travel:
-        the judge reviews the top `JUDGE_REVIEW_CAP` ranking rows plus the
-        reserves, qc the mechanical problems. Context rides as a small
-        allowlist of scalars/maps, never entry corpora.
+        the judge reviews the top `JUDGE_REVIEW_CAP` ranking rows -- each
+        already carrying its `novel` flag from the risk dial -- and qc the
+        mechanical problems. Context rides as a small allowlist of
+        scalars/maps, never entry corpora.
         """
         if role == Role.JUDGE:
-            wire = {"ranking": (state.get("ranking") or [])[:self.JUDGE_REVIEW_CAP],
-                    "explore_reserve": state.get("explore_reserve") or [],
-                    "coverage_reserve": state.get("coverage_reserve") or []}
+            wire = {"ranking": (state.get("ranking") or [])[:self.JUDGE_REVIEW_CAP]}
         else:
             wire = {"mechanical_problems":
                     state.get("mechanical_problems") or []}
@@ -397,18 +396,17 @@ class TypeSafeBrain:
 
     def _judge_questions(self, state: dict) -> dict:
         ranking = state.get("ranking") or []
-        reserves = set(state.get("explore_reserve") or []) \
-            | set(state.get("coverage_reserve") or [])
         questions = {}
         for i, row in enumerate(ranking[:self.JUDGE_REVIEW_CAP]):
             entry_id = str(row.get("id", "")).strip()
             if not entry_id:
                 continue
             note = ""
-            if entry_id in reserves:
-                note = (" It takes an explore/coverage reserve slot, which "
-                        "sits low on score by design -- not by itself a "
-                        "reason to demote.")
+            if row.get("novel"):
+                note = (" It takes a novel-branch slot from the risk dial "
+                        "(no parent -- new territory), which may sit low on "
+                        "score by design -- not by itself a reason to "
+                        "demote.")
             questions[f"reorder_{entry_id}"] = {
                 "type": "choice",
                 "instructions": (

@@ -59,10 +59,10 @@ new inversion scheme, a new representation, a mechanism class the board has
 never measured — is worth filing even when its confirmation moves the
 objective by nothing this iteration. What it buys is priced over iterations:
 its verdict, either way, is the first measurement of the whole family, and
-every later entry on that tag calibrates against it. That is why the shortlist
-carries a coverage reserve: a share of every iteration is spent on exactly
-these entries, ranked on novelty rather than on score. File the novel probe
-at its honest numbers and let the reserve carry it.
+every later entry on that tag calibrates against it. That is why the risk
+dial reserves a share of every shortlist for novel branches: a share of every
+iteration is spent on exactly these entries, whatever the score says. File
+the novel probe at its honest numbers and let the dial carry it.
 
 ## What a good entry contains
 
@@ -79,13 +79,37 @@ optimism is visible and costs you rank.
 **File the big swing at its honest numbers.** The score is expected value per
 unit cost, so on score alone a `confidence: 0.1, impact: 0.4, cost: 8` entry
 loses to a safe increment and always will. It is not ranked on score alone:
-a fixed share of every shortlist is reserved for the largest `impact`,
-ignoring confidence and cost entirely, and a second share is reserved for
-untested mechanisms (the quota above). So the way to get a large idea
+a configured share of every shortlist (`risk`) goes to **novel branches** —
+entries with no `parent` — regardless of score. So the way to get a large idea
 attempted is to state its impact accurately and its confidence low — not to
-inflate the confidence, which the calibration catches and which costs you the
-exploit lane as well. An idea you dropped because it looked unrankable is the
-one failure these reserves exist to prevent.
+inflate the confidence, which the calibration catches and which costs you
+credibility on the entries the score does rank. An idea you dropped because it
+looked unrankable is the one failure the dial exists to prevent.
+
+## The tree: branch or root
+
+Every entry you file is either a **novel root** (no `parent`) or a **branch**
+(`parent` names an existing entry id). The record's shortlist splits on
+exactly this field, so choose it deliberately:
+
+- Branch off an entry when your proposal refines, narrows, or re-runs its
+  work with one premise exchanged — a child inherits its parent's context and
+  its verdict prices your priors. After an inconclusive or failed attempt, a
+  branch is how the search continues: same hypothesis, one part swapped.
+- File a root when the proposal opens territory no existing entry covers.
+
+A branch stays on its parent's track; depth and sibling counts are capped by
+the domain's `tree_max_depth` and `tree_max_children`, and a proposal past
+either cap is refused at filing with a reason. A refusal is information: it
+means the board wants that parent's children spent on a different exchange.
+
+**Name the branch's intent with `kind`.** `improve` refines a premise that
+held; `debug` repairs one that failed or came back inconclusive; `probe`
+narrows a boundary without challenging the premise. The kind decides what
+memory travels with the work: a `debug` branch is handed its full ancestral
+chain — every prior fix attempt — so it never re-undoes a repair its parent
+already made; `improve` and `probe` branches are scoped to their *siblings'*
+verdicts. Roots carry no kind: a novel root is a probe by construction.
 
 ## Output
 
@@ -102,6 +126,8 @@ A JSON list. Nothing else is read.
     "impact": 0.08,
     "cost": 2,
     "mechanisms": ["short-tag", "another-tag"],
+    "parent": "",
+    "kind": "",
     "why_filed": "why this is worth an iteration, and what its refutation buys"
   }
 ]
@@ -114,6 +140,14 @@ an existing tag from `closed_directions` and `open_entries` when it names the
 same premise; coin a new one when the premise is genuinely new. The failure
 to avoid is the synonym — a second tag for a premise the board already prices
 splits its history in two — not the new tag, which is how coverage grows.
+`parent` is the entry id you are branching from, or `""` for a novel root —
+see "The tree" above. `kind` names the branch's intent (`improve`, `debug`,
+`probe`), only on a branch — read `branch_families` in the brief first: it
+carries what that parent's children already concluded and a `complexity` cue
+(`minimal` <2 children, `moderate` 2–4, `advanced` ≥5). The cue is not
+decoration: a parent with many siblings has had the simple exchanges tried,
+and another shallow variant is exactly the mode collapse the sibling scope
+exists to prevent.
 
 Return `[]` if every angle you can see is already closed or already queued. An
 empty list is a real answer and is better than a duplicate — but read it

@@ -46,14 +46,14 @@ import shlex
 import time
 from dataclasses import dataclass, field
 
-from .. import attempts, preflight, render
+from .. import attempts, preflight, render, scoring
 from .. import budget as budget_mod
 from .. import hardware as hw
 from .. import rank as rank_mod
 from .. import runs as runs_mod
 from .. import skills as skills_mod
 from ..claims import Claims
-from ..entries import Applicability, Entry, Event, Result, Store
+from ..entries import KINDS, Applicability, Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
 from ..workspaces import Pool
 from .brain import Role, cost_value
@@ -397,8 +397,22 @@ class Coordinator:
             # `"tested": 0`, is untested -- the coverage reserve's lane, and
             # the one kind of proposal this board is shortest of.
             "mechanism_coverage": self._mechanism_coverage(entries),
+            # Scoped sibling memory (AIRA arXiv 2507.02554 §4.1): what each
+            # branchable parent's children already concluded, plus the
+            # complexity cue a next child should aim at. A generator branching
+            # off P reads P's family, not the whole record -- siblings that
+            # differ push diversity; siblings that repeat are mode collapse.
+            "branch_families": self._branch_families(entries),
             "budget_remaining": {
-                name: meter.remaining()
+                # float("inf") serializes as bare `Infinity`, which is not
+                # valid JSON: spec-compliant parsers reject it (the TypeSafe
+                # System One endpoint answers HTTP 500). An unlimited meter
+                # is "no number", so it rides as null.
+                # float("inf") serializes as bare `Infinity`, which is not
+                # valid JSON: spec-compliant parsers reject it (the TypeSafe
+                # System One endpoint answers HTTP 500). An unlimited meter
+                # is "no number", so it rides as null.
+                name: (None if math.isinf(v := meter.remaining()) else v)
                 for name, meter in self.domain_budget.meters.items()},
         }
         payload.update(extra)
@@ -432,6 +446,65 @@ class Coordinator:
                 elif e.result.verdict == "refuted":
                     row["refuted"] += 1
         return out
+
+    def _lineage(self, entry) -> list[dict]:
+        """The entry's ancestral chain, root first, the entry itself last.
+
+        Handed to the worker brief. For a `debug` branch this is the prior
+        fix attempts -- without it a debug step re-undoes its parent's
+        repair (the oscillation AIRA §4.1 scoped memory exists to stop). For
+        any branch it is the context the branch's premise rests on. Bounded
+        by the tree caps, so it never grows without the record growing."""
+        chain = []
+        walked, guard = entry, {entry.id}
+        while True:
+            chain.append({
+                "id": walked.id, "kind": walked.kind,
+                "status": walked.status,
+                "verdict": walked.result.verdict if walked.result else None,
+                "closure_kind": walked.result.closure_kind if walked.result else None,
+                "summary": walked.result.summary if walked.result else ""})
+            if walked.parent == "" or walked.parent in guard:
+                break
+            guard.add(walked.parent)
+            walked = self.store.load(walked.parent)
+        chain.reverse()
+        return chain
+
+    def _branch_families(self, entries) -> dict:
+        """Sibling verdicts for every branchable parent, plus a complexity cue.
+
+        Scoped sibling memory (AIRA §4.1): a generator branching off P should
+        see what P's *children* already concluded -- not the whole record --
+        because siblings that differ are what pushes diversity, and siblings
+        that repeat are mode collapse. The cue is AIRA's prompt-adaptive
+        complexity: the more children a parent already has, the more advanced
+        a premise the next child should exchange."""
+        by_parent: dict[str, list] = {}
+        for e in entries:
+            if e.parent:
+                by_parent.setdefault(e.parent, []).append(e)
+        rows = {}
+        for e in entries:
+            machine = self.config.track_for(e.id).machine
+            if machine.status(e.status).terminal or e.claim is not None:
+                continue        # branchable: claimable, at any lineage depth
+            children = by_parent.get(e.id) or []
+            if not children:
+                continue
+            rows[e.id] = {
+                "title": e.title,
+                "children_count": len(children),
+                "complexity": (
+                    "minimal" if len(children) < 2
+                    else "moderate" if len(children) < 5 else "advanced"),
+                "siblings": [
+                    {"id": c.id, "kind": c.kind, "status": c.status,
+                     "verdict": c.result.verdict if c.result else None,
+                     "summary": c.result.summary if c.result else ""}
+                    for c in sorted(children, key=lambda c: c.id)],
+            }
+        return rows
 
     @staticmethod
     def _proposal_problem(proposal: dict) -> str | None:
@@ -517,8 +590,23 @@ class Coordinator:
                              "not immediately move the objective is still "
                              "worth filing at its honest numbers -- its "
                              "refutation or confirmation prices the whole "
-                             "family, and the coverage reserve is how it gets "
-                             "attempted.")))
+                             "family, and the risk dial is how it gets "
+                             "attempted. Set `parent` to an existing entry id "
+                             "when your proposal refines or narrows that "
+                             "entry's work -- a branch off the incumbent; "
+                             "leave `parent` out for new territory (a novel "
+                             "root), which is what the dial's share is spent "
+                             "on. On a branch, set `kind`: `improve` refines "
+                             "what held, `debug` repairs what failed or was "
+                             "inconclusive, `probe` narrows a boundary. Read "
+                             "`branch_families` in the brief: it carries only "
+                             "what a parent's children already concluded, and "
+                             "its `complexity` cue says how advanced the next "
+                             "child's premise should be -- a parent with many "
+                             "siblings has had the simple exchanges tried. "
+                             "Depth and sibling caps are enforced at "
+                             "filing; a refused branch is a refused branch, "
+                             "not a suggestion.")))
         numbered = list(enumerate(briefs))
         phase.read = len(briefs)
 
@@ -537,7 +625,13 @@ class Coordinator:
                     continue
                 if self._norm_title(proposal["title"]) in existing:
                     continue          # two generators proposing one idea (H60)
-                entry = self._file(proposal)
+                try:
+                    entry = self._file(proposal)
+                except AutoresearchError as exc:
+                    # A refused branch (unknown parent, depth or sibling cap)
+                    # is a distinguishable line, not a crashed phase.
+                    phase.detail.append(f"refused: {exc}")
+                    continue
                 existing.add(self._norm_title(entry.title))
                 phase.detail.append(entry.id)
                 phase.did += 1
@@ -550,10 +644,61 @@ class Coordinator:
             if proposal.get("track") in self.config.tracks \
             else next(iter(self.config.tracks.values()))
         from ..skills import core_version
+        # The tree. A proposal may name the entry it branches from; the
+        # coordinator -- not the proposing agent -- owns the tree structure,
+        # so the lineage is validated here: an unknown parent, a depth past
+        # `tree_max_depth`, or more siblings against one parent than
+        # `tree_max_children` is refused at filing, with a reason, rather
+        # than discovered at dispatch.
+        parent = str(proposal.get("parent", "") or "")
+        if parent:
+            try:
+                parent_entry = self.store.load(parent)
+            except Exception as exc:
+                raise AutoresearchError(
+                    f"cannot file a branch of {parent!r}: no such entry") from exc
+            if parent_entry.track != track.id:
+                raise AutoresearchError(
+                    f"cannot file a branch of {parent!r} on track "
+                    f"{track.id!r}: a branch stays on its parent's track")
+            depth, walked, lineage = 1, parent, {parent}
+            while walked:
+                walked = self.store.load(walked).parent
+                if walked:
+                    if walked in lineage:
+                        raise AutoresearchError(
+                            f"lineage of {parent!r} is cyclic at {walked!r}")
+                    lineage.add(walked)
+                    depth += 1
+            max_depth = self.config.tree_max_depth
+            if max_depth and depth > max_depth:
+                raise AutoresearchError(
+                    f"branch depth {depth} exceeds tree_max_depth={max_depth}; "
+                    "deepen the record by closing work, or raise the cap")
+            max_children = self.config.tree_max_children
+            if max_children:
+                siblings = sum(1 for e in self.store.all()
+                               if e.parent == parent)
+                if siblings + 1 > max_children:
+                    raise AutoresearchError(
+                        f"parent {parent!r} already has {siblings} branch(es); "
+                        f"tree_max_children={max_children}")
+        kind = str(proposal.get("kind", "") or "")
+        if kind:
+            if kind not in KINDS:
+                raise AutoresearchError(
+                    f"unknown branch kind {kind!r}; one of "
+                    f"{KINDS}, or omit it")
+            if not parent:
+                raise AutoresearchError(
+                    f"kind {kind!r} is branch intent; a proposal with no "
+                    "parent is a novel root and carries no kind")
         entry = Entry(
             id=self.store.next_id(track.prefix), track=track.id,
             title=str(proposal["title"])[:200],
             status=track.machine.initial,
+            parent=parent,
+            kind=kind,
             hypothesis=str(proposal.get("hypothesis", "")),
             prediction=str(proposal.get("prediction", "")),
             bar=str(proposal.get("bar", "")),
@@ -589,18 +734,27 @@ class Coordinator:
                         budget["runs"].remaining())
         ranking = rank_mod.rank(entries, self.config, host=self.host,
                                 budget_ok=lambda e: e.cost <= remaining,
-                                explore_fraction=self.config.explore_fraction,
-                                coverage_fraction=self.config.coverage_fraction)
+                                risk=self.config.risk)
         phase.read = len(entries)
         k = int(budget["fanout"].remaining())
-        # Computed before the judge so the brief can name the entries the
-        # reserves would take. A reserve pick sits low on score by
-        # construction, and a judge shown it unlabelled reads the ranking as
-        # broken and vetoes the one slot aimed at a big swing or an untested
-        # mechanism.
-        pre = ranking.shortlist(k)
-        reserve = [c.entry_id for c in pre if c.explore]
-        coverage = [c.entry_id for c in pre if c.coverage]
+
+        # The domain's own scorer, if it declared one, replaces the formula's
+        # pricing of the claimable candidates. Hard filters have already run,
+        # so the seam can price only what survived them; a seam failure is
+        # recorded and the iteration dispatches nothing -- there is no
+        # fallback to the formula the domain replaced.
+        if "score" in self.config.commands:
+            try:
+                ranking = scoring.seam_ranking(
+                    self.config, ranking, entries, self.config.risk)
+                phase.detail.append(
+                    f"scored by domain seam: {self.config.commands['score']}")
+            except AutoresearchError as exc:
+                phase.detail.append(f"score seam failed: {exc}")
+                phase.detail.append("dispatch skipped: no ranking to spend")
+                phase.seconds = time.time() - start
+                it.shortlist = []
+                return phase, []
 
         # The judge may reorder within the shortlist; it may not overrule a
         # hard filter, and apply_veto refuses that outright.
@@ -609,20 +763,19 @@ class Coordinator:
             reply = self._ask(Role.JUDGE, self._brief(
                 Role.JUDGE, it,
                 ranking=[{"id": s.entry_id, "score": s.score, "terms": s.terms,
-                          "title": s.title} for s in ranking.scored],
+                          "title": s.title, "novel": s.novel}
+                         for s in ranking.scored],
                 excluded=[{"id": s.entry_id, "why": s.excluded}
                           for s in ranking.excluded],
-                explore_reserve=reserve,
-                coverage_reserve=coverage,
-                instruction=("Return a JSON list of vetoes, each {entry_id, "
-                             "action: promote|demote|drop, justification}. "
-                             "Return [] if the ordering is right. You may not "
-                             "veto an excluded entry. `explore_reserve` names "
-                             "the entries taking the amplitude slots, ranked on "
-                             "impact alone; `coverage_reserve` names the slots "
-                             "aimed at mechanism tags no terminal entry has "
-                             "tested. Both sit low on score by design, which "
-                             "is not a reason to veto them.")))
+                instruction=(
+                    f"The risk dial is {self.config.risk:.0%}: that share of "
+                    "the shortlist goes to novel branches (`novel: true`, no "
+                    "parent -- new territory); the rest refines the incumbent. "
+                    "Return a JSON list of vetoes, each {entry_id, "
+                    "action: promote|demote|drop, justification}. "
+                    "Return [] if the ordering is right. You may not "
+                    "veto an excluded entry. A novel pick may sit low on "
+                    "score by design, which is not a reason to veto it.")))
             self._charge(it, reply)
             vetoes = [rank_mod.Veto(v["entry_id"], v["action"], v.get("justification", ""))
                       for v in (reply.data or []) if isinstance(v, dict)]
@@ -636,12 +789,9 @@ class Coordinator:
         it.shortlist = [s.entry_id for s in shortlist]
         phase.did = len(shortlist)
         phase.detail.append(f"{len(ranking.excluded)} excluded by hard filters")
-        taken = [c.entry_id for c in shortlist if c.explore]
+        taken = [c.entry_id for c in shortlist if c.novel]
         if taken:
-            phase.detail.append(f"explore reserve: {', '.join(taken)}")
-        taken = [c.entry_id for c in shortlist if c.coverage]
-        if taken:
-            phase.detail.append(f"coverage reserve: {', '.join(taken)}")
+            phase.detail.append(f"novel branches: {', '.join(taken)}")
         phase.seconds = time.time() - start
         return phase, shortlist
 
@@ -781,6 +931,12 @@ class Coordinator:
                 brief = self._brief(
                     Role.WORKER, it, entry=dataclasses.asdict(entry),
                     workspace=str(slot.path),
+                    # The ancestral chain, root first, this entry last. For a
+                    # `debug` branch this IS the assignment's memory -- the
+                    # prior fix attempts, so the step does not undo its
+                    # parent's repair. For any branch it is the context the
+                    # pre-registered bar rests on.
+                    lineage=self._lineage(entry),
                     record_command=shlex.join(command),
                     memos_directory=str(self.config.paths.memos.relative_to(
                         self.config.paths.root)),
@@ -804,7 +960,12 @@ class Coordinator:
                         "gpu_hours: float, verification: {reread: true, "
                         "claims_checked: [what you re-verified, one item each], "
                         "corrections: [what the re-review changed]}}. A reply "
-                        "without a verification block is refused."))
+                        "without a verification block is refused. `lineage` "
+                        "carries this branch's ancestors, root first, the "
+                        "entry itself last -- on a `debug` branch it names "
+                        "every prior fix attempt, so never re-undo a repair "
+                        "an ancestor already made; on any branch it is the "
+                        "context the registered bar rests on."))
                 reply = self._ask(Role.WORKER, brief, workspace=slot.path)
             except Exception as exc:
                 error = exc
@@ -1087,7 +1248,11 @@ class Coordinator:
                     continue
                 if self._norm_title(proposal["title"]) in existing:
                     continue          # two agents proposing one idea (H60)
-                entry = self._file(proposal)
+                try:
+                    entry = self._file(proposal)
+                except AutoresearchError as exc:
+                    phase.detail.append(f"refused: {exc}")
+                    continue
                 existing.add(self._norm_title(entry.title))
                 filed += 1
                 phase.did += 1
@@ -1351,7 +1516,10 @@ class Coordinator:
             verdicts_per_iteration=[i.confirmed for i in self.history
                                     if i.kind == "iteration"] + [it.confirmed],
             budgets=[self.domain_budget],
-            unmet_required_gates=self._unmet_required_gates(best))
+            unmet_required_gates=self._unmet_required_gates(best),
+            independent_confirmation=budget_mod.independent_confirmation(
+                self.config.goal, best,
+                runs_mod.read_all(self.config.paths.runs), it.target))
         outstanding = [e for e, v in it.verdicts.items() if v == "assigned"]
         if self.config.dispatch == "native" and outstanding:
             # The work this iteration dispatched is happening in native

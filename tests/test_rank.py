@@ -126,136 +126,155 @@ def test_veto_on_an_unranked_entry_is_refused(sandbox, store):
         apply_veto(r, [Veto("Q99", "promote", "because")])
 
 
-# -- the explore reserve -------------------------------------------------
+# -- the risk dial --------------------------------------------------------
 # score = confidence x impact / cost is expected value per unit cost, which is
 # risk-neutral and therefore prefers cheap certain increments over large
-# uncertain swings. These fix the reserve that keeps a lane open for the swing.
-
+# uncertain swings. The dial is structural, not a priced reserve: a share of
+# every shortlist goes to novel branches (no parent), the rest to refining the
+# incumbent (a branch off work already in the record).
 
 def _increments(store, n=3):
-    """Cheap, likely, small: exactly what the exploit formula loves."""
+    """Cheap, likely, small roots: exactly what the exploit formula loves."""
     for i in range(n):
         make_entry(store, f"Q1{i + 1}", confidence=0.85, impact=0.02, cost=1.0)
 
 
-def test_explore_reserve_promotes_a_long_shot_the_formula_buries(sandbox, store):
+def _branches(store, n=2, parent="Q10"):
+    """Refinements of an open root: the incumbent partition. The parent root
+    itself scores terribly, so the novel partition's picks are the increments,
+    not its parent."""
+    make_entry(store, parent, confidence=0.01, impact=0.01, cost=8.0)
+    for i in range(n):
+        make_entry(store, f"Q9{i + 1}", parent=parent,
+                   confidence=0.10, impact=0.40, cost=8.0)
+
+
+def test_the_dial_splits_the_shortlist_between_root_and_branch(sandbox, store):
     _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.25)
-    assert [s.entry_id for s in r.scored][-1] == "Q91"    # last on score
-    assert "Q91" in [s.entry_id for s in r.shortlist(3)]  # first on impact
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=0.5)
+    picks = r.shortlist(3)
+    # 50/50 of 3 rounds to 2 novel slots, 1 incumbent slot; within each
+    # partition the score decides.
+    assert [s.entry_id for s in picks] == ["Q11", "Q12", "Q91"]
+    assert next(s for s in picks if s.entry_id == "Q91").novel is False
 
 
-def test_explore_reserve_is_absent_when_the_fraction_is_zero(sandbox, store):
+def test_risk_zero_spends_every_slot_on_the_incumbent(sandbox, store):
     _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.0)
-    assert [s.entry_id for s in r.shortlist(3)] == ["Q11", "Q12", "Q13"]
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=0.0)
+    picks = r.shortlist(2)
+    assert [s.entry_id for s in picks] == ["Q91", "Q92"]
+    assert all(not s.novel for s in picks)
 
 
-def test_explore_ranks_by_impact_alone(sandbox, store):
+def test_risk_one_spends_every_slot_on_novel_branches(sandbox, store):
+    """Both ends of the dial are legitimate stances, not degenerate configs."""
     _increments(store)
-    make_entry(store, "Q91", confidence=0.30, impact=0.30, cost=8.0)
-    make_entry(store, "Q92", confidence=0.05, impact=0.50, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.25)
-    scored = {s.entry_id: s.score for s in r.scored}
-    assert scored["Q91"] > scored["Q92"]                   # L2 loses on score
-    assert "Q92" in [s.entry_id for s in r.shortlist(3)]  # and wins on impact
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=1.0)
+    picks = r.shortlist(3)
+    assert [s.entry_id for s in picks] == ["Q11", "Q12", "Q13"]
+    assert all(s.novel for s in picks)
 
 
-def test_explore_reserve_never_resurrects_a_hard_filtered_entry(sandbox, store):
-    """The reserve reorders among ranked entries; it is not a second chance at
-    the filters. A mechanism-refuted direction is dead however big it looks."""
-    close(store, "Q1", "refuted", kind="mechanism", mechanisms=["dead"])
+def test_an_unfillable_novel_share_returns_to_the_incumbent(sandbox, store):
+    _branches(store)
+    close(store, "Q10", "confirmed")     # the parent root leaves the queue
+    r = rank(store.all(), sandbox, risk=1.0)   # wants only roots; none remain
+    picks = r.shortlist(2)
+    assert [s.entry_id for s in picks] == ["Q91", "Q92"]
+
+
+def test_an_unfillable_incumbent_share_backfills_from_novel(sandbox, store):
+    """A stance the record cannot support fills the remainder from the other
+    partition: a short queue is never shortlisted below `k` for want of a
+    branch."""
     _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=1.0, mechanisms=["dead"])
-    r = rank(store.all(), sandbox, explore_fraction=0.5)
-    assert "Q91" not in [s.entry_id for s in r.shortlist(3)]
+    _branches(store, n=1)
+    r = rank(store.all(), sandbox, risk=0.0)   # wants only branches; one exists
+    picks = r.shortlist(3)
+    assert [s.entry_id for s in picks] == ["Q11", "Q12", "Q91"]
 
 
-def test_a_single_slot_is_never_spent_on_the_explore_lane(sandbox, store):
+def test_a_single_slot_is_never_spent_on_a_partition(sandbox, store):
+    """With k=1 the dial has nothing to split; applying it literally would send
+    every one-slot iteration to the same partition -- a permanent bias, not a
+    stance."""
     _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.25)
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=0.5)
     assert [s.entry_id for s in r.shortlist(1)] == ["Q11"]
 
 
-def test_explore_picks_are_marked_and_explained(sandbox, store):
+def test_a_queue_no_larger_than_the_shortlist_has_nothing_to_split(sandbox, store):
+    """Everything is dispatched either way, so marking partitions would tell
+    the judge an entry 'sits low on score by design' about an entry that is
+    simply third."""
     _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.25)
-    picked = {s.entry_id: s for s in r.shortlist(3)}
-    assert picked["Q91"].explore is True
-    assert picked["Q11"].explore is False
-    assert "explore" in r.explain()
+    r = rank(store.all(), sandbox, risk=0.5)
+    picks = r.shortlist(3)
+    assert [c.entry_id for c in picks] == ["Q11", "Q12", "Q13"]
 
 
-def test_the_reserve_falls_back_to_exploit_when_there_is_nothing_to_explore(sandbox, store):
-    _increments(store, n=2)
-    r = rank(store.all(), sandbox, explore_fraction=0.5)
-    ids = [s.entry_id for s in r.shortlist(4)]
-    assert ids == ["Q11", "Q12"]                           # no gaps, no repeats
+def test_the_dial_never_resurrects_a_hard_filtered_entry(sandbox, store):
+    """The dial splits ranked entries; it is not a second chance at the
+    filters. A mechanism-refuted direction is dead however novel it looks."""
+    close(store, "Q1", "refuted", kind="mechanism", mechanisms=["dead"])
+    _branches(store)
+    make_entry(store, "Q93", confidence=0.1, impact=1.0, mechanisms=["dead"])
+    r = rank(store.all(), sandbox, risk=0.5)
+    assert "Q93" not in [s.entry_id for s in r.shortlist(2)]
 
 
-def test_a_dropped_entry_does_not_return_through_the_reserve(sandbox, store):
-    """`drop` is a demotion out of the shortlist. The reserve re-picks from the
-    tail of `scored`, which is exactly where a drop puts a high-impact entry, so
-    without this the judge's veto is silently undone and the entry it was making
-    room for stays out."""
+def test_a_dropped_entry_does_not_return_through_the_dial(sandbox, store):
+    """`drop` is a demotion out of the shortlist: it moves the card to the tail
+    of `scored`, which is the tail of its partition, so the dial cannot pick it
+    back."""
     _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.25)
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=0.5)
     assert "Q91" in [s.entry_id for s in r.shortlist(3)]
     out = apply_veto(r, [Veto("Q91", "drop", "measured last week under another id")])
     ids = [s.entry_id for s in out.shortlist(3)]
     assert "Q91" not in ids, ids
-    assert ids == ["Q11", "Q12", "Q13"]
+    assert ids == ["Q11", "Q12", "Q92"]
 
 
-def test_a_demoted_entry_does_not_return_through_the_reserve(sandbox, store):
+def test_a_demoted_entry_does_not_return_through_the_dial(sandbox, store):
     _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.25)
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=0.5)
     out = apply_veto(r, [Veto("Q91", "demote", "the adder rewrite is Q92's premise")])
     assert "Q91" not in [s.entry_id for s in out.shortlist(3)]
 
 
-def test_the_reserve_never_takes_the_whole_shortlist(sandbox, store):
-    """Both validators refuse `f >= 1` because a full reserve leaves no exploit
-    lane. Rounding must not reach that state from inside the accepted range."""
+def test_the_dial_is_marked_and_explained(sandbox, store):
     _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.9)
-    picks = r.shortlist(3)
-    assert [c.entry_id for c in picks if not c.explore] == ["Q11"]
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=0.5)
+    assert "[novel]" in r.explain() and "[branch]" in r.explain()
+    assert "risk 50%" in r.explain()
 
 
-def test_a_single_slot_survives_a_large_fraction(sandbox, store):
-    """The k=1 guarantee has to hold for every accepted fraction, not only the
-    small ones the default happens to use."""
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.10, impact=0.40, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.5)
-    assert [s.entry_id for s in r.shortlist(1)] == ["Q11"]
-
-
-def test_a_queue_no_larger_than_the_shortlist_has_nothing_to_reserve(sandbox, store):
-    """Everything is dispatched either way, so labelling one entry an explore
-    pick tells the judge it 'sits low on score by design' about an entry that is
-    simply third."""
-    _increments(store)
-    r = rank(store.all(), sandbox, explore_fraction=0.25)
-    picks = r.shortlist(3)
-    assert [c.entry_id for c in picks] == ["Q11", "Q12", "Q13"]
-    assert [c.entry_id for c in picks if c.explore] == []
-
-
-def test_a_bad_explore_fraction_is_refused_as_an_autoresearch_error(sandbox, store):
+def test_a_bad_risk_is_refused_as_an_autoresearch_error(sandbox, store):
     """`errors.py`: one error type per refusal reason, so no caller has to
     string-match. A bare ValueError escapes `ar`'s handler as a traceback."""
     from autoresearch.errors import ConfigError
-    with pytest.raises(ConfigError, match="explore_fraction"):
-        rank(store.all(), sandbox, explore_fraction=1.0)
+    with pytest.raises(ConfigError, match=r"\brisk\b"):
+        rank(store.all(), sandbox, risk=1.5)
+
+
+def test_shortlist_never_returns_more_than_k_cards(sandbox, store):
+    """The dial is clamped so the shortlist stays exactly k cards even when a
+    stance is degenerate; a direct Ranking caller gets the same guarantee the
+    validated config path gets."""
+    _increments(store)
+    _branches(store)
+    r = rank(store.all(), sandbox, risk=0.5)
+    r.risk = 2.0               # bypass rank()'s validation
+    assert len(r.shortlist(3)) == 3
 
 
 def test_hardware_qualified_candidate_still_passes_mechanism_filter(sandbox, store):
@@ -329,122 +348,3 @@ def test_newly_scoped_closure_does_not_hide_later_matching_closure(sandbox, stor
     assert "Q2" in next(card.excluded for card in ranking.excluded if card.entry_id == "Q3")
 
 
-# -- the coverage reserve -------------------------------------------------
-# The exploit formula cannot price a genuinely novel mechanism: no terminal
-# entry has tested its tag, so its confidence is a guess and the formula
-# multiplies it away. These fix the reserve that keeps a lane open for the
-# mechanism family nobody has measured yet -- the failure the ecdsa corpus
-# demonstrated, where 1 of 470 entries carried a mechanism tag and the two
-# largest wins were novel mechanism families.
-
-def test_coverage_reserve_promotes_an_untested_mechanism(sandbox, store):
-    """A novel-mechanism probe the EV formula buries still gets its slot."""
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
-    picks = r.shortlist(3)
-    cov = [s for s in picks if s.coverage]
-    assert [s.entry_id for s in cov] == ["Q91"]
-    assert not cov[0].explore
-
-
-def test_a_tested_mechanism_is_not_coverage_eligible(sandbox, store):
-    """One terminal entry testing the tag is enough; coverage means untested,
-    not unpromising."""
-    close(store, "Q90", "confirmed", mechanisms=["new-inversion-class"])
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
-    assert all(not s.coverage for s in r.shortlist(3))
-
-
-def test_an_entry_without_mechanisms_is_never_coverage_eligible(sandbox, store):
-    """The reserve rewards a named novel mechanism, not a missing one: an
-    untagged entry is the filing failure the reserve exists to expose."""
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0)
-    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
-    assert all(not s.coverage for s in r.shortlist(3))
-    assert next(s for s in r.scored if s.entry_id == "Q91").untested == 0
-
-
-def test_coverage_reserve_falls_back_to_score_when_nothing_is_untested(sandbox, store):
-    _increments(store, n=3)
-    r = rank(store.all(), sandbox, explore_fraction=0.0, coverage_fraction=0.2)
-    assert [s.entry_id for s in r.shortlist(3)] == ["Q11", "Q12", "Q13"]
-    assert all(not s.coverage for s in r.shortlist(3))
-
-
-def test_one_entry_can_serve_both_reserves_but_takes_one_slot(sandbox, store):
-    """A high-impact untested mechanism is the ideal reserve pick: it should
-    not spend two slots."""
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.4, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
-    picks = r.shortlist(3)
-    assert len(picks) == 3
-    q91 = next(s for s in picks if s.entry_id == "Q91")
-    assert q91.coverage and not q91.explore
-    assert [s.entry_id for s in picks].count("Q91") == 1
-
-
-def test_a_single_slot_is_never_spent_on_the_coverage_lane(sandbox, store):
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
-    assert [s.entry_id for s in r.shortlist(1)] == ["Q11"]
-
-
-def test_the_reserves_together_never_take_the_whole_shortlist(sandbox, store):
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.4, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.4, coverage_fraction=0.4)
-    picks = r.shortlist(3)
-    assert [s.entry_id for s in picks if not s.explore and not s.coverage] \
-        == ["Q11"]
-
-
-def test_combined_reserves_are_refused_in_rank(sandbox, store):
-    _increments(store)
-    with pytest.raises(Exception) as exc:
-        rank(store.all(), sandbox, explore_fraction=0.6, coverage_fraction=0.6)
-    assert "whole shortlist" in str(exc.value)
-
-
-def test_coverage_picks_are_marked_and_explained(sandbox, store):
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
-    # Coverage slots fill before explore slots, so the pick sits between the
-    # score pick and the amplitude pick.
-    assert [s.entry_id for s in r.shortlist(3)] == ["Q11", "Q91", "Q12"]
-    assert "[coverage]" in r.explain()
-    assert "coverage reserve" in r.explain()
-    assert "new-inversion-class" not in r.explain()  # terms stay numeric
-
-
-def test_a_demoted_untested_entry_does_not_return_through_the_coverage_reserve(sandbox, store):
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.0, coverage_fraction=0.2)
-    out = apply_veto(r, [Veto("Q91", "demote", "its novelty claim is a synonym of a closed tag")])
-    assert "Q91" not in [s.entry_id for s in out.shortlist(3)]
-
-
-def test_shortlist_never_returns_more_than_k_cards(sandbox, store):
-    """The reserves are clamped so the shortlist stays exactly k cards even
-    when a fraction is degenerate; a direct Ranking caller gets the same
-    guarantee the validated config path gets."""
-    _increments(store)
-    make_entry(store, "Q91", confidence=0.1, impact=0.01, cost=8.0,
-               mechanisms=["new-inversion-class"])
-    r = rank(store.all(), sandbox, explore_fraction=0.2, coverage_fraction=0.2)
-    r.coverage_fraction = -0.5               # bypass rank()'s validation
-    assert len(r.shortlist(3)) == 3

@@ -19,10 +19,10 @@ computed from those numbers, and a stale price is a wasted run.
   mechanism tag, say in `notes` what the measurement now implies for the
   untested territory around it — a first measurement of a family re-prices
   every neighbouring proposal, and nobody else is positioned to see that. If
-  generation filed nothing against an untested tag, or the coverage reserve
-  went unfilled for want of any untagged-board proposal, say that too: a
-  coverage quota that quietly stops being met is how a loop drifts back to
-  refining what it has already measured.
+  generation filed nothing against an untested tag, or the novel share of the
+  shortlist went unfilled for want of any untagged-board proposal, say that
+  too: a novel share that quietly stops being met is how a loop drifts back
+  to refining what it has already measured.
 
 ## Rules
 

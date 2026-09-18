@@ -275,13 +275,15 @@ def test_the_brief_travels_as_the_state_and_names_the_model():
 def test_the_wire_state_is_trimmed_to_what_the_role_reads():
     """The coordinator's brief carries the whole record; a 258KB brief
     exceeds the System One token budget (HTTP 400 max_tokens_exceeded).
-    The judge reviews the top `JUDGE_REVIEW_CAP` ranking rows plus reserves,
-    so only those -- plus the context allowlist -- travel on the wire."""
+    The judge reviews the top `JUDGE_REVIEW_CAP` ranking rows -- each already
+    carrying its `novel` flag from the risk dial -- so only those, plus the
+    context allowlist, travel on the wire."""
     captured = []
     answers = {f"reorder_Q{i}": {"type": "choice", "choice": "none"}
                for i in range(12)}
     brain = stub_typesafe(answers, captured=captured)
-    ranking = [{"id": f"Q{i}", "score": 1.0, "terms": {}, "title": f"t{i}"}
+    ranking = [{"id": f"Q{i}", "score": 1.0, "terms": {}, "title": f"t{i}",
+                "novel": i % 2 == 0}
                for i in range(200)]
     brief = json.dumps({
         "role": "judge", "domain": "qsb",
@@ -291,11 +293,11 @@ def test_the_wire_state_is_trimmed_to_what_the_role_reads():
         "open_entries": [{"id": f"Q{i}", "hypothesis": "words" * 500}
                          for i in range(150)],
         "closed_directions": [{"id": "Q0", "verdict": "refuted"}],
-        "explore_reserve": [], "coverage_reserve": ["Q7"]})
+        "risk": 0.5})
     brain.ask("judge", brief)
     wire = captured[0]["state"]
     assert len(wire["ranking"]) == brain.JUDGE_REVIEW_CAP
-    assert wire["coverage_reserve"] == ["Q7"]
+    assert wire["ranking"][0]["novel"] is True
     assert wire["instruction"] == "review the ordering"
     assert wire["budget_remaining"] == {"runs": 3, "gpu_hours": None,
                                         "money": 92.0}

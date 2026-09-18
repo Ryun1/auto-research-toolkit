@@ -31,6 +31,7 @@ import math
 import time
 from dataclasses import dataclass, field
 
+from . import runs as runs_mod
 from .errors import AutoresearchError, BudgetExceeded
 
 
@@ -385,23 +386,58 @@ class StopDecision:
         return (f"{self.reason}: {self.detail}" if self.detail else self.reason)
 
 
+def independent_confirmation(goal, best, records, target) -> bool:
+    """Has the target been met by a second, independent measurement?
+
+    Only asked when `goal.confirm_independently` is set (AIRA arXiv
+    2507.02554 §5.3: selecting the final artifact by the proxy the search
+    optimised overfits -- held-out performance plateaus while the agent's
+    perceived score keeps rising, worth 9-13 points on MLE-bench). A
+    confirmation is another valid run row -- different id -- that also meets
+    the target AND was not produced by the same measurement execution as the
+    best row: a different workspace session or a different owning entry. The
+    domain decides what makes the re-measurement honest; the core enforces
+    only that a second execution said so.
+    """
+    if best is None or best[1] is None:
+        return True                     # nothing to confirm; is_met governs
+    best_row = best[1]
+    for row in records:
+        if row.id == best_row.id or row.status != runs_mod.OK:
+            continue
+        if (row.session == best_row.session
+                and row.entry == best_row.entry):
+            continue
+        try:
+            if goal.is_met(row.metrics, target):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def should_stop(config, *, measurements=None, target=None,
                 verdicts_per_iteration=None, budgets=(),
-                unmet_required_gates=()) -> StopDecision:
+                unmet_required_gates=(),
+                independent_confirmation: bool = True) -> StopDecision:
     """Met, yielding below the floor, or out of budget -- otherwise keep going.
 
     This is deliberately the only place the loop can decide to end, so "when do
     we stop" has one answer rather than one per caller.
 
-    Two guards keep the met exit honest. `unmet_required_gates` carries the
+    Three guards keep the met exit honest. `unmet_required_gates` carries the
     required gate names the best run's owning entry has not passed: a goal may
     demand more than its objective expression shows (eip8200-research recorded
     `goal-met` while its goal text required a kernel-checked proof), and a win
     the goal text does not allow is recorded as running-with-reason, never as
-    a win. And a met that is only zero meeting zero is refused unless
+    a win. A met that is only zero meeting zero is refused unless
     `goal.allow_degenerate_target` -- every comparison expression is satisfied
     vacuously at zero-on-zero, so the loop would stop on iteration one having
-    learned nothing.
+    learned nothing. And a goal with `confirm_independently` holds the win
+    until a second, independent measurement row also meets it -- AIRA
+    (arXiv 2507.02554 §5.3) measured the overfitting this guards at 9-13
+    points: the proxy the search optimises keeps improving after the true
+    metric has stopped.
     """
     goal = config.goal
     if measurements is not None and target is not None:
@@ -427,6 +463,15 @@ def should_stop(config, *, measurements=None, target=None,
                         "satisfies vacuously; set "
                         "`allow_degenerate_target: true` on the goal if zero "
                         "really is the target")
+                if goal.confirm_independently and not independent_confirmation:
+                    return StopDecision(
+                        RUNNING,
+                        f"objective {value:.6g} meets target {target:.6g} but "
+                        "the goal demands an independent confirmation: a "
+                        "second valid run row, from a different claim "
+                        "(different session or entry), must also meet the "
+                        "target -- a win only the measuring run has seen is "
+                        "the overfitting shape AIRA measured")
                 return StopDecision(
                     MET, f"objective {value:.6g} meets target {target:.6g}")
         except Exception:            # a malformed measurement is not a stop

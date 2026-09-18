@@ -142,6 +142,16 @@ class Goal:
     #: `distance_to`; this flag covers custom `stop_when` expressions. Set it
     #: true only when zero really is the target.
     allow_degenerate_target: bool = False
+    #: AIRA (arXiv 2507.02554, §5.3) measured the failure mode this guards:
+    #: selecting a search's final artifact by the proxy the search optimized
+    #: overfits -- validation medal rates keep rising while held-out
+    #: performance plateaus or declines, worth 9-13 absolute points on
+    #: MLE-bench. With this flag, a met target is not a win until a second,
+    #: independent measurement row also meets it: a different run record,
+    #: from a different claim (different workspace session or entry). The
+    #: domain decides what makes re-measurement honest (fresh data split,
+    #: re-seeded run); the core enforces only that a second execution said so.
+    confirm_independently: bool = False
 
     def __post_init__(self):
         if self.direction not in DIRECTIONS:
@@ -292,6 +302,12 @@ class Goal:
                 f"goal {gid!r}: allow_degenerate_target must be a bool, got "
                 f"{type(degenerate).__name__}")
 
+        confirm = data.get("confirm_independently", False)
+        if not isinstance(confirm, bool):
+            raise GoalError(
+                f"goal {gid!r}: confirm_independently must be a bool, got "
+                f"{type(confirm).__name__}")
+
         return cls(
             id=gid,
             objective=objective,
@@ -303,4 +319,5 @@ class Goal:
             stop_when=data.get("stop_when"),
             yield_floor=floor,
             required_gates=tuple(gates),
-            allow_degenerate_target=degenerate)
+            allow_degenerate_target=degenerate,
+            confirm_independently=confirm)

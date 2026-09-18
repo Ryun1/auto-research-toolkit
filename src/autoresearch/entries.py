@@ -50,6 +50,12 @@ from .states import CLOSURE_KINDS
 
 DISPOSITIONS = ("experiment", "superseded", "already-shipped")
 
+#: Branch intents. Scoped memory keys on exactly this: `debug` branches get
+#: their ancestral chain (prior fix attempts), `improve`/`probe` branches get
+#: their siblings' verdicts. A root carries no kind -- it is a probe by
+#: construction.
+KINDS = ("improve", "debug", "probe")
+
 
 @dataclass
 class Applicability:
@@ -231,6 +237,19 @@ class Entry:
     sources: list[str] = field(default_factory=list)
     supersedes: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
+    #: The tree. A child entry is a branch off work already in the record --
+    #: the search step that exchanges a part rather than turning a dial. ""
+    #: (the default) marks a novel root branch. Ranking partitions the
+    #: shortlist on exactly this field; the coordinator enforces the tree
+    #: budgets (`tree_max_depth`, `tree_max_children`) at filing time.
+    parent: str = ""
+    #: The branch's intent, so memory can be scoped the way AIRA measures it
+    #: (arXiv 2507.02554 §4.1): a `debug` branch is handed its ancestral
+    #: chain -- the prior fix attempts, so it does not undo its parent's
+    #: repair -- while `improve` and `probe` branches are scoped to *sibling*
+    #: verdicts, which pushes diversity instead of mode collapse. Empty on
+    #: roots (a root is a probe by construction).
+    kind: str = ""
 
     claim: Claim | None = None
     result: Result | None = None
@@ -245,6 +264,14 @@ class Entry:
         self.context.__post_init__()
         if self.result is not None:
             self.result.__post_init__()
+        if self.kind:
+            if self.kind not in KINDS:
+                raise SchemaError(
+                    f"entry.kind must be one of {KINDS}, got {self.kind!r}")
+            if not self.parent:
+                raise SchemaError(
+                    f"entry.kind {self.kind!r} is branch intent; an entry "
+                    "with no parent is a novel root and carries no kind")
         if not isinstance(self.gates, list):
             raise SchemaError("gates must be a list")
         try:

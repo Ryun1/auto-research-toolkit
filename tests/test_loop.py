@@ -537,16 +537,32 @@ def test_an_iteration_record_is_written_atomically(sandbox, monkeypatch):
 
 
 
-def test_the_loop_reserves_a_shortlist_slot_for_amplitude(sandbox):
-    """The score is EV per unit cost, so a cheap certain increment always beats
-    an honest long shot. The coordinator hands part of every shortlist to the
-    largest `impact` instead, or the loop never attempts a big swing."""
-    from autoresearch.entries import Store
-    store = Store(sandbox.paths.entries)
-    sandbox.budgets["iteration_fanout"] = 3
-    for i in range(4):                    # cheap, likely, small
+def _no_seam(sandbox):
+    """The toy domain ships a domain scorer; these tests isolate the formula
+    path, so strip the seam."""
+    sandbox.commands = {k: v for k, v in sandbox.commands.items()
+                        if k != "score"}
+    return sandbox
+
+
+def _dial_queue(store):
+    """Three cheap likely roots and a buried long shot, plus a branch off the
+    long shot: the two partitions the dial splits."""
+    for i in range(3):                    # cheap, likely, small
         make_entry(store, f"Q1{i}", confidence=0.85, impact=0.02, cost=1.0)
     make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
+    make_entry(store, "Q95", parent="Q90", confidence=0.10, impact=0.20, cost=8.0)
+
+
+def test_the_loop_splits_the_shortlist_by_the_risk_dial(sandbox):
+    """The score is EV per unit cost, so a cheap certain increment always beats
+    an honest long shot, and both lose branch slots only when the dial says so.
+    Half the shortlist goes to novel roots, half to refining the incumbent."""
+    from autoresearch.entries import Store
+    store = Store(sandbox.paths.entries)
+    sandbox = _no_seam(sandbox)
+    sandbox.budgets["iteration_fanout"] = 3
+    _dial_queue(store)
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [], Role.JUDGE: lambda b: [],
         Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision",
@@ -554,19 +570,18 @@ def test_the_loop_reserves_a_shortlist_slot_for_amplitude(sandbox):
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     it = Coordinator(sandbox, brain).run_iteration(1)
-    assert "Q90" in it.shortlist, it.shortlist
+    assert set(it.shortlist) == {"Q10", "Q11", "Q95"}, it.shortlist
     assert len(it.shortlist) == 3
 
 
-def test_the_judge_sees_which_entries_the_reserve_would_take(sandbox):
-    """A veto is reviewed against the ranking; an unlabelled explore pick reads
+def test_the_judge_sees_which_entries_are_novel(sandbox):
+    """A veto is reviewed against the ranking; an unlabelled novel pick reads
     to the judge as the formula having gone wrong."""
     from autoresearch.entries import Store
     store = Store(sandbox.paths.entries)
+    sandbox = _no_seam(sandbox)
     sandbox.budgets["iteration_fanout"] = 3
-    for i in range(4):
-        make_entry(store, f"Q1{i}", confidence=0.85, impact=0.02, cost=1.0)
-    make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
+    _dial_queue(store)
     seen = {}
     def judge(brief):
         seen.update(json.loads(brief))
@@ -578,19 +593,23 @@ def test_the_judge_sees_which_entries_the_reserve_would_take(sandbox):
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     Coordinator(sandbox, brain).run_iteration(1)
-    assert seen["explore_reserve"] == ["Q90"]
+    by_id = {row["id"]: row["novel"] for row in seen["ranking"]}
+    assert by_id["Q90"] is True
+    assert by_id["Q95"] is False
 
 
-def test_the_loop_honours_a_domain_that_disables_the_reserve(sandbox):
-    """A converged domain may want every slot on the score. The coordinator
+def test_the_loop_honours_a_domain_that_closes_the_dial(sandbox):
+    """A converged domain may want every slot on the incumbent. The coordinator
     reads the domain's appetite; it does not carry its own."""
     from autoresearch.entries import Store
     store = Store(sandbox.paths.entries)
-    sandbox.explore_fraction = 0.0
+    sandbox = _no_seam(sandbox)
+    sandbox.risk = 0.0
     sandbox.budgets["iteration_fanout"] = 3
-    for i in range(4):
-        make_entry(store, f"Q1{i}", confidence=0.85, impact=0.02, cost=1.0)
-    make_entry(store, "Q90", confidence=0.10, impact=0.40, cost=8.0)
+    for i in range(3):
+        make_entry(store, f"Q9{i}", parent="Q8",
+                   confidence=0.10, impact=0.20, cost=8.0)
+    make_entry(store, "Q8", confidence=0.85, impact=0.02, cost=1.0)
     brain = ScriptedBrain({
         Role.GENERATOR: lambda b: [], Role.JUDGE: lambda b: [],
         Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "no decision",
@@ -598,7 +617,7 @@ def test_the_loop_honours_a_domain_that_disables_the_reserve(sandbox):
         Role.CURATOR: lambda b: {"reprice": [], "notes": []},
         Role.QC: lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"}})
     it = Coordinator(sandbox, brain).run_iteration(1)
-    assert "Q90" not in it.shortlist, it.shortlist
+    assert sorted(it.shortlist) == ["Q90", "Q91", "Q92"], it.shortlist
 
 
 # -- distil: closed work becomes knowledge ---------------------------------
@@ -826,3 +845,27 @@ def test_the_brief_carries_the_mechanism_coverage_map(sandbox, store):
     assert payload["mechanism_coverage"]["known-tag"] == {
         "tested": 1, "confirmed": 0, "refuted": 1}
     assert "novel-tag" not in payload["mechanism_coverage"]
+
+
+def test_every_brief_is_strict_json(sandbox):
+    """A brief is a payload for arbitrary backends, so it must parse as
+    spec-compliant JSON. An unlimited meter's `remaining()` is float("inf"),
+    which json.dumps writes as bare `Infinity` -- Python's own parser accepts
+    it, the TypeSafe System One endpoint answers HTTP 500 to it. Unlimited is
+    "no number": it must ride as null."""
+    briefs = []
+
+    class Capturing(ScriptedBrain):
+        def ask(self, role, brief, **kw):
+            briefs.append(brief)
+            return super().ask(role, brief, **kw)
+
+    def reject_constant(name):
+        raise ValueError(f"non-finite JSON constant: {name}")
+
+    Coordinator(sandbox, Capturing(dict(IDLE))).run(max_iterations=1)
+    assert briefs, "an iteration must ask at least one role"
+    for brief in briefs:
+        json.loads(brief, parse_constant=reject_constant)  # rejects non-finite constants
+    judge = json.loads(briefs[-1])  # any brief; judge sees the same shape
+    assert judge["budget_remaining"]["gpu_hours"] is None

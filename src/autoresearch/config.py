@@ -34,7 +34,7 @@ from .goal import Goal
 from .hardware import Requirement
 from .lanes import Lanes
 from .policy import Policy
-from .rank import COVERAGE_FRACTION, EXPLORE_FRACTION
+from .rank import RISK
 from .states import StateMachine, default_machine
 
 #: Placeholders a `[brain]` command may carry. Validated at load: a misspelled
@@ -188,24 +188,21 @@ class DomainConfig:
     #: Validated at load -- an unknown role or placeholder
     #: here is a loop that cannot start, so say so before anything spends.
     brain: dict = field(default_factory=dict)
-    #: share of each shortlist reserved for the largest `impact`, ignoring
-    #: confidence and cost. Typed rather than left in the `coordinator` dict
-    #: because it is a risk appetite -- how much of an iteration a domain will
-    #: spend on a swing that probably fails -- and a domain chasing a frontier
-    #: that moved 22.5% in 18.8 days wants a different one from a domain
-    #: polishing a number that is nearly converged. Validated at load: it
-    #: reaches a float multiplication in `Ranking.shortlist`, and finding that
-    #: out mid-iteration costs a run.
-    explore_fraction: float = EXPLORE_FRACTION
-    #: share of each shortlist reserved for entries probing a mechanism tag no
-    #: terminal entry has tested. Typed for the same reasons as
-    #: `explore_fraction`: it is a coverage appetite, it reaches a float
-    #: multiplication in `Ranking.shortlist`, and the reserves are checked
-    #: together at load -- two fractions summing to a whole shortlist leave no
-    #: exploit lane, which is a load-time refusal, not a mid-iteration surprise.
-    coverage_fraction: float = COVERAGE_FRACTION
+    #: share of each shortlist aimed at novel branches: entries with no
+    #: `parent`, i.e. new territory rather than refinement of work already in
+    #: the record. The default is the neutral 50/50 stance. Typed rather than
+    #: left in the `coordinator` dict because it is a risk appetite and it
+    #: reaches a float multiplication in `Ranking.shortlist` -- discovering a
+    #: misspelled value mid-iteration costs a run.
+    risk: float = RISK
+    #: maximum lineage depth of a filed branch: a child at greater depth is
+    #: refused at filing, not discovered at dispatch. 0 disables the cap.
+    tree_max_depth: int = 3
+    #: maximum children filed against one parent. Siblings are the drafts of a
+    #: search step -- the part exchanges. 0 disables the cap.
+    tree_max_children: int = 4
     #: run the distil phase every N iterations; 0 turns it off. Typed out of the
-    #: coordinator dict for the same reason as `explore_fraction`: it decides
+    #: coordinator dict for the same reason as `risk`: it decides
     #: whether a phase runs at all, and discovering it was misspelled mid-loop
     #: costs the iteration that would have distilled.
     distil_every: int = DISTIL_EVERY
@@ -409,9 +406,11 @@ class DomainConfig:
             skills=Skills.from_dict(dict(data.get("skills") or {})),
             coordinator=coordinator,
             brain=_brain_spec(data.get("brain")),
-            explore_fraction=(explore_fraction := _explore_fraction(coordinator)),
-            coverage_fraction=_coverage_fraction(
-                coordinator, explore_fraction),
+            risk=_risk(coordinator),
+            tree_max_depth=_tree_count(coordinator, "tree_max_depth", 3,
+                                       "lineage depth"),
+            tree_max_children=_tree_count(coordinator, "tree_max_children", 4,
+                                          "sibling"),
             distil_every=_distil_every(coordinator),
             dispatch=_dispatch_mode(coordinator),
             plugins=_plugins(data),
@@ -486,63 +485,59 @@ def _brain_spec(data) -> dict:
     return spec
 
 
-def _explore_fraction(coordinator: dict) -> float:
-    """Read and check `[coordinator] explore_fraction`.
+def _risk(coordinator: dict) -> float:
+    """Read and check `[coordinator] risk`.
 
-    Absent means the core default; `0` means the domain has decided against a
-    reserve and must not be defaulted back into one, which is why this tests for
-    the key rather than for falsiness."""
-    if "explore_fraction" not in coordinator:
-        return EXPLORE_FRACTION
-    raw = coordinator["explore_fraction"]
+    Absent means the core default (0.5 -- the neutral 50/50 stance between
+    improving the incumbent and pursuing novel branches). Both ends are
+    legitimate stances, not degenerate configs: `0` is a domain that wants
+    only incumbent refinement, `1` only novel territory."""
+    # The reserves this dial replaced. A domain carrying them forward is not
+    # a domain that opted out of the dial -- it is a domain that has not seen
+    # the migration, and its explore/coverage keys would be silently dead
+    # while the 50/50 default took over its ranking. Refused at load, with
+    # the migration named, not discovered as a changed ranking mid-loop.
+    removed = [k for k in ("explore_fraction", "coverage_fraction")
+               if k in coordinator]
+    if removed:
+        raise ConfigError(
+            f"coordinator.{removed[0]} was removed: ranking now splits the "
+            "shortlist on the tree -- `[coordinator] risk` (share aimed at "
+            "novel branches, entries with no parent; default 0.5) replaces "
+            "both fractions, and `tree_max_depth`/`tree_max_children` cap "
+            "branch filing. Delete the removed key(s) and set `risk` to the "
+            "stance you had tuned toward")
+    if "risk" not in coordinator:
+        return RISK
+    raw = coordinator["risk"]
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ConfigError(f"coordinator.risk must be a number, got {raw!r}")
+    if not 0.0 <= raw <= 1.0:
         raise ConfigError(
-            f"coordinator.explore_fraction must be a number, got {raw!r}")
-    if not 0.0 <= raw < 1.0:
-        raise ConfigError(
-            f"coordinator.explore_fraction must be in [0, 1), got {raw!r}; "
-            "a reserve of the whole shortlist leaves no exploit lane, and the "
-            "score is what connects an iteration to the objective")
+            f"coordinator.risk must be in [0, 1], got {raw!r}; it is a share "
+            "of the shortlist, not a probability of anything")
     return float(raw)
 
 
-def _coverage_fraction(coordinator: dict, explore_fraction: float) -> float:
-    """Read and check `[coordinator] coverage_fraction`.
-
-    Same rules as `explore_fraction`: absent means the core default, `0` is a
-    domain's decision against the reserve and is never defaulted back. The
-    combined check applies to the *effective* value, defaulted or declared --
-    the sum is clamped in `Ranking.shortlist`, but a config whose reserves
-    total a whole shortlist is refused at load rather than silently
-    truncated."""
-    if "coverage_fraction" not in coordinator:
-        raw: float | int = COVERAGE_FRACTION
-    else:
-        raw = coordinator["coverage_fraction"]
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-            raise ConfigError(
-                f"coordinator.coverage_fraction must be a number, got {raw!r}")
-        if not 0.0 <= raw < 1.0:
-            raise ConfigError(
-                f"coordinator.coverage_fraction must be in [0, 1), got {raw!r}; "
-                "a reserve of the whole shortlist leaves no exploit lane, and "
-                "the score is what connects an iteration to the objective")
-    if float(raw) + explore_fraction >= 1.0:
+def _tree_count(coordinator: dict, key: str, default: int,
+                what: str) -> int:
+    """Read and check a tree budget: a non-negative integer, 0 = uncapped."""
+    if key not in coordinator:
+        return default
+    raw = coordinator[key]
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ConfigError(f"coordinator.{key} must be an integer, got {raw!r}")
+    if raw < 0:
         raise ConfigError(
-            f"coordinator.explore_fraction {explore_fraction} + "
-            f"coverage_fraction {raw} reserves the whole shortlist; at least "
-            "one slot must stay with the score. If you have not set "
-            "coverage_fraction, the core default (0.2) now participates in "
-            "this check: set `coverage_fraction = 0` to keep the reserve "
-            "composition this domain had before coverage existed, or lower "
-            "explore_fraction to share the shortlist between them.")
-    return float(raw)
+            f"coordinator.{key} must be >= 0 (0 disables the {what} cap), "
+            f"got {raw}")
+    return raw
 
 
 def _distil_every(coordinator: dict) -> int:
     """Read and check `[coordinator] distil_every`.
 
-    Like `explore_fraction`, `0` is a decision -- the domain has turned
+    Like `risk`, `0` is a decision -- the domain has turned
     distillation off -- and must not be defaulted back on, so this tests for
     the key rather than for falsiness."""
     if "distil_every" not in coordinator:

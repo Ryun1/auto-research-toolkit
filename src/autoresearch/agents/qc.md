@@ -21,15 +21,16 @@ You are asked about what code cannot check:
 4. **Was a phase skipped rather than empty?** A phase that read zero things and
    did zero things may be correct — or may be a failure that reported success.
    The phase records include what each one read; say which of the two it was.
-5. **Is the coverage quota actually being met?** The brief tells the generator
-   to probe an untested mechanism tag every iteration, and the ranking reserves
-   a slot for one. Compare the briefs against the record: a generation phase
-   that filed only entries on tested tags, a `coverage_reserve` that went
-   unfilled while untested-tag entries sat in the queue, or an entry filed
-   with a synonym tag for an untested one (which makes coverage look met while
+5. **Is the loop still opening new territory?** The risk dial reserves a share
+   of every shortlist for novel branches (entries with no `parent`), and the
+   generator is told to file at least one untested-mechanism probe per batch.
+   Compare the briefs against the record: a generation phase that filed only
+   branches off existing entries (no roots at all), an unfilled novel share
+   while root-worthy proposals sat in the queue, or an entry filed with a
+   synonym tag for an untested one (which makes coverage look met while
    testing nothing new) are all quiet drift back to pure exploitation. A
-   reserve that is structurally unfillable — no untested tag anywhere on the
-   board — is different, and worth naming as such, not as a failure.
+   novel share that is structurally unfillable — no untested tag anywhere on
+   the board — is different, and worth naming as such, not as a failure.
 6. **Did the scaffolding itself misbehave?** If you find a defect in the
    harness — a command that lied, a validator that passed something invalid, a
    phase that did nothing — file it as harness debt. Every item MUST carry a

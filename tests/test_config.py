@@ -96,38 +96,53 @@ def _minimal(tmp_path, coordinator=""):
     return tmp_path
 
 
-def test_a_domain_may_set_its_own_explore_fraction(tmp_path):
-    """How much of a shortlist to spend on amplitude is a risk appetite, and
-    risk appetite belongs to the domain, not to the core."""
+def test_a_domain_may_set_its_own_risk(tmp_path):
+    """How much of a shortlist to spend on novel branches is a risk appetite,
+    and risk appetite belongs to the domain, not to the core."""
     config = DomainConfig.load(_minimal(
-        tmp_path, "[coordinator]\nexplore_fraction = 0.5\n"))
-    assert config.explore_fraction == 0.5
+        tmp_path, "[coordinator]\nrisk = 0.7\n"))
+    assert config.risk == 0.7
 
 
-def test_a_domain_that_says_nothing_gets_the_core_default(tmp_path):
-    from autoresearch.rank import EXPLORE_FRACTION
+def test_a_domain_that_says_nothing_gets_the_neutral_stance(tmp_path):
+    from autoresearch.rank import RISK
     config = DomainConfig.load(_minimal(tmp_path))
-    assert config.explore_fraction == EXPLORE_FRACTION
+    assert config.risk == RISK == 0.5
 
 
-def test_a_domain_may_disable_the_reserve_outright(tmp_path):
-    """Zero is a real answer, and must not read as 'unset' and be defaulted."""
-    config = DomainConfig.load(_minimal(
-        tmp_path, "[coordinator]\nexplore_fraction = 0\n"))
-    assert config.explore_fraction == 0.0
+def test_both_ends_of_the_dial_are_legitimate_stances(tmp_path):
+    """`0` is a domain that wants only incumbent refinement; `1` only novel
+    territory. Neither may read as 'unset' and be defaulted."""
+    assert DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\nrisk = 0\n")).risk == 0.0
+    assert DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\nrisk = 1\n")).risk == 1.0
 
 
-def test_an_out_of_range_explore_fraction_is_refused_at_load(tmp_path):
-    with pytest.raises(ConfigError, match="coordinator.explore_fraction"):
+def test_an_out_of_range_risk_is_refused_at_load(tmp_path):
+    with pytest.raises(ConfigError, match="coordinator.risk"):
+        DomainConfig.load(_minimal(tmp_path, "[coordinator]\nrisk = 1.5\n"))
+
+
+def test_removed_reserve_keys_are_refused_at_load(tmp_path):
+    """A domain carrying `explore_fraction`/`coverage_fraction` forward is not
+    one that opted out of the dial -- it is one that has not seen the
+    migration. Its old keys would be silently dead while the 50/50 default
+    took over its ranking, so the load refuses and names the migration."""
+    with pytest.raises(ConfigError, match="explore_fraction was removed"):
         DomainConfig.load(_minimal(
-            tmp_path, "[coordinator]\nexplore_fraction = 1.0\n"))
-
-
-def test_a_non_numeric_explore_fraction_is_refused_at_load(tmp_path):
-    """It reaches a float division either way; failing here costs no iteration."""
-    with pytest.raises(ConfigError, match="coordinator.explore_fraction"):
+            tmp_path, "[coordinator]\nexplore_fraction = 0.2\nrisk = 0.3\n"))
+    with pytest.raises(ConfigError, match="coverage_fraction was removed"):
         DomainConfig.load(_minimal(
-            tmp_path, '[coordinator]\nexplore_fraction = "a fifth"\n'))
+            tmp_path, "[coordinator]\ncoverage_fraction = 0.2\n"))
+
+
+def test_a_non_numeric_risk_is_refused_at_load(tmp_path):
+    """It reaches a float multiplication either way; failing here costs no
+    iteration."""
+    with pytest.raises(ConfigError, match="coordinator.risk"):
+        DomainConfig.load(_minimal(
+            tmp_path, '[coordinator]\nrisk = "half"\n'))
 
 
 def test_a_brain_table_loads_from_domain_toml(toy, tmp_path):
@@ -145,50 +160,41 @@ def test_a_brain_table_loads_from_domain_toml(toy, tmp_path):
     assert config.brain == {"default": ["/bin/echo", "[]"]}
 
 
-# -- the coverage reserve, checked together with explore -------------------
+# -- the tree budgets -------------------------------------------------------
 
 
-def test_a_domain_may_set_its_own_coverage_fraction(tmp_path):
-    config = DomainConfig.load(_minimal(
-        tmp_path, "[coordinator]\ncoverage_fraction = 0.3\n"))
-    assert config.coverage_fraction == 0.3
-
-
-def test_a_domain_that_says_nothing_gets_the_core_coverage_default(tmp_path):
-    from autoresearch.rank import COVERAGE_FRACTION
+def test_tree_caps_default_to_depth_three_and_four_siblings(tmp_path):
     config = DomainConfig.load(_minimal(tmp_path))
-    assert config.coverage_fraction == COVERAGE_FRACTION
+    assert config.tree_max_depth == 3
+    assert config.tree_max_children == 4
 
 
-def test_a_domain_may_disable_the_coverage_reserve_outright(tmp_path):
+def test_a_domain_may_set_its_own_tree_caps(tmp_path):
     config = DomainConfig.load(_minimal(
-        tmp_path, "[coordinator]\ncoverage_fraction = 0\n"))
-    assert config.coverage_fraction == 0.0
+        tmp_path, "[coordinator]\ntree_max_depth = 5\ntree_max_children = 2\n"))
+    assert config.tree_max_depth == 5
+    assert config.tree_max_children == 2
 
 
-def test_an_out_of_range_coverage_fraction_is_refused_at_load(tmp_path):
-    with pytest.raises(ConfigError, match="coordinator.coverage_fraction"):
+def test_zero_disables_a_tree_cap(tmp_path):
+    config = DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\ntree_max_depth = 0\ntree_max_children = 0\n"))
+    assert config.tree_max_depth == 0
+    assert config.tree_max_children == 0
+
+
+def test_a_negative_tree_cap_is_refused_at_load(tmp_path):
+    with pytest.raises(ConfigError, match="coordinator.tree_max_depth"):
         DomainConfig.load(_minimal(
-            tmp_path, "[coordinator]\ncoverage_fraction = 1.0\n"))
+            tmp_path, "[coordinator]\ntree_max_depth = -1\n"))
 
 
-def test_reserves_summing_to_a_whole_shortlist_are_refused_at_load(tmp_path):
-    """Two half-shortlist reserves leave no exploit lane. shortlist() clamps
-    what a caller passes anyway, but a config that declares it is a mistake,
-    and mistakes like that are refused before anything spends."""
-    with pytest.raises(ConfigError, match="whole shortlist"):
+def test_a_non_integer_tree_cap_is_refused_at_load(tmp_path):
+    """A float cap rounds nobody knows which way; failing here costs no
+    iteration."""
+    with pytest.raises(ConfigError, match="coordinator.tree_max_children"):
         DomainConfig.load(_minimal(
-            tmp_path, "[coordinator]\nexplore_fraction = 0.5\n"
-                      "coverage_fraction = 0.5\n"))
-
-
-def test_the_default_coverage_fraction_participates_in_the_combined_check(tmp_path):
-    """A domain declaring explore_fraction 0.9 while saying nothing about
-    coverage must be refused at load, not discover the 0.9 + 0.2 sum the first
-    time the loop ranks."""
-    with pytest.raises(ConfigError, match="whole shortlist"):
-        DomainConfig.load(_minimal(
-            tmp_path, "[coordinator]\nexplore_fraction = 0.9\n"))
+            tmp_path, "[coordinator]\ntree_max_children = 2.5\n"))
 
 
 def test_seams_declared_inside_domain_table_are_refused(tmp_path):

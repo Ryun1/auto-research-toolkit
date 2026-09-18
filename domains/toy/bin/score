@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Toy domain branch scorer: one JSON record on stdin, one on stdout.
+
+Deterministic, model-free stand-in for a real branch scorer, so the coordinator's
+dispatch loop can be exercised end to end without a model call. It ranks the
+claimable candidates by expected value on the score:
+
+* base = impact / cost;
+* a novel root branch is scaled by the risk dial -- more risk tolerance, more
+  appetite for unparented shots;
+* a branch inherits its parent's verdict: a confirmed parent is worth more
+  (its mechanism was validated), a refuted parent worth almost nothing.
+
+The parent verdict comes from the record (`state/entries/<id>.json`,
+`result.verdict`). Read-only: it never writes. On any problem it exits nonzero
+with a message on stderr -- the loop records the failure and skips dispatch.
+"""
+import json
+import os
+import sys
+
+CONFIRMED_BONUS = 1.5
+REFUTED_PENALTY = 0.25
+
+
+def parent_verdict(record_dir, parent_id):
+    """The parent's verdict from the record, or None if unknown/inconclusive."""
+    path = os.path.join(record_dir, parent_id + ".json")
+    try:
+        with open(path) as f:
+            entry = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    verdict = entry.get("result", {}).get("verdict")
+    return verdict if isinstance(verdict, str) else None
+
+
+def main():
+    try:
+        record = json.load(sys.stdin)
+    except json.JSONDecodeError as e:
+        print(f"score: invalid JSON on stdin: {e}", file=sys.stderr)
+        return 1
+    risk = record.get("risk")
+    entries = record.get("entries")
+    if not isinstance(risk, (int, float)) or not 0.0 <= float(risk) <= 1.0:
+        print("score: missing or out-of-range 'risk' (expected float 0..1)", file=sys.stderr)
+        return 1
+    if not isinstance(entries, list):
+        print("score: missing 'entries' (expected a list)", file=sys.stderr)
+        return 1
+
+    record_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "state", "entries")
+    scores = []
+    for entry in entries:
+        try:
+            entry_id = entry["id"]
+            base = float(entry["impact"]) / float(entry["cost"])
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as e:
+            print(f"score: malformed entry {entry!r}: {e}", file=sys.stderr)
+            return 1
+        parent = entry.get("parent") or ""
+        if parent == "":
+            score = base * (0.5 + float(risk))
+            reason = f"novel root, risk={risk:g}"
+        else:
+            verdict = parent_verdict(record_dir, parent)
+            if verdict == "confirmed":
+                score = base * CONFIRMED_BONUS
+                reason = f"branch off confirmed {parent}"
+            elif verdict == "refuted":
+                score = base * REFUTED_PENALTY
+                reason = f"branch off refuted {parent}"
+            else:
+                score = base * 1.0
+                reason = f"branch off {parent}, verdict unknown"
+        scores.append({"id": entry_id, "score": score, "reason": reason})
+
+    json.dump({"scores": scores}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

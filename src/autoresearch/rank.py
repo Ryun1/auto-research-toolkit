@@ -23,32 +23,31 @@ decides:
   and excluding it would be exactly the over-claim the taxonomy was invented to
   stop.
 
-**A fraction of the shortlist is reserved for amplitude.** The formula is
-expected value per unit cost, which is risk-neutral, and risk-neutral EV/cost
-is pure exploitation: an honest long shot (confidence 0.10, impact 0.40, cost 8
--> 0.005) loses to a safe increment (0.85, 0.02, 1 -> 0.017) by 3.4x, and would
-need impact > 1.0 -- more than the whole objective -- to draw level. Nothing
-else in the formula corrects for it: `staleness` and `overlap` are both bounded
-by 1, so every term is a penalty and none is a bonus. `Ranking.shortlist` hands
-`explore_fraction` of the slots to the entries with the largest `impact`,
-ignoring confidence and cost. The reserve reorders among *ranked* entries only,
-so it is not a second route past the hard filters above.
+**A share of the shortlist follows the risk dial.** The formula is expected
+value per unit cost, which is risk-neutral, and risk-neutral EV/cost is pure
+exploitation: an honest long shot (confidence 0.10, impact 0.40, cost 8 ->
+0.005) loses to a safe increment (0.85, 0.02, 1 -> 0.017) by 3.4x, and would
+need impact > 1.0 -- more than the whole objective -- to draw level. Since the
+tree, the exploitation axis has a name: **the incumbent** -- an entry with a
+`parent`, a branch off work already in the record. A novel branch is a root:
+no parent, new territory. `[coordinator] risk` (default 0.5, meaning 50/50)
+declares what share of each shortlist goes to novel branches; the remainder
+goes to incumbent refinement. Both partitions are ordered by the same score,
+and an unfilled share returns to the other partition, so a short queue is
+never shortlisted below `k` for want of a long shot.
 
-(Called a reserve, not a lane, because `lanes.py` already owns "lane" for the
-findings/scaffolding publish boundary, which is a different thing entirely.)
+This replaces the older `explore_fraction`/`coverage_fraction` reserves, which
+ranked on `impact` alone and on untested mechanism tags: with lineage a
+structural field, novelty no longer needs a priced proxy, and one dial is one
+decision instead of two quotas whose sum had to be policed.
 
-**A second fraction of the shortlist is reserved for coverage.** The explore
-reserve ranks on impact, but a genuinely novel mechanism cannot be priced at
-all: it has no calibration history, so its confidence is a guess and its
-impact an estimate, and both terms are exactly the ones the exploit formula
-multiplies away. On the corpus this core is derived from, the largest wins
-were novel mechanism families -- while the `mechanisms` field went unfilled
-on 469 of 470 entries, so even the explore reserve ranked on all-zero data
-and no mechanism ever got a lane. `coverage_fraction` hands a share of every
-shortlist to entries probing a mechanism tag that no terminal entry has ever
-tested. Both reserves are advisory in the same sense: they reorder ranked
-entries, never overrule a hard filter, and an unfilled reserve returns its
-slot to the score.
+**A domain may own the score itself.** `[commands] score = "bin/score"` hands
+ranking to a domain command -- the same seam shape as `bin/measure`. The core
+still applies the hard filters and the risk partition; the domain decides what
+a branch is worth inside them. A multi-objective domain can make its scorer
+Pareto-aware; the scalar-vs-frontier trade is a domain decision, not core
+policy. A seam failure refuses the rank phase (dispatch is skipped, the
+iteration records why) rather than silently falling back to the formula.
 
 **The formula proposes; a judge may reorder within the shortlist.** The numbers
 cannot encode everything -- that is why the human curator existed -- but a judge
@@ -61,21 +60,11 @@ from dataclasses import dataclass, field
 
 from .errors import ConfigError
 
-#: Share of the shortlist reserved for amplitude. Small enough that the loop
-#: still spends most of every iteration on the objective, large enough that at
-#: the fanouts actually run (k=3) it reserves one slot.
-EXPLORE_FRACTION = 0.2
-
-#: Share of the shortlist reserved for coverage: entries probing a mechanism
-#: tag no terminal entry has ever tested. The exploit formula cannot see
-#: novelty -- an untested tag has no calibration history, so its EV is a guess
-#: and loses to every measured increment -- and the explore reserve ranks on
-#: impact, which a genuinely novel architecture cannot be priced at yet. On
-#: the corpus this core is derived from, the two largest wins were novel
-#: mechanism families, while the loop's `mechanisms` field went unfilled
-#: (1 of 470 entries) and both reserves ranked on all-zero data. The reserve
-#: exists so that cannot repeat silently.
-COVERAGE_FRACTION = 0.2
+#: Share of each shortlist aimed at novel branches (entries with no `parent`).
+#: The default is the neutral stance -- half the attention on improving the
+#: incumbent, half on pursuing new territory. A domain overrides it with
+#: `[coordinator] risk`; it is an appetite, not a formula output.
+RISK = 0.5
 
 
 @dataclass
@@ -85,16 +74,16 @@ class Score:
     score: float = 0.0
     terms: dict = field(default_factory=dict)
     excluded: str | None = None      # the hard filter that removed it, if any
-    explore: bool = False            # taken by the reserve, not by the score
-    coverage: bool = False           # taken by the coverage reserve
-    untested: int = 0                # mechanism tags no terminal entry tests
+    novel: bool = False              # a root branch: no parent, new territory
 
     def explain(self) -> str:
         if self.excluded:
             return f"{self.entry_id:6} EXCLUDED  {self.excluded}"
-        terms = "  ".join(f"{k}={v:.4g}" for k, v in self.terms.items())
-        lane = ("  [explore]" if self.explore else "") \
-            + ("  [coverage]" if self.coverage else "")
+        terms = "  ".join(
+            f"{k}={v:.4g}" if isinstance(v, (int, float))
+            and not isinstance(v, bool) else f"{k}={v}"
+            for k, v in self.terms.items())
+        lane = "  [novel]" if self.novel else "  [branch]"
         return (f"{self.entry_id:6} {self.score:9.4f}  {terms}   "
                 f"{self.title[:60]}{lane}")
 
@@ -105,96 +94,53 @@ class Ranking:
     excluded: list[Score]
     calibration: dict = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
-    explore_fraction: float = 0.0
-    coverage_fraction: float = 0.0
+    risk: float = 0.0
 
     def shortlist(self, k: int) -> list[Score]:
-        """The top `k`, with fractions of the slots reserved for amplitude and
-        for coverage.
+        """The top `k` under the risk dial.
 
-        `scored` stays in score order -- that is the auditable ranking, and the
-        judge reviews it -- so the reserves are applied here, at the point
-        where slots are actually spent.
+        `scored` stays in score order -- that is the auditable ranking, and
+        the judge reviews it. The dial decides only how the slots split
+        between the two partitions: `int(k * risk + 0.5)` slots for novel
+        branches (no `parent`), the rest for incumbent refinement. Rounding is
+        deliberate, not a floor: at the fanouts this loop actually runs
+        (k=3, risk=0.2 -> 0.6) a floor would reserve nothing and the stance
+        would exist only on paper.
 
-        Rounding is deliberate: `int(k * f + 0.5)` rather than a floor, because
-        a floor at the fanouts this loop actually runs (k=3, f=0.2 -> 0.6) would
-        reserve nothing and the lane would exist only on paper. It is then
-        clamped, which is what actually holds the three guarantees the
-        validators promise: at least one slot always goes to the score, the
-        only slot in an iteration is never spent on a lottery ticket, and the
-        two reserves together cannot take the whole shortlist (`rank` refuses
-        `explore + coverage >= 1` at the config layer; this clamps what a
-        caller passes anyway).
-
-        The coverage reserve is applied first: a novel-mechanism probe is the
-        pick the exploit formula buries hardest (no calibration history means
-        its confidence is a guess), and an entry can serve both reserves at
-        once -- a high-impact untested mechanism takes one slot, not two.
+        A partition with no candidates gives its share back to the other, so
+        an empty novel lane never starves dispatch; `risk=1.0` sends every
+        slot it can to novel branches and backfills only what the record
+        cannot support. The returned picks are re-sorted by score so dispatch
+        and display stay deterministic.
         """
         if k <= 0:
             return []
-        for card in self.scored:            # recomputed, so this is idempotent
-            card.explore = False
-            card.coverage = False
-        # Nothing to reserve when everything ranked is dispatched anyway: the
-        # pick would be labelled a reserve entry that "sits low on score by
-        # design" when it is simply k-th.
+        # A single slot is never spent on a lottery ticket: with k=1 the dial
+        # has nothing to split, and applying it literally would send every
+        # one-slot iteration to the same partition -- a permanent bias, not
+        # the stance the dial declares.
+        if k == 1:
+            return self.scored[:1]
         if len(self.scored) <= k:
             return list(self.scored)
-        cov_n = (max(0, min(int(k * self.coverage_fraction + 0.5), k - 1))
-                 if self.coverage_fraction else 0)
-        exp_n = (max(0, min(int(k * self.explore_fraction + 0.5),
-                            k - 1 - cov_n))
-                 if self.explore_fraction else 0)
-        n_scored = k - cov_n - exp_n
-        picks = self.scored[:n_scored]
-        if cov_n or exp_n:
-            taken = {c.entry_id for c in picks}
-            # A judge's `demote`/`drop` is honoured here too. `apply_veto`
-            # implements both by moving the card to the tail of `scored`, which
-            # is exactly where the reserves look, so without this filter a veto
-            # on a reserve-worthy entry puts it straight back and the entry it
-            # was making room for stays out.
-            vetoed = ("demote", "drop")
-            rest = [c for c in self.scored if c.entry_id not in taken
-                    and c.terms.get("veto") not in vetoed]
-            # Coverage: any entry probing a mechanism tag no terminal entry has
-            # tested, best score first -- among equally novel probes the
-            # formula's ordering is still the least-biased tiebreak.
-            for card in sorted((c for c in rest if c.untested),
-                               key=lambda c: -c.score)[:cov_n]:
-                card.coverage = True
-                picks.append(card)
-                taken.add(card.entry_id)
-            # Amplitude: impact alone. Confidence and cost are precisely the
-            # terms that bury a long shot, so the reserve must not consult
-            # them; ties break on score so the ordering stays deterministic.
-            rest = [c for c in rest if c.entry_id not in taken]
-            for card in sorted(rest,
-                               key=lambda c: (-c.terms.get("impact", 0.0),
-                                              -c.score))[:exp_n]:
-                card.explore = True
-                picks.append(card)
-            # A reserve nobody could fill is given back to the score, so a
-            # short queue is never shortlisted below `k` for want of a long
-            # shot or an untested mechanism.
-            if len(picks) < k:
-                chosen = {c.entry_id for c in picks}
-                picks += [c for c in self.scored
-                          if c.entry_id not in chosen][:k - len(picks)]
-        return picks
+        novel = [c for c in self.scored if c.novel]
+        incumbent = [c for c in self.scored if not c.novel]
+        n_novel = min(int(k * self.risk + 0.5), len(novel))
+        n_incumbent = max(0, min(k - n_novel, len(incumbent)))
+        # Only the genuinely unfilled share returns to the other partition:
+        # a dial the record cannot support is a stance, not a quota to pad.
+        n_novel = min(n_novel + (k - n_novel - n_incumbent), len(novel))
+        picks = novel[:n_novel] + incumbent[:n_incumbent]
+        return sorted(picks, key=lambda s: -s.score)
 
     def explain(self) -> str:
         out = [f"ranked {len(self.scored)} candidate(s), "
                f"excluded {len(self.excluded)}"]
         out += ["", "score = confidence x impact / cost x staleness x overlap"]
-        if self.explore_fraction:
-            out += [f"explore reserve: {self.explore_fraction:.0%} of the "
-                    f"shortlist, ranked on impact alone"]
-        if self.coverage_fraction:
-            out += [f"coverage reserve: {self.coverage_fraction:.0%} of the "
-                    f"shortlist, ranked among entries probing a mechanism tag "
-                    f"no terminal entry tests"]
+        if self.risk:
+            out += [f"risk {self.risk:.0%}: that share of the shortlist goes "
+                    "to novel branches (no parent); the rest refines the "
+                    "incumbent"]
         out += [""]
         out += ["  " + s.explain() for s in self.scored]
         if self.excluded:
@@ -248,47 +194,21 @@ def _dead_mechanisms(entries, machine_for):
 
 def rank(entries, config, *, prior_weight: float = 3.0,
          verdicts_since=None, budget_ok=None, host=None,
-         explore_fraction: float = 0.0,
-         coverage_fraction: float = 0.0) -> Ranking:
+         risk: float = 0.0) -> Ranking:
     """Score every claimable entry. Returns the ranking and why each entry sits
     where it does -- an unexplained ranking is one nobody can correct.
 
-    `explore_fraction` reserves that share of the shortlist for amplitude;
-    `coverage_fraction` reserves a share for entries probing a mechanism tag no
-    terminal entry has tested. Both are off by default so a library caller
-    gets the score and nothing else; the loop and the CLI pass the defaults."""
-    if not 0.0 <= explore_fraction < 1.0:
+    `risk` is the share of the shortlist `Ranking.shortlist` aims at novel
+    branches (entries with no `parent`). Off by default so a library caller
+    gets the score and nothing else; the loop and the CLI pass the domain's
+    dial. Hard filters above the formula are unchanged by it."""
+    if not 0.0 <= risk <= 1.0:
         raise ConfigError(
-            f"explore_fraction must be in [0, 1), got {explore_fraction!r}; "
-            "a reserve of the whole shortlist leaves no exploit lane, and the "
-            "score is what connects an iteration to the objective")
-    if not 0.0 <= coverage_fraction < 1.0:
-        raise ConfigError(
-            f"coverage_fraction must be in [0, 1), got {coverage_fraction!r}; "
-            "a reserve of the whole shortlist leaves no exploit lane, and the "
-            "score is what connects an iteration to the objective")
-    if explore_fraction + coverage_fraction >= 1.0:
-        raise ConfigError(
-            f"explore_fraction {explore_fraction} + coverage_fraction "
-            f"{coverage_fraction} reserves the whole shortlist; at least one "
-            "slot must stay with the score, which is what connects an "
-            "iteration to the objective")
+            f"risk must be in [0, 1], got {risk!r}; it is a share of the "
+            "shortlist, not a probability of anything")
     machine_for = lambda eid: config.track_for(eid).machine   # noqa: E731
     calibration = calibrate(entries, machine_for)
     hard_dead, soft_dead = _dead_mechanisms(entries, machine_for)
-    # Coverage accounting: how many terminal experiment entries have tested
-    # each mechanism tag. A tag with a count of zero (or absent) is untested --
-    # the coverage reserve's eligibility test. Only experiment dispositions
-    # count: a harness fix or a superseded entry never tested a mechanism.
-    tested: dict[str, int] = {}
-    for entry in entries:
-        machine = machine_for(entry.id)
-        if not machine.status(entry.status).terminal or not entry.result:
-            continue
-        if entry.result.disposition != "experiment":
-            continue
-        for mechanism in entry.closure_mechanisms():
-            tested[mechanism] = tested.get(mechanism, 0) + 1
     # Closure dates, so staleness can ask "what has the board learned since this
     # entry was last priced" rather than "how much has it ever learned". The
     # first version compared against the total closed count, which on a corpus
@@ -374,7 +294,7 @@ def rank(entries, config, *, prior_weight: float = 3.0,
         card.score = confidence * impact / cost * staleness * overlap
         if touching:
             card.terms["soft_dead"] = float(len(touching))
-        card.untested = sum(1 for m in entry.mechanisms if not tested.get(m))
+        card.novel = entry.parent == ""
         scored.append(card)
 
     scored.sort(key=lambda s: -s.score)
@@ -387,8 +307,7 @@ def rank(entries, config, *, prior_weight: float = 3.0,
         notes.append(f"{len(soft_dead)} mechanism(s) have slope/cell refutations; "
                      "overlap penalties require matching applicability")
     return Ranking(scored=scored, excluded=excluded, calibration=calibration,
-                   notes=notes, explore_fraction=explore_fraction,
-                   coverage_fraction=coverage_fraction)
+                   notes=notes, risk=risk)
 
 
 @dataclass
@@ -441,5 +360,4 @@ def apply_veto(ranking: Ranking, vetoes: list[Veto]) -> Ranking:
 
     return Ranking(scored=scored, excluded=ranking.excluded,
                    calibration=ranking.calibration, notes=notes,
-                   explore_fraction=ranking.explore_fraction,
-                   coverage_fraction=ranking.coverage_fraction)
+                   risk=ranking.risk)
