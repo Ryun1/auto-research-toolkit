@@ -64,3 +64,12 @@ def test_shipped_toy_domain_reports_zero_skills_rather_than_staying_silent():
 def test_shipped_toy_domain_ships_no_skills():
     """A committed skill would cite entries `state/entries/` does not hold."""
     assert not list((TOY / "docs" / "skills").glob("*/SKILL.md"))
+
+
+def test_shipped_toy_domain_ships_the_hand_driven_protocol_in_sync():
+    """The scaffold writes AGENTS.md into new domains; the shipped example
+    carries the same file. It must stay identical to the scaffold's constant:
+    a drifted copy is two protocols, and agents read whichever repo they are
+    opened in."""
+    from autoresearch.scaffold import AGENTS_MD
+    assert (TOY / "AGENTS.md").read_text() == AGENTS_MD

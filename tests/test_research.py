@@ -137,7 +137,7 @@ def test_cli_research_records_an_out_of_band_iteration(sandbox, store,
     import autoresearch.cli as cli
     from autoresearch.driver import brain as brain_mod
 
-    def fake_build(config, model=None, max_budget_usd=None, allow_paid=None):
+    def fake_build(config, max_budget_usd=None, allow_paid=None):
         scouts = [lambda b: [dict(PROPOSAL)],
                   lambda b: [dict(PROPOSAL, title="a second scout's idea")]]
         return ScriptedBrain({**IDLE, Role.SCOUT: lambda b: scouts.pop()(b)})
@@ -172,7 +172,7 @@ def test_cli_research_prints_unknown_for_an_unmetered_backend(sandbox, store,
                          backend="unmetered")
 
     monkeypatch.setattr(brain_mod, "build_brain",
-                        lambda config, model=None, max_budget_usd=None, allow_paid=None:
+                        lambda config, max_budget_usd=None, allow_paid=None:
                         Unmetered())
     rc = cli.main(["--domain", str(sandbox.paths.root),
                    "research", "any question"])
@@ -190,7 +190,7 @@ def test_the_record_is_written_even_when_the_phase_raises(sandbox, monkeypatch):
     from autoresearch.errors import AutoresearchError
 
     monkeypatch.setattr(brain_mod, "build_brain",
-                        lambda config, model=None, max_budget_usd=None, allow_paid=None:
+                        lambda config, max_budget_usd=None, allow_paid=None:
                         ScriptedBrain(IDLE))
 
     def explode(self, it, budget, question, count=1):

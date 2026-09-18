@@ -632,7 +632,7 @@ def cmd_loop(args):
     from .driver.loop import Coordinator
 
     config = _load(args)
-    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd,
+    brain = build_brain(config, max_budget_usd=args.max_usd,
                         allow_paid=getattr(args, "allow_paid_brain", None))
 
     coordinator = Coordinator(config, brain, session=args.session,
@@ -867,7 +867,7 @@ def cmd_skill_distil(args):
             print(f"  {name}: {'; '.join(reasons)}")
         print("\nnothing was written (--dry-run)")
         return 0
-    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd,
+    brain = build_brain(config, max_budget_usd=args.max_usd,
                         allow_paid=getattr(args, "allow_paid_brain", None))
     coordinator = Coordinator(config, brain, session=args.session)
     it = Iteration(n=coordinator._last_recorded_n() + 1, kind="out-of-band")
@@ -906,7 +906,7 @@ def cmd_research(args):
     from .driver.loop import Coordinator, Iteration, _iso
 
     config = _load(args)
-    brain = build_brain(config, model=args.model, max_budget_usd=args.max_usd,
+    brain = build_brain(config, max_budget_usd=args.max_usd,
                         allow_paid=getattr(args, "allow_paid_brain", None))
     coordinator = Coordinator(config, brain, session=args.session)
     it = Iteration(n=coordinator._last_recorded_n() + 1, kind="out-of-band")
@@ -1090,11 +1090,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     loop = sub.add_parser("loop", help="run the coordinator until it stops")
     loop.add_argument("--iterations", type=int, default=1)
-    loop.add_argument("--model")
     loop.add_argument("--max-usd", type=float, dest="max_usd",
                       help="hard ceiling on model spend; defaults to policy.spend_ceiling")
     loop.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain",
-                      help="authorize the built-in Claude SDK brain to spend API money "
+                      help="authorize the built-in TypeSafe brain to spend API money "
                            "for this run (otherwise domain.toml must set [brain] authorize_spend)")
     loop.set_defaults(func=cmd_loop)
 
@@ -1105,11 +1104,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                           help="the targeted question the scouts answer")
     research.add_argument("--count", type=int, default=1,
                           help="how many scouts to run in parallel (default 1)")
-    research.add_argument("--model")
     research.add_argument("--max-usd", type=float, dest="max_usd",
                           help="hard ceiling on model spend; defaults to policy.spend_ceiling")
     research.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain",
-                          help="authorize the built-in Claude SDK brain to spend API money "
+                          help="authorize the built-in TypeSafe brain to spend API money "
                                "for this run (otherwise domain.toml must set [brain] authorize_spend)")
     research.set_defaults(func=cmd_research)
 
@@ -1164,7 +1162,6 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     sdistil = ssub.add_parser("distil", help="run the distil phase once")
     sdistil.add_argument("--dry-run", action="store_true",
                          help="show what would be distilled; write nothing")
-    sdistil.add_argument("--model")
     sdistil.add_argument("--max-usd", type=float, dest="max_usd")
     sdistil.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain")
     sdistil.set_defaults(func=cmd_skill_distil)

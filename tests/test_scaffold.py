@@ -80,3 +80,23 @@ def test_a_scaffolded_domain_declares_a_distil_cadence(tmp_path):
     init(tmp_path / "d", name="d")
     config = DomainConfig.load(tmp_path / "d")
     assert config.distil_every == 5
+
+
+def test_a_scaffolded_domain_ships_the_hand_driven_protocol(tmp_path):
+    """The toolkit's own docs live in the toolkit repository, which a project
+    does not contain -- an agent opened in a terminal sees only this repo. So
+    the scaffold ships the claim/measure/close protocol where agents look
+    first, and every verb it names must exist on the CLI it ships."""
+    from autoresearch.cli import build_parser
+    init(tmp_path / "d", name="d")
+    text = (tmp_path / "d" / "AGENTS.md").read_text()
+    parser = build_parser()
+    for verb in ("board", "rank", "budget", "entry", "claim", "release",
+                 "reap", "close", "measure", "research", "session",
+                 "usage", "validate", "policy"):
+        assert f"ar {verb}" in text, f"AGENTS.md does not mention ar {verb}"
+        try:
+            parser.parse_args([verb, "--help"])
+        except SystemExit as exc:
+            assert exc.code == 0, f"ar {verb} does not exist"
+    assert "loop" in text, "the doc must say why not to run ar loop"

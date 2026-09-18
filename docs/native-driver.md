@@ -17,7 +17,7 @@ meters still demand of each.
 |---|---|---|
 | `ar loop` | the coordinator: generate → rank → dispatch → curate → distil → qc | unattended campaigns where the brain seam is authorized |
 | native dispatch (`[coordinator] dispatch = "native"`) | the loop reserves each shortlisted card, then hands a manifest to the surrounding harness's own subagents, which settle with `ar external complete` | you want the loop's ranking and budgets but your agents live in an outer coding harness |
-| the outer harness, by hand | agents (or you) run `ar claim` → work → `ar measure` → `ar close` directly | the dominant field shape: judgement-rich work, model calls you don't want metered through the loop, or no loop process at all |
+| the outer harness, by hand | agents (or you) run `ar claim` → work → `ar measure` → `ar close` directly — often one orchestrating agent fanning out subagents, one entry each | the dominant field shape: judgement-rich work, model calls you don't want metered through the loop, or no loop process at all |
 
 The third shape is not a workaround. `ar claim` is serialised, `ar measure`
 writes the same validated run rows, `ar close` enforces the same memo,
@@ -51,6 +51,44 @@ discount for being applied by a person.
 patterns are checked on every command path; an outer agent may prepare a
 submission, never run it. If your harness's agents shell out, they go through
 the same policy check as a worker does.
+
+## Fan out: a harness that can spawn subagents should
+
+The hand-driven driver is not one agent in one terminal. The claim protocol
+exists because 92 concurrent sessions drained one queue (`driver/claims.py`);
+the same shape works one level down, inside your harness:
+
+- **One subagent per entry it should progress.** Never split one entry across
+  agents: a claim is per-entry and single-holder, and `ar claim` names the
+  holder when it refuses. The claim is the coordination primitive -- two
+  subagents claiming different entries need no other locking.
+- **Each subagent names itself.** The global `--session` flag attributes
+  claims, usage rows and history:
+  `ar --session scout-3 claim Q-12 --why ... --max-runs N`. A dead
+  subagent's claim is freed with `ar reap Q-12` once past its TTL -- per
+  entry, nothing else is touched -- and bare `ar reap` lists what is
+  reapable, with the holder names.
+- **The orchestrating agent keeps the judgement-heavy verbs**: `board`,
+  `rank`, `entry new`, `close` (a closure's memo and gates are a verdict --
+  one writer, not a fan-out), `budget`. Subagents claim, measure and report
+  back; the orchestrator closes.
+- **The orchestrator also carries the persistence.** Most harnesses have a
+  goal feature (`/goal <text>`); set it from `goal.yaml` -- metrics,
+  objective, moving target, `stop_when` -- as a goal the harness will
+  iterate toward, e.g. "iterate until a solution scoring +1% over the
+  current best objective is measured; stop when `stop_when` holds or `ar
+  budget` says the meters do". The goal supplies the cadence the
+  coordinator would have; it never substitutes for the record: an
+  improvement is real only after `ar measure` writes the row and `ar close`
+  accepts the evidence, and when `stop_when` or a meter fires, the goal
+  stops with it.
+- **Subagent model spend is out-of-band spend**; record it under the
+  subagent's session name or the ceiling refuses further metered spend (see
+  below).
+
+`ar session` worktrees are for agents the harness does not isolate; a
+subagent with its own checkout does not need one, but should still claim
+under the same `--session` name it records usage under.
 
 ## Sessions: long-lived worktrees for hand-driven work
 

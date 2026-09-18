@@ -171,93 +171,6 @@ class ScriptedBrain:
                      backend=self.backend, cost_usd=0.0)
 
 
-class SDKBrain:
-    """The real brain: one Claude Agent SDK query per role.
-
-    Money is metered twice on purpose -- `max_budget_usd` caps the SDK itself,
-    and the caller's domain budget records what was spent -- because a ceiling
-    enforced in only one place is a ceiling that stops existing the moment
-    someone calls the other path.
-    """
-
-    def __init__(self, config, model: str | None = None,
-                 max_budget_usd: float | None = None, allowed_tools=None,
-                 ledger: CostLedger | None = None):
-        self.config = config
-        self.model = model
-        self.max_budget_usd = (max_budget_usd if max_budget_usd is not None
-                               else config.policy.spend_ceiling)
-        self.allowed_tools = allowed_tools or [
-            "Read", "Grep", "Glob", "Bash", "Write", "Edit"]
-        self.ledger = ledger
-        self.spent_usd = 0.0
-        self.backend = "claude-sdk"
-
-    def ask(self, role: str, brief: str, *, workspace=None, max_turns=None) -> Reply:
-        import asyncio
-        return asyncio.run(self._ask(role, brief, workspace, max_turns))
-
-    def _ceiling(self) -> float | None:
-        """The budget this one ask may hand the SDK.
-
-        With a shared ledger it is what is left of the campaign's money, so N
-        backends share one ceiling instead of each holding a full copy of it.
-        Without a ledger the brain still caps itself against its own spend --
-        metered twice on purpose.
-        """
-        if self.ledger is not None:
-            return self.ledger.remaining()
-        if self.max_budget_usd is None:
-            return None
-        return max(0.0, self.max_budget_usd - self.spent_usd)
-
-    async def _ask(self, role, brief, workspace, max_turns) -> Reply:
-        from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
-
-        if role in (Role.WORKER, Role.CURATOR):
-            tools = self.allowed_tools
-        elif role == Role.SCOUT:
-            # A scout reads the world, not the record: research needs the web,
-            # but its findings come back as JSON for the coordinator to file,
-            # never as writes.
-            tools = ["Read", "Grep", "Glob", "WebSearch", "WebFetch"]
-        else:
-            tools = ["Read", "Grep", "Glob"]
-
-        # With a shared ledger the per-ask ceiling is what is left of the
-        # campaign's money, so N backends share one ceiling instead of each
-        # holding a full copy of it.
-        ceiling = self._ceiling()
-        options = ClaudeAgentOptions(
-            system_prompt=role_prompt(role),
-            cwd=str(workspace or self.config.paths.root),
-            # Only the worker and the curator write. The librarian is read-only
-            # on purpose: it returns a skill body and the coordinator writes it,
-            # so a role never certifies its own output (see skills.write).
-            allowed_tools=tools,
-            permission_mode="acceptEdits",
-            max_turns=max_turns,
-            model=self.model,
-            max_budget_usd=ceiling,
-        )
-        chunks, cost = [], None
-        async for message in query(prompt=brief, options=options):
-            if isinstance(message, ResultMessage):
-                cost = cost_value(getattr(message, "total_cost_usd", None))
-                continue
-            for block in getattr(message, "content", []) or []:
-                text = getattr(block, "text", None)
-                if text:
-                    chunks.append(text)
-        raw = "\n".join(chunks)
-        self.spent_usd = (None if cost is None or self.spent_usd is None
-                          else self.spent_usd + cost)
-        if self.ledger is not None:
-            self.ledger.spend(cost)
-        return Reply(role=role, data=extract_json(raw), raw=raw, cost_usd=cost,
-                     backend=self.backend)
-
-
 class ProcessBrain:
     """A brain that is any command, so no agent is a special case.
 
@@ -366,7 +279,7 @@ class TypeSafeBrain:
     JSON (the coordinator's `_brief`) and is sent as the API's `state`; the
     coordinator's instructions ride along inside it.
 
-    Fail-closed like the SDK brain: building this brain without
+    Fail-closed: building this brain without
     `TYPESAFE_API_KEY` set is a refusal at build, and `[brain]` must say
     `authorize_spend = true` before `build_brain` will build it at all.
 
@@ -408,6 +321,34 @@ class TypeSafeBrain:
 
     # -- the Brain protocol ---------------------------------------------------
 
+    #: Context fields that ride along with the trimmed wire state, when the
+    #: brief carries them. Everything else stays in the record.
+    WIRE_CONTEXT = ("domain", "iteration", "goal", "instruction",
+                    "budget_remaining")
+
+    def _wire_state(self, role: str, state: dict) -> dict:
+        """The state System One actually sees.
+
+        The coordinator's brief carries the whole record -- open entries,
+        closed directions, the full ranking -- and a brief that size exceeds
+        the API's token budget (HTTP 400 max_tokens_exceeded at ~258KB).
+        These roles read only their question inputs, so only those travel:
+        the judge reviews the top `JUDGE_REVIEW_CAP` ranking rows plus the
+        reserves, qc the mechanical problems. Context rides as a small
+        allowlist of scalars/maps, never entry corpora.
+        """
+        if role == Role.JUDGE:
+            wire = {"ranking": (state.get("ranking") or [])[:self.JUDGE_REVIEW_CAP],
+                    "explore_reserve": state.get("explore_reserve") or [],
+                    "coverage_reserve": state.get("coverage_reserve") or []}
+        else:
+            wire = {"mechanical_problems":
+                    state.get("mechanical_problems") or []}
+        for key in self.WIRE_CONTEXT:
+            if key in state:
+                wire[key] = state[key]
+        return wire
+
     def ask(self, role: str, brief: str, *, workspace=None,
             max_turns=None) -> Reply:
         if role not in self.SUPPORTED:
@@ -427,7 +368,8 @@ class TypeSafeBrain:
             remaining = self.ledger.remaining()
             if remaining is not None and remaining <= 0:
                 raise AutoresearchError("monetary ceiling exhausted")
-        response = self._post({"state": state, "model": self.model,
+        response = self._post({"state": self._wire_state(role, state),
+                               "model": self.model,
                                "questions": questions})
         answers = response.get("answers")
         if not isinstance(answers, dict):
@@ -610,50 +552,54 @@ class RoutingBrain:
         return brain.ask(role, brief, workspace=workspace, max_turns=max_turns)
 
 
-def build_brain(config, model: str | None = None,
-                max_budget_usd: float | None = None,
+def build_brain(config, max_budget_usd: float | None = None,
                 allow_paid: bool | None = None):
     """Build the brain a domain's `[brain]` table describes.
 
-    `"claude"` names the built-in SDK brain, `"typesafe"` the built-in
-    TypeSafe (Jev) brain; any list of strings is a command per the
-    `ProcessBrain` contract. Every backend shares one `CostLedger`, so the
-    ceiling is campaign-wide no matter how many backends can spend.
+    `"typesafe"` names the built-in TypeSafe (Jev) brain; any list of strings
+    is a command per the `ProcessBrain` contract. Every backend shares one
+    `CostLedger`, so the ceiling is campaign-wide no matter how many backends
+    can spend.
 
-    Both built-in brains spend API money, so they are **fail-closed**: a
-    domain must name one deliberately with `[brain] authorize_spend = true`,
-    or the caller must pass `allow_paid=True` (`--allow-paid-brain`). An
-    absent table is read as a decision for the SDK brain -- which is now a
-    refusal, not a default bill.
+    The built-in brain spends API money, so it is **fail-closed**: a domain
+    must name it deliberately with `[brain] authorize_spend = true`, or the
+    caller must pass `allow_paid=True` (`--allow-paid-brain`). An absent
+    table, or an absent `default`, is a refusal that names the remedy: route
+    the roles to commands.
     """
     spec = config.brain or {}
     # The flag GRANTS; it never revokes. argparse's store_true default is
     # False, not None, so a caller that did not pass the flag must not undo a
     # domain's own `authorize_spend = true`.
     authorized = bool(spec.get("authorize_spend", False)) or bool(allow_paid)
-    paid = ("claude", "typesafe")
     # Role routes only: `default`, `authorize_spend` and the `typesafe_*`
     # options are settings, never backends.
     roles = {key: value for key, value in spec.items()
              if key not in ("default", "authorize_spend")
              and not key.startswith("typesafe_")}
+    if "default" not in spec:
+        raise AutoresearchError(
+            "no default brain: set `[brain] default = [\"<command>\"]` in "
+            "domain.toml to a command per the ProcessBrain contract "
+            "(`driver/brain.py`), or name one per role with "
+            "`brain.<role> = [\"<command>\"]`. The one built-in brain, "
+            "\"typesafe\", spends API money and additionally needs "
+            "`authorize_spend = true` or --allow-paid-brain.")
     wants_paid = [key for key, value in
-                  [("default", spec.get("default", "claude")), *roles.items()]
-                  if value in paid]
+                  [("default", spec["default"]), *roles.items()]
+                  if value == "typesafe"]
     if wants_paid and not authorized:
         raise AutoresearchError(
-            "the built-in Claude SDK and TypeSafe brains spend API money and "
-            "are refused until you say so: set `[brain] authorize_spend = "
-            "true` in domain.toml, or pass --allow-paid-brain. Route the "
-            "roles that need judgement to native agents with "
+            "the built-in TypeSafe brain spends API money and is refused "
+            "until you say so: set `[brain] authorize_spend = true` in "
+            "domain.toml, or pass --allow-paid-brain. Route the roles that "
+            "need judgement to native agents with "
             "`brain.<role> = [\"<command>\"]` instead; "
             f"table keys naming a paid brain: {sorted(set(wants_paid))}")
     ledger = CostLedger(max_budget_usd if max_budget_usd is not None
                         else config.policy.spend_ceiling)
 
     def one(value):
-        if value == "claude":
-            return SDKBrain(config, model=model, ledger=ledger)
         if value == "typesafe":
             return TypeSafeBrain(
                 model=spec.get("typesafe_model", "jev-latest"),
@@ -663,6 +609,6 @@ def build_brain(config, model: str | None = None,
                 ledger=ledger)
         return ProcessBrain(value, root=config.paths.root, ledger=ledger)
 
-    default = one(spec.get("default", "claude"))
+    default = one(spec["default"])
     routes = {role: one(value) for role, value in roles.items()}
     return RoutingBrain(routes, default)

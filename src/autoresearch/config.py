@@ -182,9 +182,9 @@ class DomainConfig:
     #: absent directory reads as zero skills, never as an error.
     skills: Skills = field(default_factory=Skills)
     coordinator: dict = field(default_factory=dict)
-    #: which backend serves each role. `"claude"` names the built-in SDK brain,
-    #: `"typesafe"` the built-in TypeSafe (Jev) brain; a list of strings is a
-    #: command run per the ProcessBrain contract in `driver/brain.py`.
+    #: which backend serves each role. `"typesafe"` names the built-in
+    #: TypeSafe (Jev) brain; a list of strings is a command run per the
+    #: ProcessBrain contract in `driver/brain.py`.
     #: Validated at load -- an unknown role or placeholder
     #: here is a loop that cannot start, so say so before anything spends.
     brain: dict = field(default_factory=dict)
@@ -428,12 +428,12 @@ def _brain_spec(data) -> dict:
     """Read and check the top-level `brain` table.
 
     Keys are `default`, a role name, `authorize_spend`, or one of
-    `TYPESAFE_BRAIN_KEYS`; values are `"claude"` (the built-in SDK brain),
-    `"typesafe"` (the built-in TypeSafe/Jev brain), a non-empty list of
-    strings -- the command the ProcessBrain contract runs -- or, for
+    `TYPESAFE_BRAIN_KEYS`; values are `"typesafe"` (the built-in
+    TypeSafe/Jev brain), a non-empty list of strings -- the command the
+    ProcessBrain contract runs -- or, for
     `authorize_spend` and the `typesafe_*` options, a bool / string / number
-    per key. Both built-in brains can incur API charges and are fail-closed:
-    without `authorize_spend = true`, a domain naming one is refused at load,
+    per key. The built-in brain can incur API charges and is fail-closed:
+    without `authorize_spend = true`, a domain naming it is refused at load,
     because a default that can spend without saying so is a bill waiting to
     happen.
     """
@@ -467,13 +467,13 @@ def _brain_spec(data) -> dict:
             raise ConfigError(
                 f"brain.{key}: not a role; keys are 'default' or one of "
                 f"{', '.join(Role.ALL)}")
-        if value in ("claude", "typesafe"):
+        if value == "typesafe":
             spec[key] = value
             continue
         if (not isinstance(value, list) or not value
                 or not all(isinstance(part, str) for part in value)):
             raise ConfigError(
-                f"brain.{key}: must be \"claude\", \"typesafe\", or a "
+                f"brain.{key}: must be \"typesafe\", or a "
                 f"non-empty list of strings, got {value!r}")
         unknown = ({match for part in value
                     for match in re.findall(r"\{(\w+)\}", part)}

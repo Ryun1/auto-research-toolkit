@@ -6,7 +6,6 @@ from .brain import (  # noqa: F401
     Role,
     RoutingBrain,
     ScriptedBrain,
-    SDKBrain,
     build_brain,
 )
 from .loop import Coordinator, Iteration  # noqa: F401

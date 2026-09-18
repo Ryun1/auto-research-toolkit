@@ -1,4 +1,4 @@
-"""The agent-agnostic seam: a brain is `claude` or any command.
+"""The agent-agnostic seam: a brain is `"typesafe"` or any command.
 
 The loop must never learn a backend exists, and the config must refuse a
 broken brain table before anything spends -- a misspelled placeholder is a
@@ -118,65 +118,48 @@ def test_roles_route_to_the_backend_the_domain_named(sandbox):
     assert brain.ask("judge", "[]").backend == "scripted"
 
 
-def test_build_brain_routes_per_role_and_shares_one_ceiling(sandbox):
-    from autoresearch.driver.brain import ProcessBrain, SDKBrain, build_brain
-    sandbox.brain = {"default": "claude", "curator": echo_command()}
+def test_build_brain_routes_per_role_and_shares_one_ceiling(sandbox, monkeypatch):
+    from autoresearch.driver.brain import ProcessBrain, TypeSafeBrain, build_brain
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    sandbox.brain = {"default": "typesafe", "curator": echo_command()}
     brain = build_brain(sandbox, max_budget_usd=5.0, allow_paid=True)
     assert isinstance(brain.routes["curator"], ProcessBrain)
-    assert isinstance(brain.default, SDKBrain)
+    assert isinstance(brain.default, TypeSafeBrain)
     # Both backends read the same ledger, so a ceiling is campaign-wide
     # rather than a full-size copy in every backend.
     assert brain.routes["curator"].ledger is brain.default.ledger
 
 
-def test_spend_through_one_backend_shrinks_the_other_backend_s_ceiling(sandbox):
+def test_spend_through_one_backend_shrinks_the_other_backend_s_ceiling(sandbox, monkeypatch):
     from autoresearch.driver.brain import build_brain
-    sandbox.brain = {"default": "claude", "curator": echo_command()}
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    sandbox.brain = {"default": "typesafe", "curator": echo_command()}
     brain = build_brain(sandbox, max_budget_usd=1.0, allow_paid=True)
     reply = brain.ask("curator", "[]")
     assert reply.cost_usd == 0.25
     assert brain.default.ledger.remaining() == pytest.approx(0.75)
 
 
-def test_overrides_only_table_still_gets_a_default(sandbox):
-    from autoresearch.driver.brain import ProcessBrain, RoutingBrain, build_brain
+def test_an_absent_default_refuses_even_with_role_overrides(sandbox):
+    """Roles that fall through to the default need somewhere to go: a table
+    of overrides with no `default` is a refusal that names the remedy."""
+    from autoresearch.driver.brain import build_brain
     sandbox.brain = {"curator": echo_command()}
-    brain = build_brain(sandbox, allow_paid=True)
-    assert isinstance(brain, RoutingBrain)
-    assert isinstance(brain.routes["curator"], ProcessBrain)
-    assert brain.routes.get("judge") is None, "judge falls to the default brain"
-
-
-def test_sdkbrain_without_a_ledger_still_caps_itself_against_its_own_spend(sandbox):
-    """The SDK brain is metered twice on purpose; a ledger-less construction
-    must keep the second meter -- the ceiling it hands the SDK shrinks by
-    everything it has already spent."""
-    from autoresearch.driver.brain import SDKBrain
-    brain = SDKBrain(sandbox, max_budget_usd=1.0)
-    brain.spent_usd = 0.6
-    assert brain._ceiling() == pytest.approx(0.4)
-    brain.spent_usd = 1.4          # past the ceiling: hand the SDK zero, not debt
-    assert brain._ceiling() == 0.0
-    no_cap = SDKBrain(sandbox)     # None becomes the policy ceiling
-    assert no_cap.max_budget_usd == sandbox.policy.spend_ceiling
-    assert no_cap._ceiling() == sandbox.policy.spend_ceiling
-
-
-def test_sdkbrain_with_a_ledger_hands_the_sdk_what_the_ledger_has_left(sandbox):
-    from autoresearch.driver.brain import CostLedger, SDKBrain
-    ledger = CostLedger(2.0)
-    ledger.spend(1.5)
-    brain = SDKBrain(sandbox, max_budget_usd=99.0, ledger=ledger)
-    assert brain._ceiling() == pytest.approx(0.5), \
-        "the ledger wins; the brain's own ceiling is not doubled on top of it"
+    with pytest.raises(AutoresearchError, match="default"):
+        build_brain(sandbox)
 
 
 # -- config validation: refuse a broken table before anything spends ---------
 
-def test_brain_table_accepts_claude_and_commands():
-    assert _brain_spec({"default": "claude"}) == {"default": "claude"}
+def test_brain_table_accepts_typesafe_and_commands():
+    assert _brain_spec({"default": "typesafe"}) == {"default": "typesafe"}
     spec = _brain_spec({"default": ["bin", "agent"], "curator": ["pi", "-p"]})
     assert spec["curator"] == ["pi", "-p"]
+
+
+def test_brain_table_rejects_the_removed_sdk_backend():
+    with pytest.raises(ConfigError, match='must be "typesafe"'):
+        _brain_spec({"default": "claude"})
 
 
 def test_brain_table_rejects_an_unknown_role():
@@ -196,33 +179,32 @@ def test_brain_table_rejects_an_unknown_placeholder():
         _brain_spec({"curator": ["agent", "--prompt", "{promt_file}"]})
 
 
-# -- the SDK brain is fail-closed: API money is authorized, not defaulted ----
+# -- the built-in brain is fail-closed: API money is authorized, not defaulted
 
-def test_an_absent_brain_table_refuses_the_sdk_brain(sandbox):
-    """The incumbent default was one SDK brain for every role -- which meant
-    `ar loop` could start spending API money without anyone saying so. Now the
-    absence is a refusal that names both remedies."""
+def test_an_absent_brain_table_refuses_with_the_remedy(sandbox):
+    """An absent table means no default brain is named -- a refusal that
+    says how to route the roles to commands."""
     from autoresearch.driver.brain import build_brain
-    with pytest.raises(AutoresearchError, match="authorize_spend"):
-        build_brain(sandbox)
-    with pytest.raises(AutoresearchError, match="allow-paid-brain"):
+    with pytest.raises(AutoresearchError, match=r"\[brain\] default"):
         build_brain(sandbox)
 
 
-def test_authorization_is_explicit_from_config_or_flag(sandbox):
-    from autoresearch.driver.brain import SDKBrain, build_brain
-    sandbox.brain = {"authorize_spend": True}
-    assert isinstance(build_brain(sandbox).default, SDKBrain)
-    sandbox.brain = {}
-    assert isinstance(build_brain(sandbox, allow_paid=True).default, SDKBrain)
+def test_authorization_is_explicit_from_config_or_flag(sandbox, monkeypatch):
+    from autoresearch.driver.brain import TypeSafeBrain, build_brain
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    sandbox.brain = {"default": "typesafe", "authorize_spend": True}
+    assert isinstance(build_brain(sandbox).default, TypeSafeBrain)
+    sandbox.brain = {"default": "typesafe"}
+    assert isinstance(build_brain(sandbox, allow_paid=True).default, TypeSafeBrain)
 
 
-def test_the_flag_grants_and_never_revokes_domain_authorization(sandbox):
+def test_the_flag_grants_and_never_revokes_domain_authorization(sandbox, monkeypatch):
     """argparse's store_true default is False, not None: a plain `ar loop`
     must not undo the domain's own `authorize_spend = true`."""
-    from autoresearch.driver.brain import SDKBrain, build_brain
-    sandbox.brain = {"authorize_spend": True}
-    assert isinstance(build_brain(sandbox, allow_paid=False).default, SDKBrain)
+    from autoresearch.driver.brain import TypeSafeBrain, build_brain
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    sandbox.brain = {"default": "typesafe", "authorize_spend": True}
+    assert isinstance(build_brain(sandbox, allow_paid=False).default, TypeSafeBrain)
 
 
 def test_authorize_spend_must_be_a_boolean():
@@ -242,19 +224,20 @@ def test_a_process_brain_domain_needs_no_authorization(sandbox):
     assert isinstance(brain.default, ProcessBrain)
 
 
-def test_one_sdk_role_is_enough_to_require_authorization(sandbox):
-    from autoresearch.driver.brain import build_brain
-    sandbox.brain = {"default": echo_command(), "judge": "claude"}
+def test_one_typesafe_role_is_enough_to_require_authorization(sandbox, monkeypatch):
+    from autoresearch.driver.brain import TypeSafeBrain, build_brain
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    sandbox.brain = {"default": echo_command(), "judge": "typesafe"}
     with pytest.raises(AutoresearchError, match="judge"):
         build_brain(sandbox)
-    assert build_brain(sandbox, allow_paid=True).routes["judge"].backend == "claude-sdk"
+    assert isinstance(build_brain(sandbox, allow_paid=True).routes["judge"], TypeSafeBrain)
 
 
 # -- the typesafe brain (Jev): typed questions over a state, no text ----------
 
 def stub_typesafe(answers, usage=None, captured=None):
     """A TypeSafeBrain standing in for the wire: `_post` is the seam tests
-    substitute, exactly as `_ceiling` is for the SDK brain's own meter."""
+    substitute."""
     from autoresearch.driver.brain import TypeSafeBrain
     brain = TypeSafeBrain(api_key="test",
                           input_per_mtok=1.0, output_per_mtok=2.0)
@@ -287,6 +270,38 @@ def test_the_brief_travels_as_the_state_and_names_the_model():
     assert captured[0]["model"] == "jev-latest"
     assert captured[0]["state"] == {"mechanical_problems": ["p"]}
     assert set(captured[0]["questions"]) == {"problem_0"}
+
+
+def test_the_wire_state_is_trimmed_to_what_the_role_reads():
+    """The coordinator's brief carries the whole record; a 258KB brief
+    exceeds the System One token budget (HTTP 400 max_tokens_exceeded).
+    The judge reviews the top `JUDGE_REVIEW_CAP` ranking rows plus reserves,
+    so only those -- plus the context allowlist -- travel on the wire."""
+    captured = []
+    answers = {f"reorder_Q{i}": {"type": "choice", "choice": "none"}
+               for i in range(12)}
+    brain = stub_typesafe(answers, captured=captured)
+    ranking = [{"id": f"Q{i}", "score": 1.0, "terms": {}, "title": f"t{i}"}
+               for i in range(200)]
+    brief = json.dumps({
+        "role": "judge", "domain": "qsb",
+        "instruction": "review the ordering",
+        "budget_remaining": {"runs": 3, "gpu_hours": None, "money": 92.0},
+        "ranking": ranking, "excluded": [{"id": "Qx", "why": "stale"}],
+        "open_entries": [{"id": f"Q{i}", "hypothesis": "words" * 500}
+                         for i in range(150)],
+        "closed_directions": [{"id": "Q0", "verdict": "refuted"}],
+        "explore_reserve": [], "coverage_reserve": ["Q7"]})
+    brain.ask("judge", brief)
+    wire = captured[0]["state"]
+    assert len(wire["ranking"]) == brain.JUDGE_REVIEW_CAP
+    assert wire["coverage_reserve"] == ["Q7"]
+    assert wire["instruction"] == "review the ordering"
+    assert wire["budget_remaining"] == {"runs": 3, "gpu_hours": None,
+                                        "money": 92.0}
+    assert "open_entries" not in wire and "closed_directions" not in wire \
+        and "excluded" not in wire
+    assert len(json.dumps(wire)) < 8_000, "the wire state stays small"
 
 
 def test_judge_answers_become_vetoes_carrying_their_probabilities():
@@ -382,28 +397,29 @@ def test_brain_table_rejects_unknown_typesafe_options_and_bad_values():
         _brain_spec({"typesafe_temperture": 0.5})
     with pytest.raises(ConfigError, match="per_mtok"):
         _brain_spec({"typesafe_input_per_mtok": "cheap"})
-    with pytest.raises(ConfigError, match='must be "claude", "typesafe"'):
+    with pytest.raises(ConfigError, match='must be "typesafe"'):
         _brain_spec({"judge": "jev"})
 
 
 def test_the_typesafe_brain_is_paid_and_fail_closed(sandbox, monkeypatch):
     from autoresearch.driver.brain import TypeSafeBrain, build_brain
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
-    sandbox.brain = {"judge": "typesafe"}
+    sandbox.brain = {"default": echo_command(), "judge": "typesafe"}
     with pytest.raises(AutoresearchError, match="authorize_spend"):
         build_brain(sandbox)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    sandbox.brain = {"judge": "typesafe", "authorize_spend": True}
+    sandbox.brain = {"default": echo_command(), "judge": "typesafe",
+                     "authorize_spend": True}
     with pytest.raises(AutoresearchError, match="TYPESAFE_API_KEY"):
         build_brain(sandbox)
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
     assert isinstance(build_brain(sandbox).routes["judge"], TypeSafeBrain)
 
 
-def test_typesafe_and_the_sdk_share_one_campaign_ceiling(sandbox, monkeypatch):
+def test_typesafe_and_a_process_brain_share_one_campaign_ceiling(sandbox, monkeypatch):
     from autoresearch.driver.brain import TypeSafeBrain, build_brain
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
-    sandbox.brain = {"default": "claude", "judge": "typesafe"}
+    sandbox.brain = {"default": echo_command(), "judge": "typesafe"}
     brain = build_brain(sandbox, max_budget_usd=5.0, allow_paid=True)
     assert isinstance(brain.routes["judge"], TypeSafeBrain)
     assert brain.routes["judge"].ledger is brain.default.ledger
@@ -427,8 +443,7 @@ def test_typesafe_options_are_settings_never_routes(sandbox, monkeypatch):
 
 def test_a_process_brain_route_next_to_typesafe_needs_no_key(sandbox):
     """Authorization and the API key are demanded only of the backends that
-    can spend. The default must be named even here: an absent `default` reads
-    as the SDK brain, which is the refusal, not a default bill."""
+    can spend. The default is a command here, so no gate applies to it."""
     from autoresearch.driver.brain import ProcessBrain, build_brain
     sandbox.brain = {"default": echo_command(), "curator": echo_command()}
     brain = build_brain(sandbox)

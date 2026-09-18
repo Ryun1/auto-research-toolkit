@@ -155,6 +155,11 @@ The domain does not have to live anywhere in particular: `ar` finds the nearest
 enclosing `domain.toml`, or takes `--domain`. `domains/toy` sits inside this
 repository only because it is the fixture the tests run the whole loop against.
 
+The scaffold also writes `AGENTS.md` — the claim → measure → close protocol an
+agent opened in a terminal follows to drive the domain by hand. The toolkit's
+own docs live in the toolkit repository, which a project does not contain; this
+file ships where agents look first.
+
 ### Why its own repository
 
 - **Workers get real isolation.** The workspace pool cuts a git worktree per
@@ -672,25 +677,26 @@ the ranking as broken.
 ## The brain is a command, not a vendor
 
 Every role is judgement delegated through one seam, and the seam does not know
-what an agent is. By default roles run on the built-in SDK brain; a domain can
-route any role to any agent that can take a prompt and print a reply:
+what an agent is. Every role routes to a backend named in the domain's
+`[brain]` table — any agent that can take a prompt and print a reply:
 
 ```toml
 # domain.toml
 [brain]
-default = "claude"                 # the built-in SDK brain
+default = ["pi", "-p"]             # any command; required
 judge   = "typesafe"               # the built-in TypeSafe (Jev) brain
 curator = ["pi", "-p"]             # any command
 scout   = ["bin/my-researcher"]
 ```
 
-**The built-in brains are fail-closed, because they are the backends that
-spend API money.** A domain must name one deliberately —
+**The built-in brain is fail-closed, because it is the backend that
+spends API money.** A domain must name it deliberately —
 `[brain] authorize_spend = true` — or the caller must pass
 `--allow-paid-brain` to `ar loop`, `ar research` or `ar skill distil`. An
-absent `[brain]` table used to mean "one SDK brain for every role"; it now
-means a refusal that names both remedies. A domain that routes every role to
-commands never approaches the meter and needs no authorization.
+absent `[brain]` table, or a table with role overrides and no `default`,
+is a refusal that names the remedy: route the roles to commands. A domain
+that routes every role to commands never approaches the meter and needs no
+authorization.
 
 **The `typesafe` brain** (`TypeSafeBrain` in `driver/brain.py`) serves roles
 through [TypeSafe's](https://docs.typesafe.ai/introduction) System One API:
@@ -771,8 +777,9 @@ and the next `ar loop` invocation's orient sees the applied verdicts. The
 judgement roles (generate, judge, curate, distil, qc) still run through
 whatever backend `[brain]` routes them to — route them to commands, or let the
 parent file entries and prices itself. This is the answer to a real failure:
-`bin/ar loop` selecting the SDK brain meant the unattended path reached for API
-spend nobody had approved. The full no-coordinator shape — claims, meters,
+the unattended path must never reach for API spend nobody has approved — the
+loop refuses to start without an explicitly named brain, and paid backends
+stay fail-closed. The full no-coordinator shape — claims, meters,
 sessions and plugins for hand-driven work — is documented in
 `docs/native-driver.md`.
 
@@ -812,9 +819,9 @@ executed identity, or ranked eligibility.
 
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:
 `generator`, `judge`, `worker`, `curator`, `librarian`, `qc`, `scout`. The brain
-is swappable -- `SDKBrain` runs them through the Claude Agent SDK,
-`TypeSafeBrain` serves `judge` and `qc` through TypeSafe's System One API (see
-above), `ProcessBrain` runs them through any command (see above), and `ScriptedBrain`
+is swappable -- `TypeSafeBrain` serves `judge` and `qc` through TypeSafe's
+System One API (see above), `ProcessBrain` runs them through any command (see
+above), and `ScriptedBrain`
 runs the whole loop with no model, which is what makes `ar loop` a unit test
 rather than a bill. `docs/ARCHITECTURE.md` diagrams what each role reads, what
 it may return, and where the coordinator refuses it.
@@ -847,9 +854,7 @@ up in its own repository.
 
 Not yet exercised: the librarian's prose quality, which only a real model can
 show — the phase, its refusals and its record are covered offline, but nothing
-here says whether a model writes a *good* skill. And `SDKBrain` has never made a
-real API call — it constructs,
-packages and is wired to the money ceiling, and that is all. The offline loop is
+here says whether a model writes a *good* skill. The offline loop is
 proven; the model-in-the-loop path is not.
 
 `docs/ARCHITECTURE.md` draws the same picture in more detail: the three
