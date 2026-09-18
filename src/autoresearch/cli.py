@@ -228,10 +228,17 @@ def cmd_entry_new(args):
             f"declared: {sorted(config.tracks)}")
     store = _store(config)
     track = config.tracks[args.track]
+    from . import tree
+    # The same gate the coordinator's generate phase runs: a human or a
+    # native-dispatch agent files through the identical tree rules, so the
+    # CLI path and the loop path cannot diverge into different trees.
+    tree.check_branch(config, store, args.parent or "", args.kind or "",
+                      track.id)
     entry = Entry(
         id=args.id or store.next_id(track.prefix),
         track=track.id, title=args.title,
         status=track.machine.initial,
+        parent=args.parent or "", kind=args.kind or "",
         hypothesis=args.hypothesis or "", prediction=args.prediction or "",
         bar=args.bar or "", why_filed=args.why or "",
         confidence=args.confidence, impact=args.impact, cost=args.cost,
@@ -1122,6 +1129,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     new.add_argument("--cost", type=float, default=1.0)
     new.add_argument("--mechanism", action="append")
     new.add_argument("--source", action="append")
+    new.add_argument("--parent", help="the entry this branches from; omit "
+                                      "for a novel root")
+    new.add_argument("--kind", help="branch intent: improve, debug or probe "
+                                    "(branches only)")
     new.add_argument("--core", help="core version the defect was observed on "
                                     "(stamped automatically when the loop files it)")
     new.add_argument("--repro", help="command or path that demonstrates the defect")

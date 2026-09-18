@@ -53,7 +53,7 @@ from .. import rank as rank_mod
 from .. import runs as runs_mod
 from .. import skills as skills_mod
 from ..claims import Claims
-from ..entries import KINDS, Applicability, Entry, Event, Result, Store
+from ..entries import Applicability, Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
 from ..workspaces import Pool
 from .brain import Role, cost_value
@@ -647,52 +647,15 @@ class Coordinator:
         # The tree. A proposal may name the entry it branches from; the
         # coordinator -- not the proposing agent -- owns the tree structure,
         # so the lineage is validated here: an unknown parent, a depth past
-        # `tree_max_depth`, or more siblings against one parent than
-        # `tree_max_children` is refused at filing, with a reason, rather
-        # than discovered at dispatch.
+        # `tree_max_depth`, more siblings against one parent than
+        # `tree_max_children`, a branch crossing tracks, or a kind on a root
+        # is refused at filing, with a reason, rather than discovered at
+        # dispatch. `ar entry new --parent` runs the same gate (tree.py), so
+        # the two filing paths cannot diverge.
         parent = str(proposal.get("parent", "") or "")
-        if parent:
-            try:
-                parent_entry = self.store.load(parent)
-            except Exception as exc:
-                raise AutoresearchError(
-                    f"cannot file a branch of {parent!r}: no such entry") from exc
-            if parent_entry.track != track.id:
-                raise AutoresearchError(
-                    f"cannot file a branch of {parent!r} on track "
-                    f"{track.id!r}: a branch stays on its parent's track")
-            depth, walked, lineage = 1, parent, {parent}
-            while walked:
-                walked = self.store.load(walked).parent
-                if walked:
-                    if walked in lineage:
-                        raise AutoresearchError(
-                            f"lineage of {parent!r} is cyclic at {walked!r}")
-                    lineage.add(walked)
-                    depth += 1
-            max_depth = self.config.tree_max_depth
-            if max_depth and depth > max_depth:
-                raise AutoresearchError(
-                    f"branch depth {depth} exceeds tree_max_depth={max_depth}; "
-                    "deepen the record by closing work, or raise the cap")
-            max_children = self.config.tree_max_children
-            if max_children:
-                siblings = sum(1 for e in self.store.all()
-                               if e.parent == parent)
-                if siblings + 1 > max_children:
-                    raise AutoresearchError(
-                        f"parent {parent!r} already has {siblings} branch(es); "
-                        f"tree_max_children={max_children}")
         kind = str(proposal.get("kind", "") or "")
-        if kind:
-            if kind not in KINDS:
-                raise AutoresearchError(
-                    f"unknown branch kind {kind!r}; one of "
-                    f"{KINDS}, or omit it")
-            if not parent:
-                raise AutoresearchError(
-                    f"kind {kind!r} is branch intent; a proposal with no "
-                    "parent is a novel root and carries no kind")
+        from .. import tree
+        tree.check_branch(self.config, self.store, parent, kind, track.id)
         entry = Entry(
             id=self.store.next_id(track.prefix), track=track.id,
             title=str(proposal["title"])[:200],

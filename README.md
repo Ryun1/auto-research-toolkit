@@ -44,9 +44,10 @@ flowchart LR
 
 Every phase is metered. Generation runs *every* iteration, concurrently with the
 work, so the queue never starves. Ranking is a formula over recorded numbers that
-a judge may reorder but not overrule, with shares of every shortlist reserved
-for amplitude and for mechanism coverage so the loop can still attempt a big
-swing — and still open a direction it has never measured. Workers get isolated
+a judge may reorder but not overrule, with a configured share of every
+shortlist (`risk`) spent on novel branches — entries with no `parent` — so
+the loop can still attempt a big swing, and still open a direction it has
+never measured. Workers get isolated
 workspaces the coordinator creates and destroys. QC is mechanical first and a
 model second.
 
@@ -208,7 +209,7 @@ ar hardware    what this machine is, what it can run, and what it cannot
 ar escalate    whether to rent compute, which class, and the arithmetic
 ar board       one screen: goal, distance to target, queues, live claims, measurements
 ar rank        score the queue and show the numbers it ranked on
-               (--explore F / --coverage F override the coordinator's reserves)
+               (--risk R overrides the domain's novel-branch dial)
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar skill       list, show, check, distil and retire the domain's skills
@@ -531,6 +532,14 @@ The other half of the loop: fixes made upstream have to be easy enough to take
 that "bump deliberately" actually happens instead of decaying into "pin
 forever, drift silently."
 
+**Upgrading from 0.1.x to 0.2.0 is a breaking release for `domain.toml`** —
+the ranking reserves were replaced by the tree and the risk dial, and a
+domain carrying the old keys forward is refused at load. Read
+[docs/MIGRATION.md](docs/MIGRATION.md) before taking the update; the
+one-line version is: delete `explore_fraction`/`coverage_fraction`, set
+`[coordinator] risk = 0.5` (or your stance), and everything else is
+additive.
+
 ```
 $ ar harness check
 installed   core 0.1.0 (editable from ~/auto-research-toolkit) @ fb9f8166a0e2
@@ -648,7 +657,10 @@ dial. A failed or inconclusive attempt continues as a child; a new territory
 opens as a root. The coordinator owns the structure: an unknown parent, a
 lineage deeper than `tree_max_depth`, or more siblings per parent than
 `tree_max_children` is refused at filing with a reason, and a branch stays on
-its parent's track. A branch names its intent with `kind` — `improve`,
+its parent's track. Agents file branches through their proposals; humans and
+native-dispatch agents file them with `ar entry new --parent Q12 --kind
+debug`, through the same gate (`tree.py`) — the two paths cannot diverge. A
+branch names its intent with `kind` — `improve`,
 `debug`, or `probe` — and the kind scopes its memory the way AIRA measured it
 (arXiv 2507.02554 §4.1): a `debug` branch is handed its full ancestral chain
 so it never re-undoes a repair its parent already made, while the others see

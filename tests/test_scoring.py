@@ -339,3 +339,28 @@ def test_a_branch_itself_is_a_branchable_family(sandbox, store):
     assert families["Q2"]["complexity"] == "moderate"
     assert {s["id"]: s["verdict"] for s in families["Q2"]["siblings"]} \
         == {"Q3": "refuted", "Q4": None}
+
+
+# -- the human filing path: `ar entry new --parent` --------------------------
+
+
+def test_entry_new_files_a_branch_through_the_same_gate(sandbox, store, capsys):
+    from autoresearch import cli
+    make_entry(store, "Q1")
+    assert cli.main(["--domain", str(sandbox.paths.root), "entry", "new",
+                     "a human-filed branch", "--parent", "Q1",
+                     "--kind", "debug", "--confidence", "0.5",
+                     "--impact", "0.1", "--cost", "1",
+                     "--mechanism", "m"]) == 0
+    assert store.load("Q2").parent == "Q1"
+    assert store.load("Q2").kind == "debug"
+
+
+def test_entry_new_refuses_an_unknown_parent(sandbox, store, capsys):
+    from autoresearch import cli
+    assert cli.main(["--domain", str(sandbox.paths.root), "entry", "new",
+                     "a branch of nothing", "--parent", "Q99",
+                     "--confidence", "0.5", "--impact", "0.1",
+                     "--cost", "1", "--mechanism", "m"]) == 2
+    assert "no such entry" in capsys.readouterr().err
+    assert store.all() == []
