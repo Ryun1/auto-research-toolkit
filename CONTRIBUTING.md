@@ -103,6 +103,6 @@ the pre-commit hook.
 
 ## Where to look
 
-- `docs/ARCHITECTURE.md` — the seven phases and the model seam
+- `docs/ARCHITECTURE.md` — the eight phases and the model seam
 - `docs/EVALUATION.md` — the defect taxonomy this design answers
 - `README.md` — the four things a domain supplies

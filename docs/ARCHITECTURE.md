@@ -29,7 +29,7 @@ flowchart TB
         direction LR
         coord["Coordinator<br/>driver/loop.py"]
         store["Store<br/>one record per entry"]
-        rank["rank.py<br/>formula over recorded numbers,<br/>plus a reserve for amplitude"]
+        rank["rank.py<br/>formula over recorded numbers,<br/>plus reserves for amplitude and coverage"]
         budget["budget.py<br/>every ceiling is a meter,<br/>campaign spend read back from disk"]
         render["render.py<br/>every view is generated"]
         skills["skills.py<br/>distilled prose, cited to entries<br/>and refused when they move"]
@@ -39,6 +39,7 @@ flowchart TB
     subgraph brainlayer["Brain (the one seam)"]
         direction LR
         sdk["SDKBrain<br/>Claude Agent SDK"]
+        process["ProcessBrain<br/>any command"]
         scripted["ScriptedBrain<br/>offline, no model"]
     end
 
@@ -73,7 +74,7 @@ flowchart LR
     start(["run_iteration(n)"]) --> orient
     orient["orient<br/>read record, resolve target,<br/>reap dead claims,<br/>report resumed history"]
     generate["generate<br/>N generators, in parallel"]
-    rankp["rank<br/>score, reserve for amplitude,<br/>then judge may reorder"]
+    rankp["rank<br/>score, reserves for amplitude and coverage,<br/>then judge may reorder"]
     dispatch["dispatch<br/>claim → worker → verdict"]
     curate["curate<br/>re-price what moved,<br/>write views"]
     distil["distil<br/>promote closed work into<br/>cited skills, on a cadence"]
@@ -128,7 +129,7 @@ makes a runaway iteration structurally impossible counts every role that ran.
 
 ## 3. Roles, and what each may do
 
-Six prompts in `src/autoresearch/agents/`. Only the worker and curator get
+Seven prompts in `src/autoresearch/agents/`. Only the worker and curator get
 write tools; everyone else is read-only -- the librarian included, deliberately:
 it returns a skill body and the coordinator writes it, so no role certifies its
 own output.
@@ -154,6 +155,9 @@ flowchart TB
 
     coord -->|"brief + mechanical problems"| qc["qc<br/>read-only"]
     qc -->|"problems, harness_debt"| debt["file debt on the<br/>harness track, not research"]
+
+    coord -.->|"brief: question + board<br/>out of band, `ar research`"| scout["scout ×N<br/>read-only + web"]
+    scout -->|"proposals with sources"| file
 
     file --> store[("record<br/>one file per entry")]
     veto --> store

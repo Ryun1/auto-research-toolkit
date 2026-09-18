@@ -34,7 +34,7 @@ flowchart LR
         s -->|"running"| o
     end
     subgraph b["Brain (swappable)"]
-        roles["generator · judge · worker<br/>curator · librarian · qc"]
+        roles["generator · judge · worker · scout<br/>curator · librarian · qc"]
     end
     d --> c
     c <-->|"role + brief → JSON"| b
@@ -44,8 +44,9 @@ flowchart LR
 
 Every phase is metered. Generation runs *every* iteration, concurrently with the
 work, so the queue never starves. Ranking is a formula over recorded numbers that
-a judge may reorder but not overrule, with a share of every shortlist reserved
-for amplitude so the loop can still attempt a big swing. Workers get isolated
+a judge may reorder but not overrule, with shares of every shortlist reserved
+for amplitude and for mechanism coverage so the loop can still attempt a big
+swing — and still open a direction it has never measured. Workers get isolated
 workspaces the coordinator creates and destroys. QC is mechanical first and a
 model second.
 
@@ -90,6 +91,7 @@ domain_max_runs       = 500
 [coordinator]
 workers_per_iteration = 3
 explore_fraction      = 0.2      # share of each shortlist reserved for amplitude
+coverage_fraction     = 0.2      # share reserved for untested mechanism tags
 
 [commands]
 measure      = "bin/measure"
@@ -135,8 +137,9 @@ ar init . --name widgets \
    --objective "round(latency) * memory" --metric latency --metric memory --target 5000
 ```
 
-`ar init` refuses to scaffold over an existing `domain.toml`, so pointing it at
-a fresh repo is safe. What it writes **validates clean and runs before you edit
+`ar init` refuses to scaffold over an existing `domain.toml` (`--force`
+overrides, on a directory you are certain is disposable), so pointing it at a
+fresh repo is safe. What it writes **validates clean and runs before you edit
 anything** — a scaffold whose first act is to fail teaches you to ignore the
 validator. Then:
 
@@ -192,7 +195,7 @@ ar hardware    what this machine is, what it can run, and what it cannot
 ar escalate    whether to rent compute, which class, and the arithmetic
 ar board       one screen: goal, distance to target, queues, live claims, measurements
 ar rank        score the queue and show the numbers it ranked on
-               (--explore F overrides coordinator.explore_fraction)
+               (--explore F / --coverage F override the coordinator's reserves)
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar skill       list, show, check, distil and retire the domain's skills
@@ -239,7 +242,7 @@ cpu         8 threads (4P + 4E)
 memory      16.0 GB (5.3 GB available)
 gpu         Apple M2, 10 cores, 16 GB unified
 power       battery  ** sustained throughput will be lower **
-note        unified memory: the GPU competes with the CPU for the same pool
+note        unified memory: the GPU competes with the CPU for the same pool, so GPU concurrency is bounded by total RAM, not by a separate VRAM budget
 
 requirements declared: 2
   OK   cheap-sweep on Apple-M2/8t/16g
@@ -593,7 +596,7 @@ records progress; `readiness` is derived (`unconfigured | pending | blocked |
 failed | ready`) and rendered on the board and queue. Entries with no gate
 definitions close as before but never render as ready.
 
-## Ranking, and the reserve for amplitude
+## Ranking, and the reserves for amplitude and coverage
 
 ```
 score = confidence × impact / cost × staleness × overlap
@@ -614,19 +617,39 @@ domain's to set: a domain chasing a frontier that moved 22.5% in 18.8 days wants
 a different one from a domain polishing a converged number. `0` is read as a
 decision, not as unset.
 
-Three things it deliberately does not do:
+**A second reserve covers what the formula cannot price at all.** A genuinely
+novel mechanism — a different algorithm class, a representation nobody on the
+board has tried — has no calibration history, so its `confidence` is a guess,
+and its `impact` is an estimate of a payoff that may only arrive *after* the
+family it opens has been measured a few times. Impact-ranked exploration does
+not reach it: a novel probe with modest or unestimable impact loses the explore
+slot to a priced long shot. On the corpus this core was extracted from, the
+`mechanisms` field went unfilled on 469 of 470 entries and the two largest
+wins were novel mechanism families — the loop refined one architecture for
+hundreds of iterations before concluding a different architecture class was
+required. `[coordinator] coverage_fraction` reserves a share of each shortlist
+for entries probing a mechanism tag **no terminal entry has ever tested**,
+chosen among them by score. The generator's brief carries
+`mechanism_coverage` — verdicts per tag — and is instructed to file at least
+one untested-mechanism probe per batch; a proposal missing `mechanisms`,
+`confidence`, `impact` or `cost` is refused at the door, so the ranking can
+never silently fall back to defaults the way that corpus did. The two
+fractions are checked together at load: their sum must stay below 1.
 
-- **It is not a second route past the hard filters.** It reorders among
+Three things the reserves deliberately do not do:
+
+- **They are not a second route past the hard filters.** They reorder among
   *ranked* entries only, so a `mechanism`-refuted direction stays dead however
   large its impact looks.
-- **It never takes the whole shortlist, and never spends the only slot.**
-- **It honours a judge's `demote`/`drop`** — both of which `apply_veto`
-  implements by moving the card to the tail, which is exactly where the reserve
-  looks.
+- **They never take the whole shortlist, and never spend the only slot.**
+- **They honour a judge's `demote`/`drop`** — both of which `apply_veto`
+  implements by moving the card to the tail, which is exactly where the
+  reserves look.
 
-`ar rank --explore F` overrides it for one look. The judge's brief names which
-entries hold reserved slots, because an explore pick sits low on score *by
-construction* and a judge shown one unlabelled reads the ranking as broken.
+`ar rank --explore F` and `--coverage F` override them for one look. The
+judge's brief names which entries hold reserved slots, because a reserve pick
+sits low on score *by construction* and a judge shown one unlabelled reads
+the ranking as broken.
 
 ## The brain is a command, not a vendor
 
@@ -705,8 +728,8 @@ cannot see a spender is not a ceiling. `ar usage record --tool jev --kind api
 (committed with the corpus, like every meter), and `ar budget` sums it into
 the campaign money ceiling. `--unknown` records spend whose price is not
 knowable yet: unknown is never free, and a finite ceiling refuses further
-spend until `ar usage reconcile <lineno> --cost N` prices the row by appending
-a correction. Rows feed the ceiling, so a malformed row is a named refusal,
+spend until `ar usage reconcile <lineno> --cost N --session s` prices the row
+by appending a correction. Rows feed the ceiling, so a malformed row is a named refusal,
 never a silent skip.
 
 And one more verb for the execution ledger: `ar attempt reconcile <id>
@@ -772,7 +795,7 @@ packages and is wired to the money ceiling, and that is all. The offline loop is
 proven; the model-in-the-loop path is not.
 
 `docs/ARCHITECTURE.md` draws the same picture in more detail: the three
-layers, the seven phases, what each role may and may not do, the entry
+layers, the eight phases, what each role may and may not do, the entry
 lifecycle, and the worker pool.
 
 `docs/EVALUATION.md` carries the harness critique this was built from, plus an
