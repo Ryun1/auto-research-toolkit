@@ -34,7 +34,7 @@ from .goal import Goal
 from .hardware import Requirement
 from .lanes import Lanes
 from .policy import Policy
-from .rank import EXPLORE_FRACTION
+from .rank import COVERAGE_FRACTION, EXPLORE_FRACTION
 from .states import StateMachine, default_machine
 
 #: Placeholders a `[brain]` command may carry. Validated at load: a misspelled
@@ -189,6 +189,13 @@ class DomainConfig:
     #: reaches a float multiplication in `Ranking.shortlist`, and finding that
     #: out mid-iteration costs a run.
     explore_fraction: float = EXPLORE_FRACTION
+    #: share of each shortlist reserved for entries probing a mechanism tag no
+    #: terminal entry has tested. Typed for the same reasons as
+    #: `explore_fraction`: it is a coverage appetite, it reaches a float
+    #: multiplication in `Ranking.shortlist`, and the reserves are checked
+    #: together at load -- two fractions summing to a whole shortlist leave no
+    #: exploit lane, which is a load-time refusal, not a mid-iteration surprise.
+    coverage_fraction: float = COVERAGE_FRACTION
     #: run the distil phase every N iterations; 0 turns it off. Typed out of the
     #: coordinator dict for the same reason as `explore_fraction`: it decides
     #: whether a phase runs at all, and discovering it was misspelled mid-loop
@@ -201,6 +208,26 @@ class DomainConfig:
     #: `ar external complete`. Validated at load: a misspelled mode is a loop
     #: that silently became a different loop.
     dispatch: str = "worker"
+    #: domain tooling the core loads by name. Each entry names an importable
+    # module (resolved with the domain root on `sys.path`, so a package living
+    # beside `domain.toml` works) exposing `register_cli(subparsers, config)`;
+    # the module's subcommands run through the same policy engine as every
+    # core verb. Declared here because qsbtools reached the same extension by
+    # composing `build_parser()` privately -- an undeclared seam is one every
+    # domain re-invents, differently.
+    plugins: tuple[str, ...] = ()
+    #: parent directory for `ar session` worktrees. `None` means a sibling of
+    # the domain root (the shape the field harness converged on: a session
+    # worktree sits beside the checkout it came from, where a human can see
+    # it); a relative path resolves against the domain root, an absolute path
+    # is used as-is. Declared because `discover()` exists precisely because
+    # path-of-execution-dependent layout (H19) made the same command do
+    # different things from different directories.
+    session_parent: str | None = None
+    #: hours a session worktree may sit idle before `ar session prune` offers
+    # it for destruction. A settle window, not a TTL: prune only proposes;
+    # nothing is destroyed without the destroy path's own guards.
+    session_settle_hours: float = 24.0
     #: what each experiment class needs of the machine, checked before it runs
     hardware: dict = field(default_factory=dict)
     #: rentable classes, each costed only if someone measured its ratio
@@ -355,9 +382,14 @@ class DomainConfig:
             skills=Skills.from_dict(dict(data.get("skills") or {})),
             coordinator=coordinator,
             brain=_brain_spec(data.get("brain")),
-            explore_fraction=_explore_fraction(coordinator),
+            explore_fraction=(explore_fraction := _explore_fraction(coordinator)),
+            coverage_fraction=_coverage_fraction(
+                coordinator, explore_fraction),
             distil_every=_distil_every(coordinator),
             dispatch=_dispatch_mode(coordinator),
+            plugins=_plugins(data),
+            session_parent=_session(data)["parent"],
+            session_settle_hours=_session(data)["settle_hours"],
             hardware={name: Requirement.from_dict(name, spec)
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)
@@ -428,6 +460,39 @@ def _explore_fraction(coordinator: dict) -> float:
     return float(raw)
 
 
+def _coverage_fraction(coordinator: dict, explore_fraction: float) -> float:
+    """Read and check `[coordinator] coverage_fraction`.
+
+    Same rules as `explore_fraction`: absent means the core default, `0` is a
+    domain's decision against the reserve and is never defaulted back. The
+    combined check applies to the *effective* value, defaulted or declared --
+    the sum is clamped in `Ranking.shortlist`, but a config whose reserves
+    total a whole shortlist is refused at load rather than silently
+    truncated."""
+    if "coverage_fraction" not in coordinator:
+        raw: float | int = COVERAGE_FRACTION
+    else:
+        raw = coordinator["coverage_fraction"]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ConfigError(
+                f"coordinator.coverage_fraction must be a number, got {raw!r}")
+        if not 0.0 <= raw < 1.0:
+            raise ConfigError(
+                f"coordinator.coverage_fraction must be in [0, 1), got {raw!r}; "
+                "a reserve of the whole shortlist leaves no exploit lane, and "
+                "the score is what connects an iteration to the objective")
+    if float(raw) + explore_fraction >= 1.0:
+        raise ConfigError(
+            f"coordinator.explore_fraction {explore_fraction} + "
+            f"coverage_fraction {raw} reserves the whole shortlist; at least "
+            "one slot must stay with the score. If you have not set "
+            "coverage_fraction, the core default (0.2) now participates in "
+            "this check: set `coverage_fraction = 0` to keep the reserve "
+            "composition this domain had before coverage existed, or lower "
+            "explore_fraction to share the shortlist between them.")
+    return float(raw)
+
+
 def _distil_every(coordinator: dict) -> int:
     """Read and check `[coordinator] distil_every`.
 
@@ -460,6 +525,44 @@ def _dispatch_mode(coordinator: dict) -> str:
         raise ConfigError(
             f"coordinator.dispatch must be one of {DISPATCH_MODES}, got {raw!r}")
     return raw
+
+
+def _plugins(data) -> tuple[str, ...]:
+    """Read and check the top-level `plugins` list.
+
+    Each entry names an importable module that exposes
+    `register_cli(subparsers, config)`. Refused here as data problems; import
+    and contract failures are refused at load time in `plugins.py`, which is
+    the module that resolves the names."""
+    raw = data.get("plugins") or ()
+    if isinstance(raw, (str, dict)) or not isinstance(raw, (list, tuple)):
+        raise ConfigError(
+            "plugins must be a list of module names, e.g. plugins = [\"qsbtools\"]")
+    names = []
+    for item in raw:
+        if not isinstance(item, str) or not item or item != item.strip():
+            raise ConfigError(
+                f"plugin name must be a non-empty module name, got {item!r}")
+        if (any(ch.isspace() for ch in item) or item.startswith((".", "-"))
+                or "/" in item or "\\" in item):
+            raise ConfigError(f"plugin name {item!r} is not a module name")
+        names.append(item)
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ConfigError(f"plugins lists {dupes} more than once")
+    return tuple(names)
+
+
+def _session(data) -> dict:
+    """Read and check `[session]`: the worktree parent and the settle window."""
+    parent = data.get("parent")
+    if parent is not None and (not isinstance(parent, str) or not parent.strip()):
+        raise ConfigError(f"session.parent must be a path string, got {parent!r}")
+    settle = data.get("settle_hours", 24.0)
+    if isinstance(settle, bool) or not isinstance(settle, (int, float)) or settle <= 0:
+        raise ConfigError(
+            f"session.settle_hours must be a positive number, got {settle!r}")
+    return {"parent": parent, "settle_hours": float(settle)}
 
 
 def discover(start=None) -> pathlib.Path:
