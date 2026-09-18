@@ -6,6 +6,12 @@ this writes a complete, *valid, immediately runnable* domain: `ar validate`
 passes on it, `ar board` runs, and the measurement command works before you have
 edited anything.
 
+It also writes `bin/ar` (H149): the toolkit's entry point is named `ar`, which
+on macOS collides with `/usr/bin/ar`, the BSD archiver -- a bare `ar board`
+there runs plausibly instead of failing. The shim probes the domain's venvs
+for the real toolkit, then `python3 -m autoresearch`, and fails loudly naming
+the remedy if neither carries it.
+
 That last property is the point. A scaffold whose first act is to fail is a
 scaffold that teaches you to ignore the validator. The generated `bin/measure`
 measures something real but trivial, so the loop is exercisable from minute one
@@ -274,6 +280,63 @@ if __name__ == "__main__":
     main()
 '''
 
+AR = '''#!/usr/bin/env python3
+"""Run the auto-research-toolkit's `ar` from this domain (H149).
+
+    bin/ar <toolkit arguments...>
+
+The toolkit installs its entry point as **`ar`**, which is also `/usr/bin/ar`,
+the BSD archiver shipped with macOS -- and this domain's venv is gitignored, so
+a fresh clone has no toolkit on PATH. Typing bare `ar board` there runs the
+archiver, which answers with a plausible-looking usage message about archive
+files and leaves the agent debugging the wrong harness. This shim makes the
+toolkit reachable the way every other tool here is (`bin/<name>`), and
+`bin/ar` cannot collide with the archiver.
+
+Probes this domain's venvs -- `.venv312/bin/ar` first, the toolkit needs
+Python >= 3.11 and many machines ship an older system `python3` -- then
+`.venv/bin/ar`, and execs the first found with all arguments. Otherwise it
+falls back to `python3 -m autoresearch`; if no interpreter has the module the
+failure is LOUD and names the remedy, never a quiet fall-through to the
+archiver.
+"""
+import pathlib
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CANDIDATES = (".venv312/bin/ar", ".venv/bin/ar")
+
+
+def main():
+    for candidate in CANDIDATES:
+        ar = ROOT / candidate
+        if ar.is_file():
+            raise SystemExit(subprocess.run(
+                [str(ar), *sys.argv[1:]]).returncode)
+    try:
+        probed = subprocess.run(
+            ["python3", "-c", "import autoresearch"], capture_output=True)
+    except FileNotFoundError:
+        probed = None
+    if probed is not None and probed.returncode == 0:
+        raise SystemExit(subprocess.run(
+            ["python3", "-m", "autoresearch", *sys.argv[1:]]).returncode)
+    sys.exit(
+        "bin/ar: the auto-research-toolkit is not installed anywhere this "
+        f"shim can reach (probed {', '.join(str(ROOT / c) for c in CANDIDATES)}"
+        ", then `python3 -m autoresearch`).\\n"
+        "  Remedy: install the toolkit into a venv at this domain root:\\n"
+        "    python3.12 -m venv .venv312 && .venv312/bin/pip install "
+        "<path-to-auto-research-toolkit>\\n"
+        "  (Without it, bare `ar` on macOS is /usr/bin/ar, the BSD archiver -- "
+        "not the research harness. H149.)")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
 GUIDE = '''# What is known about this problem
 
 Domain knowledge the generator and worker agents read before forming hypotheses.
@@ -380,6 +443,7 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
         "domain.toml": _domain_toml(name),
         "goal.yaml": _goal_yaml(name, objective, metrics, target),
         "bin/measure": MEASURE,
+        "bin/ar": AR,
         "bin/autoresearch": f"#!{sys.executable}\nfrom autoresearch.cli import main\nraise SystemExit(main())\n",
         "guides/landscape.md": GUIDE,
         "docs/skills/README.md": SKILLS_README,
@@ -403,6 +467,7 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
         ignore.write_text(existing + joiner + GITIGNORE)
         written.append(ignore)
     (root / "bin" / "measure").chmod(0o755)
+    (root / "bin" / "ar").chmod(0o755)
     (root / "bin" / "autoresearch").chmod(0o755)
     domain = DomainConfig.load(root)
     written.extend(write_views(domain, Store(domain.paths.entries).all()))
