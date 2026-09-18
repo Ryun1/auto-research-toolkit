@@ -189,3 +189,16 @@ def test_the_default_coverage_fraction_participates_in_the_combined_check(tmp_pa
     with pytest.raises(ConfigError, match="whole shortlist"):
         DomainConfig.load(_minimal(
             tmp_path, "[coordinator]\nexplore_fraction = 0.9\n"))
+
+
+def test_seams_declared_inside_domain_table_are_refused(tmp_path):
+    """H135 in config form: `plugins` typed under [domain] is valid TOML the
+    loader cannot see -- the seam reads as absent and every plugin verb is an
+    invalid choice. Refused at load, naming the placement."""
+    (tmp_path / "goal.yaml").write_text(
+        "goal:\n  id: g\n  objective: T\n  metrics: {T: {}}\n  target: {value: 1}\n")
+    (tmp_path / CONFIG_NAME).write_text(
+        '[domain]\nname="x"\nplugins=["p"]\n[lanes]\nfindings="^a/"\n'
+        '[[tracks]]\nid="r"\nprefix="Q"\n')
+    with pytest.raises(ConfigError, match="top level"):
+        DomainConfig.load(tmp_path)

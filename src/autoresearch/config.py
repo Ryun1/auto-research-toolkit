@@ -339,6 +339,15 @@ class DomainConfig:
         name = domain.get("name")
         if not name:
             raise ConfigError(f"{CONFIG_NAME} must set domain.name")
+        # H135's shape in config form: `plugins = [...]` typed under [domain]
+        # is a valid [domain] key to TOML and an invisible one to the loader --
+        # the seam reads as absent and every plugin verb is an invalid choice.
+        misplaced = sorted({"plugins", "session"} & set(domain))
+        if misplaced:
+            raise ConfigError(
+                f"{misplaced} belong at the top level of {CONFIG_NAME}, not "
+                f"inside [domain] -- a seam declared in the wrong table reads "
+                f"as no seam at all. Move {misplaced} above the [domain] table.")
 
         state = data.get("state") or {}
         paths = Paths(
