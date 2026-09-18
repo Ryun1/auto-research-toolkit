@@ -28,12 +28,14 @@ from . import escalate as escalate_mod
 from . import external as external_mod
 from . import gates as gates_mod
 from . import hardware as hw
+from . import plugins as plugins_mod
 from . import rank as rank_mod
 from . import render
 from . import runs as runs_mod
 from . import skills as skills_mod
 from . import upstream as upstream_mod
 from . import usage as usage_mod
+from . import validate as validate_mod
 from .claims import Claims
 from .config import DomainConfig, discover
 from .entries import Entry, Event, Result, Store
@@ -450,6 +452,9 @@ def cmd_close(args):
     print(f"{entry.id} closed {args.status}"
           + (f" ({args.closure})" if args.closure else "")
           + f" — evidence: {result.memo}")
+    hint = skills_mod.skill_candidate_hint(entry, config)
+    if hint:
+        print(f"! {hint}")
     return 0
 
 
@@ -748,6 +753,8 @@ def cmd_validate(args):
                          for p in record.problems(config.goal)]
     except AutoresearchError as exc:
         problems.append(str(exc))
+    for w in validate_mod.inbox_warnings(config):
+        print(f"! {w}")
 
     if skipped_runs:
         print(f"note: {skipped_runs} run row(s) predate adoption of this schema "
@@ -948,6 +955,30 @@ def cmd_workspace(args):
     return 0
 
 
+def cmd_session(args):
+    from . import session as session_mod
+
+    config = _load(args)
+    if args.session_action == "create":
+        result = session_mod.create(config, args.name)
+    elif args.session_action == "destroy":
+        result = session_mod.destroy(config, args.name, harvest=args.harvest,
+                                     accept_drift=args.accept_drift)
+    else:
+        result = session_mod.prune(config)
+        if getattr(args, "destroy", False):
+            eligible = [row for row in result if row["eligible"]]
+            if not eligible:
+                print("no eligible sessions to destroy")
+                return 0
+            for row in eligible:
+                outcome = session_mod.destroy(config, row["name"])
+                print(json.dumps(outcome, indent=2))
+            return 0
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def _iso():
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
@@ -959,7 +990,7 @@ def _env():
 
 # -- parser ---------------------------------------------------------------
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="ar", description=__doc__.splitlines()[0])
     ap.add_argument("--domain", type=pathlib.Path,
                     help="domain root (default: nearest enclosing domain.toml)")
@@ -1215,6 +1246,29 @@ def build_parser() -> argparse.ArgumentParser:
                      help="show the plan and the pip command; change nothing")
     upd.set_defaults(func=cmd_harness_update)
 
+    session = sub.add_parser(
+        "session", help="persistent worktree sessions for hand-driven work")
+    ssn = session.add_subparsers(dest="session_action", required=True)
+    ssn_create = ssn.add_parser(
+        "create", help="cut a session worktree beside this domain")
+    ssn_create.add_argument("name", help="slug naming the session")
+    ssn_destroy = ssn.add_parser(
+        "destroy", help="remove a session worktree; refuses drift and unharvested rows")
+    ssn_destroy.add_argument("name")
+    ssn_destroy.add_argument(
+        "--harvest", action="store_true",
+        help="copy worktree-only run rows and entries into the primary before removing")
+    ssn_destroy.add_argument(
+        "--accept-drift", action="store_true",
+        help="proceed even though domain.toml changed since the session was cut")
+    ssn_prune = ssn.add_parser(
+        "prune", help="report sessions past their settle window (destroys nothing)")
+    ssn_prune.add_argument(
+        "--destroy", action="store_true",
+        help="destroy the sessions prune reports as eligible")
+    ssn_create.set_defaults(func=cmd_session, session_action="create")
+    ssn_destroy.set_defaults(func=cmd_session, session_action="destroy")
+    ssn_prune.set_defaults(func=cmd_session, session_action="prune")
     workspace = sub.add_parser("workspace", help="inspect or archive an abandoned workspace")
     wsub = workspace.add_subparsers(dest="workspace_action", required=True)
     inspect = wsub.add_parser("inspect", help="inspect holder and obtain a recovery token")
@@ -1251,12 +1305,50 @@ def build_parser() -> argparse.ArgumentParser:
     urec_.add_argument("--note", required=True)
     urec_.set_defaults(func=cmd_usage, usage_cmd="reconcile")
 
+    plugins_mod.register(sub, plugins_spec, root, config)
     return ap
 
 
+def _plugins_config(argv) -> DomainConfig | None:
+    """The domain's config when it declares plugins, else None.
+
+    Plugin subcommands cannot parse until they are registered, and they can
+    only be registered once the domain is known -- so argv is pre-scanned for
+    `--domain`, the config is loaded early, and a parser carrying the plugins'
+    subparsers is built for the real parse. Loading the config twice is one
+    extra TOML read; it keeps every other command's failure modes unchanged,
+    and a plugin that fails its contract is refused before anything parses --
+    a mistyped plugin name is a config error, not an invalid-choice error
+    (H135's shape: a command that runs the wrong thing reads as success)."""
+    rest = list(argv if argv is not None else sys.argv[1:])
+    domain = None
+    for i, a in enumerate(rest):
+        if a == "--domain" and i + 1 < len(rest):
+            domain = rest[i + 1]
+        elif a.startswith("--domain="):
+            domain = a.split("=", 1)[1]
+    try:
+        root = pathlib.Path(domain) if domain else discover()
+        config = DomainConfig.load(root)
+    except AutoresearchError:
+        return None
+    if not config.plugins:
+        return None
+    return config
+
+
 def main(argv=None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    spec = _plugins_config(argv)
+    if spec is not None:
+        try:
+            parser = build_parser(spec.plugins, spec.paths.root, spec)
+        except AutoresearchError as exc:
+            print(f"ar: {exc}", file=sys.stderr)
+            return 2
+        args = parser.parse_args(argv)
+    else:
+        parser = build_parser()
+        args = parser.parse_args(argv)
     try:
         return args.func(args)
     except AutoresearchError as exc:
