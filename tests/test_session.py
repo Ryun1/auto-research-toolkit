@@ -264,3 +264,27 @@ def test_prune_proposes_a_settled_clean_session_without_destroying(domain):
 
 def test_prune_with_no_sessions_is_empty(domain):
     assert session_mod.prune(domain) == []
+
+
+def test_prune_destroy_destroys_an_eligible_session(domain):
+    """The CLI's prune --destroy path: eligibility comes from the record's
+    created_at against its settle window, and destruction goes through the
+    same guards as an explicit destroy."""
+    from autoresearch import cli
+
+    session_mod.create(domain, "old")
+    record_path = domain.paths.root / ".ar" / "sessions" / "old.json"
+    record = json.loads(record_path.read_text())
+    record["created_at"] = "2026-01-01T00:00:00+00:00"
+    record_path.write_text(json.dumps(record))
+
+    wt = worktree_of(domain, "old")
+    assert wt.exists()
+    rc = cli.main(["--domain", str(domain.paths.root),
+                   "session", "prune", "--destroy"])
+    assert rc == 0
+    assert not wt.exists()
+    assert not record_path.exists()
+    archived = list((domain.paths.root / ".ar" / "sessions" / "archived").glob(
+        "old.*.json"))
+    assert len(archived) == 1
