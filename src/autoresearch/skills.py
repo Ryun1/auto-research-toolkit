@@ -488,3 +488,49 @@ def undistilled(config, skills, entries) -> list[dict]:
             "mechanisms": list(entry.mechanisms),
         })
     return out
+
+
+def outstanding(config, entries=None) -> dict:
+    """What the distil mechanism has left to do, in one read-only summary.
+
+    `undistilled` is `undistilled()` above -- the same list the
+    `ar skill distil --dry-run` prints -- and `stale` is `stale_report()`'s
+    per-skill reasons. One function rather than every caller re-deriving the
+    pair, because the loop, the dry-run and the board must not disagree about
+    what is left to distil. The field failure that asked for it: six domains
+    closed work through claim/close by hand while the only distil trigger was
+    the coordinator's cadence, so terminal entries sat uncited behind exactly
+    the summary this returns.
+
+    Reads the entry store itself when `entries` is not supplied. The board
+    passes the entries it already holds, so its sections cannot disagree.
+    """
+    found, _problems = read_all(config)
+    if entries is None:
+        from . import entries as entries_mod
+        entries = entries_mod.Store(config.paths.entries).all()
+    return {"undistilled": undistilled(config, found, entries),
+            "stale": stale_report(config, found, entries)}
+
+
+def skill_candidate_hint(entry, config) -> str | None:
+    """A one-line prompt toward `ar skill distil`, or None.
+
+    The close command is the moment distillation's raw material is created,
+    and hand-driven domains create it without ever running the coordinator --
+    so the hint belongs where the premise is satisfied, not only on the loop's
+    cadence. The conditions are exactly that premise: the entry sits at a
+    terminal state, its closure memo is substantive, and no skill cites it.
+
+    Pure read. A hint is something the caller prints; this never writes.
+    """
+    if not _terminal(config, entry):
+        return None
+    result = entry.result
+    if result is None or not (result.memo or "").strip():
+        return None
+    found, _problems = read_all(config)
+    if any(entry.id in s.cites for s in found):
+        return None
+    return (f"{entry.id} is closed and no skill cites it yet; "
+            "run `ar skill distil` to distil closed work")

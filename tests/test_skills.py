@@ -384,3 +384,88 @@ def test_an_event_in_the_same_second_as_the_distillation_still_counts(sandbox, s
     make_skill(sandbox, "tied", cites=["Q1"], distilled={
         "at": same_second, "iteration": 1, "core": "test"})
     assert any("relabel" in p for p in _check(sandbox, store))
+
+
+# -- outstanding(): the dry-run's pair, in one read-only summary ----------
+
+def test_outstanding_lists_an_uncited_closure_and_excludes_a_cited_one(sandbox, store):
+    _entries(sandbox, store, "Q1", "Q2")
+    make_skill(sandbox, "first", cites=["Q1"])
+    out = skills_mod.outstanding(sandbox)          # no entries: reads the store
+    assert [p["id"] for p in out["undistilled"]] == ["Q2"]
+    assert out["stale"] == {}
+
+
+def test_outstanding_stale_matches_what_skill_check_refuses(sandbox, store):
+    """The stale names in `outstanding` are the same failures `ar skill check`
+    reports -- one definition of stale, not one per screen."""
+    entry, = _entries(sandbox, store, "Q1")
+    make_skill(sandbox, "was-true", cites=["Q1"])
+    machine = sandbox.track_for("Q1").machine
+    entry.apply(machine, machine.initial, "test", why="reopened")
+    store.save(entry)
+
+    out = skills_mod.outstanding(sandbox)
+    found, _ = skills_mod.read_all(sandbox)
+    problems = skills_mod.check(sandbox, found, store.all())
+    assert "was-true" in out["stale"]
+    assert any("result-archived" in p for p in problems), problems
+    assert any("result-archived" in r for r in out["stale"]["was-true"])
+
+
+# -- the close-command hint ----------------------------------------------
+
+def test_the_hint_is_none_for_open_and_non_terminal_entries(sandbox, store):
+    """A hint on unsettled work would ask for a skill whose evidence does not
+    exist yet -- the exact thing `check` refuses."""
+    entry = make_entry(store, "Q1")
+    assert skills_mod.skill_candidate_hint(entry, sandbox) is None
+    machine = sandbox.track_for("Q1").machine
+    entry.apply(machine, "in-progress", "test", why="claiming")
+    store.save(entry)
+    assert skills_mod.skill_candidate_hint(entry, sandbox) is None
+
+
+def test_the_hint_names_the_entry_and_the_distil_command(sandbox, store):
+    entry, = _entries(sandbox, store, "Q1")
+    hint = skills_mod.skill_candidate_hint(entry, sandbox)
+    assert hint and "Q1" in hint and "ar skill distil" in hint
+
+
+def test_a_cited_closure_gets_no_hint(sandbox, store):
+    entry, = _entries(sandbox, store, "Q1")
+    make_skill(sandbox, "first", cites=["Q1"])
+    assert skills_mod.skill_candidate_hint(entry, sandbox) is None
+
+
+def test_the_hint_refuses_a_terminal_entry_whose_memo_is_empty(sandbox, store):
+    """Invalid-but-tolerated data happens; a terminal closure with no memo has
+    nothing to distil, and the hint must not pretend otherwise."""
+    from autoresearch.entries import Entry, Result
+    entry = Entry(id="Q1", track="research", title="Q1 title",
+                  status="confirmed",
+                  result=Result(verdict="confirmed", memo="",
+                                at="2026-01-01T00:00:00+00:00", session="test"))
+    store.save(entry)
+    assert skills_mod.skill_candidate_hint(entry, sandbox) is None
+
+
+# -- the board's skills line ----------------------------------------------
+
+def test_board_prints_the_skills_line_when_zero_skills_exist(sandbox, store):
+    """A domain that has distilled nothing is not misconfigured: the line
+    prints its zeros, and an absent skills directory reads as zero, never an
+    error (the config.py Skills contract)."""
+    from autoresearch import render
+    (sandbox.paths.root / sandbox.skills.dir).rmdir()
+    text = render.board(sandbox, store.all(), [], target=1000.0)
+    assert "## Skills — 0 skill(s) read, 0 stale, 0 undistilled" in text
+
+
+def test_board_counts_undistilled_from_the_record(sandbox, store):
+    """The undistilled count is the dry-run's count: a closed entry no skill
+    cites shows up on the board, not only on `ar skill distil --dry-run`."""
+    from autoresearch import render
+    close(sandbox, store, make_entry(store, "Q1"))
+    text = render.board(sandbox, store.all(), [], target=1000.0)
+    assert "## Skills — 0 skill(s) read, 0 stale, 1 undistilled" in text
