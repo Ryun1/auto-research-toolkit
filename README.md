@@ -218,11 +218,17 @@ ar usage        record, list and price out-of-band spend
 ar gates        per-entry acceptance gates: configure, update, show
 ar evidence     portable integrity-only evidence bundles: pack, verify, import
 ar workspace    inspect or archive an abandoned workspace slot
+ar session      persistent worktree sessions for hand-driven work: create, destroy, prune
 ```
 
 The installed `autoresearch` command avoids the system `ar` archiver name
 collision. New domains also receive `bin/autoresearch`, bound to the Python
-interpreter used to initialize them.
+interpreter used to initialize them — and `bin/ar`, a shim that probes
+`.venv312/` and `.venv/` for the toolkit CLI and execs it, falling through to
+`python3 -m autoresearch`. That shim exists because bare `ar` on macOS is
+`/usr/bin/ar`, the BSD archiver: it runs plausibly instead of failing, which
+is worse (field defect H149, fixed once in the field and now scaffolded for
+every new domain).
 
 `ar migrate` is an import, not an update: existing entry IDs and duplicate IDs
 across selected sources are refused before any entries are written. `--dry-run`
@@ -596,6 +602,18 @@ records progress; `readiness` is derived (`unconfigured | pending | blocked |
 failed | ready`) and rendered on the board and queue. Entries with no gate
 definitions close as before but never render as ready.
 
+Gates can also bind the **stop decision**. `goal.yaml` may declare
+`required_gates: [kernel-proof]` — names matching the track's gate
+definitions — and a measurement that meets the target while a required gate
+is unpassed is not a win: the loop keeps running, and the iteration record
+says exactly which gate held it open. The field case this answers: a loop
+recorded `goal-met` on a measured gas gap while its goal text required a
+kernel-checked Correct proof — the record watched itself declare a win the
+goal did not allow. Two related fixes rode with it: the stop detail prints
+the objective and target at full precision (a `{:,.0f}` format displayed a
+0.1 gap as `-0`), and a `stop_when` expression satisfied by a zero-on-zero
+measurement is refused unless the goal sets `allow_degenerate_target: true`.
+
 ## Ranking, and the reserves for amplitude and coverage
 
 ```
@@ -702,6 +720,26 @@ known usage below the ceiling may continue. Measured zero remains valid and
 costs nothing. Every backend shares one money ceiling, so two spenders
 halve it rather than each holding a copy.
 
+## Plugins: a declared seam for domain tooling
+
+Domains grow tooling the core has no home for — a GPU dev-loop, an evidence
+adaptor, a leaderboard probe. Before now the only route was composing the
+toolkit's own parser privately, which is an undeclared seam every domain
+re-invents differently. Declare it instead:
+
+```toml
+# domain.toml
+plugins = ["qsbtools"]
+```
+
+Each name is an importable module resolved with the domain root on `sys.path`,
+exposing `register_cli(subparsers, config)`. Its subcommands appear on `ar`
+and run through the same policy engine, meters and record as every core verb —
+because they are written against core functions, not around them. The honest
+boundary: the core refuses a plugin that does not declare the contract; it
+cannot prove a plugin never bypasses the record, and a plugin that does is
+forking by other means.
+
 ## Bounded execution and external coordination
 
 Two verbs make an execution budget real rather than declarative:
@@ -734,7 +772,9 @@ judgement roles (generate, judge, curate, distil, qc) still run through
 whatever backend `[brain]` routes them to — route them to commands, or let the
 parent file entries and prices itself. This is the answer to a real failure:
 `bin/ar loop` selecting the SDK brain meant the unattended path reached for API
-spend nobody had approved.
+spend nobody had approved. The full no-coordinator shape — claims, meters,
+sessions and plugins for hand-driven work — is documented in
+`docs/native-driver.md`.
 
 ### Out-of-band spend is metered too: `ar usage`
 
