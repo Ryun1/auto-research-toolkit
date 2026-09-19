@@ -20,6 +20,8 @@ they were already right:
 """
 from __future__ import annotations
 
+import html
+import json
 import pathlib
 import re
 
@@ -322,7 +324,7 @@ def _mermaid_text(text: str, limit: int = 80) -> str:
 BUCKET_MIN = 12
 
 
-def graph_view(track, entries) -> str:
+def graph_view(track, entries, circles=False, direction="TD") -> str:
     """The track's hypothesis tree as a mermaid flowchart: the graph view.
 
     Obsidian normalised two things: notes that link to each other, and a
@@ -346,6 +348,17 @@ def graph_view(track, entries) -> str:
     flow, because the flowchart engine cannot wrap loose nodes (see
     BUCKET_MIN). A filed parent moves an entry out of its bucket on the next
     render, which is the whole point of drawing from the records.
+
+    `circles` shrinks every node to an id-bearing circle -- the Obsidian
+    graph look, used by the HTML snapshot where the hover tooltip carries
+    the full title and summary. The default keeps the title in the label,
+    because the markdown surfaces (Obsidian, GitHub) have no hover payload
+    to fall back on.
+
+    `direction` is the mermaid flowchart orientation ("TD" default; the
+    HTML snapshot passes "LR", reading lineage left to right). Bucket
+    subgraphs always stack their members top-to-bottom regardless, so a
+    wide corpus stays pannable in either orientation.
     """
     machine = track.machine
     mine = sorted((e for e in entries if track.is_id(e.id)), key=lambda e: e.id)
@@ -360,6 +373,8 @@ def graph_view(track, entries) -> str:
                 "#e0d5eb" if machine.status(e.status).terminal else "#eeeeee")
 
     def node(e, indent="    "):
+        if circles:
+            return f"{indent}{e.id}(({e.id})):::{class_of[e.status]}"
         return (f'{indent}{e.id}["{e.id} — {_mermaid_text(e.title)}"]'
                 f":::{class_of[e.status]}")
 
@@ -388,7 +403,7 @@ def graph_view(track, entries) -> str:
     isolated = [e for e in mine if e.id not in linked]
 
     out = [BANNER, f"# {track.title} — Hypothesis Graph", "",
-           "```mermaid", "flowchart TD"]
+           "```mermaid", f"flowchart {direction}"]
     if not mine:
         out.append("    %% no entries yet")
     elif len(isolated) >= BUCKET_MIN:
@@ -398,7 +413,7 @@ def graph_view(track, entries) -> str:
             members = [e for e in isolated if e.status == status]
             out.append(f'    subgraph {class_of[status]}_bucket'
                        f'["{status} — {len(members)} unlinked"]')
-            out.append("        direction TB")
+            out.append(f"        direction {direction}")
             prev = None
             for e in members:
                 out.append(node(e, indent="        "))
@@ -414,6 +429,109 @@ def graph_view(track, entries) -> str:
                    f"fill:{fills[status]},stroke:#555,color:#111")
     out += ["```", ""]
     return "\n".join(out) + "\n"
+
+
+def graph_html(tracks, entries) -> str:
+    """A standalone HTML snapshot of the graph views, hover-annotated.
+
+    `ar entry graph --html PATH` writes this. The mermaid fence only carries
+    the truncated label, so the page embeds one JSON record per entry -- full
+    title, status, and the summary (a closure's `result.summary`, or the
+    hypothesis claim for an entry that has no verdict yet) -- and hovering a
+    node shows it. A snapshot, not a view: nothing checks it against the
+    records, which is also why it is written only when asked for.
+
+    The JSON is embedded with `</` escaped, so a summary containing a closing
+    script tag cannot terminate the block early.
+    """
+    info, sections = {}, []
+    for track in tracks:
+        view = graph_view(track, entries, circles=True, direction="LR")
+        fence = view.split("```mermaid\n", 1)[1].rsplit("```", 1)[0]
+        title = html.escape(track.title, quote=False)
+        sections.append(f"<h2>{title}</h2>\n"
+                        f'<pre class="mermaid">\n{fence}</pre>')
+        for e in entries:
+            if not track.is_id(e.id) or e.id in info:
+                continue
+            summary = (e.result.summary if e.result is not None else "") \
+                or e.hypothesis
+            info[e.id] = {"title": e.title, "status": e.status,
+                          "summary": summary}
+    payload = json.dumps(info, sort_keys=True).replace("</", "<\\/")
+    return _GRAPH_HTML_PAGE.replace("/*SECTIONS*/",
+                                    "\n".join(sections)).replace(
+        "/*INFO*/", payload)
+
+
+_GRAPH_HTML_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Hypothesis Graph</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body { margin: 0; font-family: -apple-system, sans-serif; }
+  header { position: sticky; top: 0; background: #fff; padding: 8px 16px;
+           border-bottom: 1px solid #ddd; font-size: 13px; color: #555; z-index: 1; }
+  svg { max-width: none !important; }
+  /* natural size: scrollbars pan, browser zoom (Cmd+/-) rescales */
+  #tip { display: none; position: fixed; max-width: 480px; background: #222;
+         color: #eee; font-size: 13px; line-height: 1.4; padding: 10px 12px;
+         border-radius: 6px; pointer-events: none; z-index: 2; }
+  #tip .t { font-weight: 600; margin-bottom: 2px; }
+  #tip .s { color: #9ec; font-size: 11px; text-transform: uppercase;
+            letter-spacing: .04em; margin-bottom: 6px; }
+  #tip .m { white-space: pre-wrap; }
+</style></head>
+<body>
+<header>Hypothesis Graph · generated from state/entries/ by <code>ar render</code>;
+this file is a snapshot -- re-run <code>ar entry graph --html</code> after the record
+moves. Hover a node for the full title and summary. Scroll to pan; Cmd+/- to zoom.</header>
+<div id="tip"></div>
+/*SECTIONS*/
+<script>const INFO = /*INFO*/;
+// Layout density and the scale the page opens at. nodeSpacing/rankSpacing are
+// mermaid's gaps (defaults 50/50); ZOOM shrinks the rendered SVG so the page
+// opens zoomed out over more of the graph -- Cmd+/- rescales on top of it.
+const ZOOM = 0.6;
+mermaid.initialize({ startOnLoad: true,
+                     flowchart: { nodeSpacing: 12, rankSpacing: 28 } });
+mermaid.run({ querySelector: '.mermaid' }).then(() => {
+  document.querySelectorAll('svg').forEach(svg => {
+    const b = svg.getBBox();
+    svg.style.maxWidth = 'none';
+    svg.style.width = Math.round(b.width * ZOOM) + 'px';
+    svg.style.height = 'auto';
+  });
+  const tip = document.getElementById('tip');
+  document.querySelectorAll('svg .node').forEach(n => {
+    // The node id is the record's key: circle labels read "<ID>", rectangle
+    // labels "<ID> — <title>"; either matches at the start.
+    const m = n.textContent.match(/^\\s*([A-Za-z]+\\d+)/);
+    if (!m || !INFO[m[1]]) return;
+    n.style.cursor = 'help';
+    n.addEventListener('mousemove', ev => {
+      const d = INFO[m[1]];
+      tip.textContent = '';
+      const t = document.createElement('div'); t.className = 't';
+      t.textContent = m[1] + ' — ' + d.title;
+      const s = document.createElement('div'); s.className = 's';
+      s.textContent = d.status;
+      const body = document.createElement('div'); body.className = 'm';
+      body.textContent = d.summary || '(no hypothesis recorded)';
+      tip.append(t, s, body);
+      tip.style.display = 'block';
+      const pad = 14, w = tip.offsetWidth, h = tip.offsetHeight;
+      tip.style.left = Math.min(ev.clientX + pad,
+                                window.innerWidth - w - pad) + 'px';
+      tip.style.top = Math.min(ev.clientY + pad,
+                               window.innerHeight - h - pad) + 'px';
+    });
+    n.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  });
+}).catch(e => { document.body.textContent = 'mermaid failed: ' + e.message; });
+</script>
+</body></html>
+"""
 
 
 # -- writing and checking views ------------------------------------------

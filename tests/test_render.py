@@ -247,3 +247,47 @@ def test_a_referenced_entry_is_not_bucketed_twice(sandbox, store):
     assert 'Q4 ==>|"superseded by"| Q5' in text
     assert text.count('    Q4["Q4 —') == 1
     assert "s_refuted_bucket" not in text  # one refuted entry is below BUCKET_MIN
+
+
+def test_graph_html_embeds_full_title_and_summary_for_hover(sandbox, store):
+    """The diagram truncates labels; the snapshot page must not truncate the
+    payload a reader hovers for. A closed entry summarises by its verdict, an
+    open one by its hypothesis claim."""
+    close(store, make_entry(store, "Q1",
+                            title="x" * 200, hypothesis="the claim"))
+    make_entry(store, "Q2", hypothesis="still open, this is why")
+    # A summary containing a closing script tag must not break out of the
+    # embedded JSON block.
+    make_entry(store, "Q3", hypothesis="evil </script> payload")
+    page = render.graph_html([sandbox.tracks["research"]], store.all())
+    assert "x" * 200 in page            # the full title, untruncated
+    assert "still open, this is why" in page
+    assert "the claim" not in page      # closed: summary wins over hypothesis
+    assert '"status": "confirmed"' in page or '"status":"confirmed"' in page
+    assert "<\\/script>" in page and "evil <\\/script> payload" in page
+
+
+def test_graph_html_covers_every_declared_track(sandbox, store):
+    make_entry(store, "Q1")
+    make_entry(store, "H1", track="harness")
+    page = render.graph_html(list(sandbox.tracks.values()), store.all())
+    assert "<h2>Hypothesis Queue</h2>" in page
+    assert "<h2>Harness Debt</h2>" in page
+    assert '"H1"' in page and '"Q1"' in page
+    assert "flowchart LR" in page  # lineage reads left to right
+
+
+def test_circles_mode_shrinks_nodes_to_ids(sandbox, store):
+    """The HTML snapshot renders Obsidian-style: a small id-only circle per
+    hypothesis, with the hover tooltip carrying the identity. The generated
+    markdown view keeps titled rectangles -- Obsidian and GitHub have no
+    hover payload, so the title must stay in the label there."""
+    make_entry(store, "Q1", title="a long title that would bloat the node")
+    flat = render.graph_view(sandbox.tracks["research"], store.all())
+    assert 'Q1["Q1 — a long title' in flat and "((" not in flat
+    round = render.graph_view(sandbox.tracks["research"], store.all(),
+                              circles=True)
+    assert "Q1((Q1))" in round and '["' not in round
+    assert "a long title" not in round
+    assert round == render.graph_view(sandbox.tracks["research"], store.all(),
+                                      circles=True)

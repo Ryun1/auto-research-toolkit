@@ -306,7 +306,11 @@ clickable picture. Wide corpora are handled: entries no edge touches are
 grouped into status-labelled buckets instead of one endless row of loose
 nodes. Like every view it is generated from the records, so
 agents never maintain a diagram beside the record that would drift from it;
-`ar entry graph` prints the same markdown (paste it into a memo). A diagram
+`ar entry graph` prints the same markdown (paste it into a memo), and
+`ar entry graph --html PATH` writes a standalone browser snapshot in which
+hovering a node shows the full title and the entry's summary — a closure's
+verdict summary, or the hypothesis claim for an entry with no verdict yet.
+A diagram
 of the agent's own — a mechanism sketch, a decision tree — is a ```mermaid
 fence in an entry body or a memo: markdown renders it, and nothing parses
 markdown back, so a picture cannot become a second source of truth.

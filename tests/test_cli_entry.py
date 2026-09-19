@@ -61,11 +61,28 @@ def test_entry_graph_prints_the_view_markdown(sandbox, store, capsys):
     assert '    Q2 -->|"improve"| Q1' in out
 
     assert _ar(sandbox, "entry", "graph") == 0
-    both = capsys.readouterr().out
-    assert out in both and "Harness Debt" in both
+    only = capsys.readouterr().out
+    # The harness track never declared graph_view: it has opted out of the
+    # picture, so the default scope is the declared tracks only.
+    assert only == out and "Harness Debt" not in only
+    assert _ar(sandbox, "entry", "graph", "--track", "harness") == 0
+    assert "Harness Debt" in capsys.readouterr().out
 
     assert _ar(sandbox, "entry", "graph", "--track", "nope") != 0
     assert "not declared" in capsys.readouterr().err
+
+
+def test_entry_graph_html_writes_the_snapshot(sandbox, store, capsys):
+    make_entry(store, "Q1", hypothesis="the claim behind Q1")
+    assert _ar(sandbox, "entry", "graph", "--html", "docs/graph.html") == 0
+    assert "wrote" in capsys.readouterr().out
+    page = (sandbox.paths.root / "docs/graph.html").read_text()
+    assert "the claim behind Q1" in page and "flowchart LR" in page
+
+    # Relative paths resolve against the domain root; --track narrows it.
+    assert _ar(sandbox, "entry", "graph", "--html", "narrow.html",
+               "--track", "research") == 0
+    assert (sandbox.paths.root / "narrow.html").exists()
 
 
 def test_list_json_honours_the_filters(sandbox, store, capsys):

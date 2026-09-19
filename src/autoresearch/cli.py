@@ -373,17 +373,33 @@ def cmd_entry_graph(args):
     """Print the graph view: the hypothesis tree as a mermaid diagram.
 
     Same markdown `ar render` writes to the track's `graph_view`, so an agent
-    can paste it into a memo or hand-driven doc without a second renderer
-    that could disagree with the generated one."""
+    can paste it into a memo without a second renderer that could disagree
+    with the generated one. `--html` writes a standalone snapshot page
+    instead, with hover tooltips carrying the full title and summary."""
     config = _load(args)
     if args.track and args.track not in config.tracks:
         raise AutoresearchError(
             f"track {args.track!r} is not declared by this domain; "
             f"declared: {sorted(config.tracks)}")
+    tracks = [t for t in config.tracks.values()
+              if not args.track or t.id == args.track]
+    if not args.track:
+        # A track that has not declared graph_view has opted out of the
+        # picture (harness debt, typically: "we don't want that graph").
+        # An explicit --track overrides the opt-out; a domain where no
+        # track declares it falls back to every track, so the verb still
+        # works for an ad-hoc look.
+        declared = [t for t in tracks if t.graph_view]
+        tracks = declared or tracks
     entries = _store(config).all()
-    for track in config.tracks.values():
-        if args.track and track.id != args.track:
-            continue
+    if args.html:
+        path = pathlib.Path(args.html)
+        if not path.is_absolute():
+            path = config.paths.root / path
+        path.write_text(render.graph_html(tracks, entries))
+        print(f"wrote {path}")
+        return 0
+    for track in tracks:
         print(render.graph_view(track, entries), end="")
     return 0
 
@@ -1537,6 +1553,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     graph = esub.add_parser(
         "graph", help="the hypothesis tree as a mermaid diagram")
     graph.add_argument("--track", help="one track (default: every track)")
+    graph.add_argument("--html", metavar="PATH",
+                       help="write a standalone HTML snapshot (hover a node "
+                            "for the full title and summary) instead of "
+                            "printing markdown")
     graph.set_defaults(func=cmd_entry_graph)
 
     skill = sub.add_parser("skill", help="the domain's distilled, cited skills")
