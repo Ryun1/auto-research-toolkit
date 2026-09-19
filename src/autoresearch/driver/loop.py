@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 
 from .. import attempts, preflight, render, scoring
 from .. import budget as budget_mod
+from .. import entries as entries_mod
 from .. import hardware as hw
 from .. import rank as rank_mod
 from .. import runs as runs_mod
@@ -1133,15 +1134,19 @@ class Coordinator:
                     entry = self.store.load(change["entry_id"])
                 except AutoresearchError:
                     continue
-                if self.config.track_for(entry.id).machine.status(
-                        entry.status).terminal:
-                    continue          # H140: never reprice a closed entry
-                for numeric in ("confidence", "impact", "cost"):
-                    if numeric in change:
-                        setattr(entry, numeric, float(change[numeric]))
-                entry.history.append(Event(_iso(), "repriced", self.session,
-                                           str(change.get("why", ""))))
-                self.store.save(entry)
+                try:
+                    # One writer for every re-price, in-loop or out (H140 and
+                    # the guards live there): terminal, unpriced or no-op
+                    # changes are skipped, not recorded as if they happened.
+                    entries_mod.reprice(
+                        self.store, entry,
+                        machine=self.config.track_for(entry.id).machine,
+                        changes={k: change.get(k)
+                                 for k in entries_mod.REPRICE_FIELDS},
+                        session=self.session, why=str(change.get("why", "")),
+                        at=_iso())
+                except AutoresearchError:
+                    continue
                 phase.did += 1
             phase.detail += [str(n) for n in data.get("notes", [])]
         except (BudgetExceeded, AutoresearchError, KeyError, TypeError) as exc:

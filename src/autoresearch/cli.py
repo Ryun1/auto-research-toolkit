@@ -24,6 +24,7 @@ from . import attempts as attempts_mod
 from . import budget as budget_mod
 from . import bundles as bundles_mod
 from . import defects as defects_mod
+from . import entries as entries_mod
 from . import escalate as escalate_mod
 from . import external as external_mod
 from . import gates as gates_mod
@@ -282,6 +283,29 @@ def cmd_entry_amend(args):
     entry.updated = _iso()
     store.save(entry)
     print(f"{entry.id} amended: {', '.join(sorted(changes))}")
+    return 0
+
+
+def cmd_entry_reprice(args):
+    """Re-price a filing-time estimate, out of band.
+
+    Filing-time confidence/impact/cost are guesses; a result that settled
+    later (an external assignment confirmed past the filing, a sibling
+    closure moved a shared mechanism) can make them wrong while the entry
+    stays open. The loop's curator phase has this writer; out-of-band
+    sessions -- a hand-driven curator pass, a human correction -- had none,
+    which left a hand-edit of the YAML as the only path (the exact move H8
+    exists to forbid). One writer, both callers.
+    """
+    config = _load(args)
+    store = _store(config)
+    entry = store.load(args.id)
+    moved = entries_mod.reprice(
+        store, entry, machine=config.track_for(entry.id).machine,
+        changes={"confidence": args.confidence, "impact": args.impact,
+                 "cost": args.cost},
+        session=args.session, why=args.why)
+    print(f"{entry.id} repriced: {', '.join(moved)}")
     return 0
 
 
@@ -1153,6 +1177,18 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     amend.add_argument("--observed", help="what actually happened")
     amend.add_argument("--expected", help="what should have happened instead")
     amend.set_defaults(func=cmd_entry_amend)
+    reprice = esub.add_parser(
+        "reprice", help="correct confidence/impact/cost on an open entry")
+    reprice.add_argument("id")
+    reprice.add_argument("--confidence", type=float,
+                         help="P(confirm); a probability in [0, 1]")
+    reprice.add_argument("--impact", type=float,
+                         help="expected fractional move on the objective")
+    reprice.add_argument("--cost", type=float, help="cost in run-units")
+    reprice.add_argument("--why", required=True,
+                         help="a re-price without a reason is a guess moving "
+                              "the ranking")
+    reprice.set_defaults(func=cmd_entry_reprice)
     lst = esub.add_parser("list")
     lst.add_argument("--status", action="append")
     lst.add_argument("--track")

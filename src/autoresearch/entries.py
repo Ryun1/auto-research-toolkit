@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from .errors import SchemaError, TransitionError
+from .errors import AutoresearchError, SchemaError, TransitionError
 from .gates import Gate
 from .gates import validate as validate_gates
 from .states import CLOSURE_KINDS
@@ -524,3 +524,49 @@ class Store:
                 dupes.append(entry.id)
             seen.add(entry.id)
         return dupes
+
+
+#: The prices a reprice may move. `confidence` is a probability -- a curator
+#: that answers 1.5 is not enthusiastic, it is out of range -- and the score
+#: multiplies all three, so a typo here silently reorders the queue.
+REPRICE_FIELDS = ("confidence", "impact", "cost")
+
+
+def reprice(store, entry, *, machine, changes, session, why, at=None):
+    """Fold a price correction into one entry: the one writer, shared by the
+    loop's curator phase and the out-of-band `ar entry reprice`.
+
+    H140: never reprice a closed entry -- a terminal verdict is the record's
+    last word on those numbers. A re-price without a `why` is a guess moving
+    the ranking, and a re-price that moves nothing is refused rather than
+    recorded as if it happened. Returns the names of the fields that moved.
+    """
+    if machine.status(entry.status).terminal:
+        raise AutoresearchError(
+            f"{entry.id} is terminal ({entry.status}); a closed entry is never "
+            "repriced (H140)")
+    if not why or not why.strip():
+        raise AutoresearchError(
+            "a re-price without a reason is a guess moving the ranking; pass --why")
+    moved = []
+    for name in REPRICE_FIELDS:
+        value = changes.get(name)
+        if value is None:
+            continue
+        value = float(value)
+        if name == "confidence" and not 0.0 <= value <= 1.0:
+            raise AutoresearchError(
+                f"confidence must be a probability in [0, 1], got {value:g}")
+        setattr(entry, name, value)
+        moved.append(name)
+    if not moved:
+        raise AutoresearchError(
+            "nothing to reprice: pass at least one of "
+            + ", ".join(f"--{f}" for f in REPRICE_FIELDS))
+    # `updated` is what staleness measures ("what has the board learned since
+    # this entry was last priced", rank.py) -- a re-price IS a pricing, so it
+    # must move the timestamp or the correction never lifts the penalty.
+    entry.updated = at or _now()
+    entry.history.append(Event(entry.updated, "repriced", session, why))
+    store.save(entry)
+    return moved
