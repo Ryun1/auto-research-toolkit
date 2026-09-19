@@ -38,3 +38,17 @@ def inbox_warnings(config) -> list[str]:
             "data/artifacts/ (the findings lane already covers it); inbox/ is "
             "the handoff queue")
     return warnings
+
+
+def core_warnings(config) -> list[str]:
+    """Warning (not a problem) when the installed core is below the domain's
+    declared `min_core` floor.
+
+    A stale copied install resurrects fixed defects (the first field domain
+    verified its install by hand, md5 against the checkout). `ar doctor`
+    makes it a failure; `ar validate` only names it, because validate's
+    contract is that convention nudges never change the exit code."""
+    from .upstream import min_core_problem
+    problem = min_core_problem(config)
+    return [problem + " (run `ar doctor` for the full diagnosis)"] \
+        if problem else []

@@ -96,24 +96,35 @@ class Upstream:
     """Where the core comes from, for `ar harness check` and
     `ar harness update`. Defaults are recovered from pip's own install record;
     a fork or a mirror is a one-line domain decision here, and `ref` names the
-    branch or tag to follow -- pin it to a tag to make updates opt-in."""
+    branch or tag to follow -- pin it to a tag to make updates opt-in.
+
+    `min_core` is the version floor this domain's records assume. The first
+    field domain pinned reopen conditions to "reinstall >= the fix commit" and
+    verified the install by hand -- a copied (non-editable) install lags its
+    checkout silently, and a stale install resurrects fixed defects. Declare
+    the floor and `ar doctor` / `ar validate` enforce it."""
     url: str = ""
     ref: str = ""
+    min_core: str = ""
 
     @classmethod
     def from_dict(cls, spec: dict) -> Upstream:
-        unknown = set(spec) - {"url", "ref"}
+        unknown = set(spec) - {"url", "ref", "min_core"}
         if unknown:
             raise ConfigError(
                 f"[upstream] has unknown key(s) {sorted(unknown)}; "
-                f"known: ['url', 'ref']")
+                f"known: ['url', 'ref', 'min_core']")
         url = spec.get("url", "")
         if not isinstance(url, str):
             raise ConfigError(f"upstream.url must be a string, got {url!r}")
         ref = spec.get("ref", "")
         if not isinstance(ref, str):
             raise ConfigError(f"upstream.ref must be a string, got {ref!r}")
-        return cls(url=url, ref=ref)
+        min_core = spec.get("min_core", "")
+        if not isinstance(min_core, str):
+            raise ConfigError(
+                f"upstream.min_core must be a string, got {min_core!r}")
+        return cls(url=url, ref=ref, min_core=min_core)
 
 
 @dataclass

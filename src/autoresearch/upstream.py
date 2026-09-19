@@ -81,6 +81,85 @@ def installed() -> Install:
                    ref=ref, editable=editable)
 
 
+def version_tuple(version: str) -> tuple[int, ...] | None:
+    """`("0", "2", "0")` for "0.2.0"; None when any component is not purely
+    numeric (a dev suffix or a hash), which means 'cannot compare' rather than
+    'oldest' -- a floor must never silently pass a version it cannot read."""
+    parts = version.strip().split(".")
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def min_core_problem(config, install: Install | None = None) -> str | None:
+    """Why the installed core is below the domain's declared floor, or None.
+
+    A non-comparable version is itself a problem: the floor exists because a
+    stale copied install resurrects fixed defects, and 'probably fine' is how
+    a stale install survives a check."""
+    floor = getattr(getattr(config, "upstream", None), "min_core", "")
+    if not floor:
+        return None
+    try:
+        install = install or installed()
+    except AutoresearchError as exc:
+        return str(exc)
+    have, want = version_tuple(install.version), version_tuple(floor)
+    if have is None or want is None:
+        return (f"installed core {install.version!r} cannot be compared "
+                f"against min_core {floor!r} (components must be numeric)")
+    if have < want:
+        return (f"installed core {install.version} is below this domain's "
+                f"min_core {floor}; a stale install resurrects fixed "
+                "defects -- reinstall: pip install -U <core>")
+    return None
+
+
+def doctor(config) -> tuple[list[str], list[str]]:
+    """Read-only environment diagnosis: `(lines, problems)`.
+
+    The first real domain ran a copied (non-editable) install whose staleness
+    was only discoverable by md5-comparing site-packages against the
+    checkout, and pinned reopen conditions to 'reinstall >= the fix commit'
+    by hand. This makes the identity the record sees explicit and enforces
+    the domain's declared floor, if it declares one. Exit non-zero iff there
+    are problems, so a scheduled run can watch it."""
+    lines: list[str] = []
+    problems: list[str] = []
+    try:
+        inst = installed()
+        lines.append(f"core:      {inst.version}"
+                     + ("  (editable install)" if inst.editable
+                        else "  (copied install)")
+                     + (f"\n           from {inst.url}"
+                        + (f" @ {inst.commit[:12]}" if inst.commit else "")
+                        if inst.url else ""))
+    except AutoresearchError as exc:
+        lines.append("core:      unidentified")
+        problems.append(str(exc))
+        inst = None
+    import autoresearch
+    # `__file__` is None for a package loaded through an editable-import
+    # hook; fall back to the package path so the line never reads "None".
+    mod = getattr(autoresearch, "__file__", None)
+    if not mod:
+        paths = list(getattr(autoresearch, "__path__", []) or ["?"])
+        mod = paths[0]
+    lines.append(f"module:    {mod}")
+    lines.append(f"python:    {sys.executable}")
+    floor = getattr(config.upstream, "min_core", "")
+    if floor:
+        lines.append(f"min_core:  {floor}  (declared in [upstream])")
+    else:
+        lines.append("min_core:  (not declared; declare one in "
+                     "[upstream] to have staleness refused)")
+    if inst is not None:
+        problem = min_core_problem(config, inst)
+        if problem:
+            problems.append(problem)
+    return lines, problems
+
+
 def upstream_url(config, ref: str | None = None) -> tuple[str, str]:
     """Where to pull from: the domain's `[upstream]` table if it declares one,
     else where pip says this core was installed from. The override exists so a

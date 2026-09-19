@@ -99,6 +99,25 @@ def cmd_init(args):
     return validation
 
 
+def cmd_doctor(args):
+    """Diagnose the environment this domain's records are produced in.
+
+    Read-only. Reports which core answered (version, editable or copied,
+    install source), which interpreter and module resolved, and whether the
+    domain's declared `min_core` floor holds. Non-zero exit when a check
+    fails, so a scheduled run can watch it.
+    """
+    config = _load(args)
+    lines, problems = upstream_mod.doctor(config)
+    for line in lines:
+        print(line)
+    for problem in problems:
+        print(f"! {problem}")
+    if not problems:
+        print("environment consistent with this domain's declarations")
+    return 1 if problems else 0
+
+
 def cmd_hardware(args):
     """What this machine is, what it can run, and what it cannot."""
     config = _load(args)
@@ -798,7 +817,7 @@ def cmd_validate(args):
                          for p in record.problems(config.goal)]
     except AutoresearchError as exc:
         problems.append(str(exc))
-    for w in validate_mod.inbox_warnings(config):
+    for w in validate_mod.inbox_warnings(config) + validate_mod.core_warnings(config):
         print(f"! {w}")
 
     if skipped_runs:
@@ -1260,6 +1279,9 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     meas.add_argument("--entry")
     meas.add_argument("rest", nargs="*", help="passed through to the domain command")
     meas.set_defaults(func=cmd_measure)
+
+    sub.add_parser("doctor", help="diagnose the installed core against this "
+                   "domain's declarations").set_defaults(func=cmd_doctor)
 
     harness = sub.add_parser(
         "harness", help="this project's defects on the core, packaged for upstream")
