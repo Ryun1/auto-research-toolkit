@@ -24,6 +24,10 @@ id     = "research"
 prefix = "Q"
 title  = "Hypothesis Queue"
 view   = "docs/log/Hypothesis Queue.md"
+# The hypothesis tree drawn from the records: a generated mermaid view that
+# renders in Obsidian or GitHub. Delete the line (or set it empty) to turn
+# the graph off; either way `ar validate` stops checking it.
+graph_view = "docs/log/Hypothesis Graph.md"
 description = "Leads on the score. Nothing here is about the harness."
 
 [[tracks]]

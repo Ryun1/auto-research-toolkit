@@ -11,6 +11,14 @@ macOS). Start every session with the board:
     bin/ar entry list    # the entries themselves
     bin/ar budget        # every meter, and the stop decision
 
+The record draws its own map: `bin/ar entry graph` prints the hypothesis tree
+-- branch lineage, supersessions, related work, coloured by status -- as a
+mermaid diagram, the same markdown `ar render` writes into the graph view. A
+diagram of your own (a mechanism sketch, a decision tree) is a ```mermaid
+fence in an entry body or a memo: markdown renders it (Obsidian, GitHub) and
+nothing parses it back, so a picture can never drift from the record the way
+a hand-maintained map would.
+
 ## The protocol: claim -> work -> measure -> close
 
 - **A claim is the only write ticket.** `bin/ar claim ID --why "..." --max-runs N`

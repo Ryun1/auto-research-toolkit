@@ -21,6 +21,7 @@ they were already right:
 from __future__ import annotations
 
 import pathlib
+import re
 
 from . import skills as skills_mod
 
@@ -288,6 +289,133 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0,
     return "\n".join(out) + "\n"
 
 
+# -- the graph view -------------------------------------------------------
+
+#: Fill per status name, for the ones the default machines declare. A status
+#: outside this map takes a neutral fill, tinted darker when terminal, so a
+#: domain's custom machine still renders legibly without this file knowing it.
+_MERMAID_FILL = {
+    "queued": "#e8e8e8",
+    "blocked": "#ffe3b3",
+    "in-progress": "#cfe2ff",
+    "confirmed": "#d3f0d3",
+    "fixed": "#d3f0d3",
+    "refuted": "#f8d3d3",
+    "superseded": "#eadcf5",
+    "wontfix": "#e8e8e8",
+}
+
+
+def _mermaid_text(text: str, limit: int = 80) -> str:
+    """One line, quote-safe: a node label is double-quoted, so a `"` or a
+    line break in a title would break out of it."""
+    text = " ".join(str(text).split()).replace('"', "'").replace("`", "'")
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+#: Below this many edge-less entries, every node sits in the main flow: a
+#: short row of loose nodes reads fine, and subgraph chrome is noise. Above
+#: it, dagre lays the loose nodes in one horizontal line (the QSB corpus:
+#: 256 unlinked entries -> a 157,000px-wide, 137px-tall diagram), so they
+#: are bucketed into one status-labelled subgraph per status, chained
+#: vertically with invisible links (`~~~`, mermaid >= 9.4).
+BUCKET_MIN = 12
+
+
+def graph_view(track, entries) -> str:
+    """The track's hypothesis tree as a mermaid flowchart: the graph view.
+
+    Obsidian normalised two things: notes that link to each other, and a
+    picture drawn from those links rather than maintained beside them. The
+    links already exist in the records -- a branch's `parent`, an entry it
+    `supersedes`, the entries it is `related` to -- so the picture is
+    generated like every other view: records in, markdown out, and a hand
+    edit is a validate failure. Agents draw nothing by hand: `ar entry graph`
+    prints this same markdown, and a diagram of their own (a mechanism
+    sketch, a decision tree) is a ```mermaid fence in an entry body or a
+    memo, which renders but is never parsed back.
+
+    Edges only join entries on this track: a branch cannot cross tracks
+    (tree.py), and a view that silently reached across would make one track's
+    rendering depend on another's records. Ordering is fully sorted, so the
+    same records always render byte-identical output.
+
+    Entries that carry no edge the picture can draw are not dropped: a graph
+    that silently omitted most of the record would lie by omission. Past
+    BUCKET_MIN they are grouped into status subgraphs instead of the main
+    flow, because the flowchart engine cannot wrap loose nodes (see
+    BUCKET_MIN). A filed parent moves an entry out of its bucket on the next
+    render, which is the whole point of drawing from the records.
+    """
+    machine = track.machine
+    mine = sorted((e for e in entries if track.is_id(e.id)), key=lambda e: e.id)
+    ids = {e.id for e in mine}
+
+    class_of, fills = {}, {}
+    for e in mine:
+        if e.status not in class_of:
+            class_of[e.status] = "s_" + re.sub(r"\W", "_", e.status)
+            fills[e.status] = _MERMAID_FILL.get(
+                e.status,
+                "#e0d5eb" if machine.status(e.status).terminal else "#eeeeee")
+
+    def node(e, indent="    "):
+        return (f'{indent}{e.id}["{e.id} — {_mermaid_text(e.title)}"]'
+                f":::{class_of[e.status]}")
+
+    edge_pairs = []
+    for e in mine:
+        if e.parent and e.parent in ids:
+            edge_pairs.append(
+                (e.parent, e.id, f' -->|"{e.kind}"| ' if e.kind else " --> "))
+    for e in mine:
+        for old in sorted(e.supersedes):
+            if old in ids:
+                edge_pairs.append((old, e.id, ' ==>|"superseded by"| '))
+    drawn: set[tuple[str, str]] = set()
+    for e in mine:
+        for rel in sorted(e.related):
+            pair = tuple(sorted((e.id, rel)))
+            if rel in ids and pair not in drawn:
+                edge_pairs.append((pair[0], pair[1], " <-.->|related| "))
+                drawn.add(pair)
+    edges = [f"    {a}{label}{b}" for a, b, label in edge_pairs]
+    # Every id an edge touches is in the main flow. Both endpoints count: a
+    # superseded entry or a one-directional `related` target carries a drawn
+    # edge its own record does not mention, and classifying it loose would
+    # draw the node twice (main flow + bucket).
+    linked = {a for a, _, _ in edge_pairs} | {b for _, b, _ in edge_pairs}
+    isolated = [e for e in mine if e.id not in linked]
+
+    out = [BANNER, f"# {track.title} — Hypothesis Graph", "",
+           "```mermaid", "flowchart TD"]
+    if not mine:
+        out.append("    %% no entries yet")
+    elif len(isolated) >= BUCKET_MIN:
+        out += [node(e) for e in mine if e.id in linked]
+        out += edges
+        for status in sorted({e.status for e in isolated}):
+            members = [e for e in isolated if e.status == status]
+            out.append(f'    subgraph {class_of[status]}_bucket'
+                       f'["{status} — {len(members)} unlinked"]')
+            out.append("        direction TB")
+            prev = None
+            for e in members:
+                out.append(node(e, indent="        "))
+                if prev:
+                    out.append(f"        {prev} ~~~ {e.id}")
+                prev = e.id
+            out.append("    end")
+    else:
+        out += [node(e) for e in mine]
+        out += edges
+    for status in sorted(class_of):
+        out.append(f"    classDef {class_of[status]} "
+                   f"fill:{fills[status]},stroke:#555,color:#111")
+    out += ["```", ""]
+    return "\n".join(out) + "\n"
+
+
 # -- writing and checking views ------------------------------------------
 
 def write_views(config, entries) -> list[pathlib.Path]:
@@ -297,6 +425,11 @@ def write_views(config, entries) -> list[pathlib.Path]:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(queue_view(track, entries))
         written.append(path)
+        if track.graph_view:
+            path = config.paths.root / track.graph_view
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(graph_view(track, entries))
+            written.append(path)
     if _memos_pending(config):
         path = config.paths.memos / MEMOS_INDEX
         path.write_text(memos_index_view(config, entries))
@@ -332,6 +465,17 @@ def check_views(config, entries) -> list[str]:
             problems.append(
                 f"{track.view} differs from what the records render. It is a "
                 f"generated view: edit the entry record and re-run `ar render`.")
+        if track.graph_view:
+            path = config.paths.root / track.graph_view
+            expected = graph_view(track, entries)
+            if not path.exists():
+                problems.append(
+                    f"{track.graph_view} has never been rendered (`ar render`)")
+            elif path.read_text() != expected:
+                problems.append(
+                    f"{track.graph_view} differs from what the records render. "
+                    f"It is a generated view: edit the entry record and re-run "
+                    f"`ar render`.")
     if _memos_pending(config):
         path = config.paths.memos / MEMOS_INDEX
         # Message names the file relative to the domain root, matching how the

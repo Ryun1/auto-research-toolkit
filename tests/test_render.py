@@ -1,3 +1,5 @@
+import re
+
 from autoresearch import render
 from autoresearch.entries import Result
 from autoresearch.states import default_machine
@@ -145,3 +147,103 @@ def test_no_memos_means_no_index_and_no_problem(sandbox, store):
     render.write_views(sandbox, store.all())
     assert not (sandbox.paths.memos / render.MEMOS_INDEX).exists()
     assert not any("INDEX.md" in p for p in render.check_views(sandbox, store.all()))
+
+
+def test_graph_view_draws_lineage_status_and_links(sandbox, store):
+    """The graph view is the Obsidian promise: the picture is drawn from the
+    links the records already carry -- parent, supersedes, related -- never
+    maintained beside them."""
+    root = make_entry(store, "Q1", title='the "quoted" title')
+    make_entry(store, "Q2", parent="Q1", kind="debug")
+    make_entry(store, "Q3", related=["Q1"], supersedes=["Q2"])
+    close(store, root)
+    text = render.graph_view(sandbox.tracks["research"], store.all())
+    assert text.startswith(render.BANNER) and "flowchart TD" in text
+    assert '    Q1["Q1 — the \'quoted\' title"]' in text
+    assert '    Q1 -->|"debug"| Q2' in text
+    assert '    Q2 ==>|"superseded by"| Q3' in text
+    assert "    Q1 <-.->|related| Q3" in text
+    assert "    classDef s_confirmed fill:#d3f0d3" in text
+    assert "    classDef s_queued fill:#e8e8e8" in text
+
+
+def test_graph_view_is_deterministic_and_skips_cross_track_edges(sandbox, store):
+    """Same records, byte-identical markdown (check_views compares bytes); a
+    cross-track parent is skipped rather than silently reaching into another
+    track's records."""
+    make_entry(store, "Q1", parent="H1")
+    make_entry(store, "H1", track="harness")
+    first = render.graph_view(sandbox.tracks["research"], store.all())
+    assert first == render.graph_view(sandbox.tracks["research"], store.all())
+    assert "H1" not in first and "Q1" in first
+    harness = render.graph_view(sandbox.tracks["harness"], store.all())
+    assert "H1" in harness and "Q1" not in harness
+
+
+def test_graph_view_writes_and_checks_like_any_view(sandbox, store):
+    sandbox.tracks["research"].graph_view = "docs/log/Hypothesis Graph.md"
+    make_entry(store, "Q1")
+    written = render.write_views(sandbox, store.all())
+    assert sandbox.paths.root / "docs/log/Hypothesis Graph.md" in written
+    assert render.check_views(sandbox, store.all()) == []
+    path = sandbox.paths.root / sandbox.tracks["research"].graph_view
+    path.write_text(path.read_text() + "\nhand edit\n")
+    problems = render.check_views(sandbox, store.all())
+    assert len(problems) == 1 and "Hypothesis Graph.md" in problems[0]
+
+
+def test_graph_view_never_rendered_is_reported(sandbox, store):
+    sandbox.tracks["research"].graph_view = "docs/log/Hypothesis Graph.md"
+    make_entry(store, "Q1")
+    problems = render.check_views(sandbox, store.all())
+    assert any("Hypothesis Graph.md" in p and "never been rendered" in p
+               for p in problems)
+
+
+def test_no_graph_view_declared_means_no_graph_and_no_problem(sandbox, store):
+    sandbox.tracks["research"].graph_view = ""
+    make_entry(store, "Q1")
+    assert not any("Hypothesis Graph" in p
+                   for p in render.check_views(sandbox, store.all()))
+
+
+def test_many_unlinked_entries_are_bucketed_by_status(sandbox, store):
+    """dagre lays unlinked nodes in one horizontal line, which at corpus
+    scale is a diagram thousands of screens wide (measured on the QSB
+    record: 157,000px for 256 unlinked entries). Past BUCKET_MIN the loose
+    entries go into status subgraphs, chained vertically -- and nothing is
+    dropped or drawn twice."""
+    make_entry(store, "Q1", parent="Q2", kind="improve")
+    make_entry(store, "Q2")
+    close(store, make_entry(store, "Q10"))
+    for i in range(20, 40):
+        make_entry(store, f"Q{i}", status="refuted")
+    for i in range(40, 60):
+        make_entry(store, f"Q{i}")
+    text = render.graph_view(sandbox.tracks["research"], store.all())
+    assert 'subgraph s_queued_bucket["queued — 20 unlinked"]' in text
+    assert 'subgraph s_refuted_bucket["refuted — 20 unlinked"]' in text
+    assert 'subgraph s_confirmed_bucket["confirmed — 1 unlinked"]' in text
+    assert "Q40 ~~~ Q41" in text and "Q20 ~~~ Q21" in text
+    # The linked pair stays in the main flow, outside every bucket.
+    assert '    Q2 -->|"improve"| Q1' in text
+    node_ids = re.findall(r"^\s+(Q\d+)\[", text, re.M)
+    assert sorted(node_ids) == sorted(
+        [f"Q{i}" for i in (list(range(20, 40)) + list(range(40, 60)))]
+        + ["Q1", "Q2", "Q10"])
+    again = render.graph_view(sandbox.tracks["research"], store.all())
+    assert again == text
+
+
+def test_a_referenced_entry_is_not_bucketed_twice(sandbox, store):
+    """Q4 appears only as the target of Q5's `supersedes` -- its own record
+    carries no link -- so it must land in the main flow, never in a bucket
+    (which would draw the node twice)."""
+    for i in range(20, 40):
+        make_entry(store, f"Q{i}")
+    make_entry(store, "Q4", status="refuted")
+    make_entry(store, "Q5", supersedes=["Q4"])
+    text = render.graph_view(sandbox.tracks["research"], store.all())
+    assert 'Q4 ==>|"superseded by"| Q5' in text
+    assert text.count('    Q4["Q4 —') == 1
+    assert "s_refuted_bucket" not in text  # one refuted entry is below BUCKET_MIN

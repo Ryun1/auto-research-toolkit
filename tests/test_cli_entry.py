@@ -7,7 +7,7 @@ of `entry show`.
 """
 import json
 
-from autoresearch import cli
+from autoresearch import cli, render
 from autoresearch.entries import Claim
 from conftest import close, make_entry
 
@@ -48,6 +48,24 @@ def test_list_json_is_the_pick_work_projection(sandbox, store, capsys):
     assert _ar(sandbox, "entry", "list") == 0
     out = capsys.readouterr().out
     assert "2 entries read" in out and "[s1]" in out
+
+
+def test_entry_graph_prints_the_view_markdown(sandbox, store, capsys):
+    """`ar entry graph` prints the same markdown `ar render` writes, so an
+    agent pasting it into a memo cannot produce a second, disagreeing copy."""
+    make_entry(store, "Q1", parent="Q2", kind="improve")
+    make_entry(store, "Q2")
+    assert _ar(sandbox, "entry", "graph", "--track", "research") == 0
+    out = capsys.readouterr().out
+    assert out == render.graph_view(sandbox.tracks["research"], store.all())
+    assert '    Q2 -->|"improve"| Q1' in out
+
+    assert _ar(sandbox, "entry", "graph") == 0
+    both = capsys.readouterr().out
+    assert out in both and "Harness Debt" in both
+
+    assert _ar(sandbox, "entry", "graph", "--track", "nope") != 0
+    assert "not declared" in capsys.readouterr().err
 
 
 def test_list_json_honours_the_filters(sandbox, store, capsys):
