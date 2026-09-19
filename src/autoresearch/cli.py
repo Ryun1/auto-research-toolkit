@@ -483,6 +483,14 @@ def cmd_close(args):
     print(f"{entry.id} closed {args.status}"
           + (f" ({args.closure})" if args.closure else "")
           + f" — evidence: {result.memo}")
+    if not track.machine.status(entry.status).terminal:
+        # Which statuses are terminal is per-track machine config (a defect
+        # track closes `fixed`, not `confirmed`), and the first real domain
+        # filed a harness defect with the research-track verb, watched the
+        # entry bounce back to the queue, and only then learned the rule.
+        print(f"! {args.status!r} is not terminal on track {track.id!r}: "
+              f"{entry.id} stays actionable and returns to the queue "
+              f"(terminal here: {', '.join(sorted(track.machine.terminal_names))})")
     hint = skills_mod.skill_candidate_hint(entry, config)
     if hint:
         print(f"! {hint}")
