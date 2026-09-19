@@ -262,6 +262,19 @@ class Entry:
         if not isinstance(self.context, Applicability):
             raise SchemaError("entry.context must be a context object")
         self.context.__post_init__()
+        # list[str] prose fields are joined verbatim into views and briefs; a
+        # non-string item (a YAML `key: value` line collapses to a mapping)
+        # must be refused here, at the record that caused it, not crash a
+        # renderer three layers away.
+        for name in ("mechanisms", "tags", "null_checks",
+                     "sources", "supersedes", "related"):
+            value = getattr(self, name)
+            if (not isinstance(value, list)
+                    or not all(isinstance(item, str) and item.strip()
+                               for item in value)):
+                raise SchemaError(
+                    f"entry.{name} must be a list of non-empty strings "
+                    f"(got {type(value).__name__} item in {name})")
         if self.result is not None:
             self.result.__post_init__()
         if self.kind:

@@ -222,3 +222,18 @@ def test_closure_cannot_broaden_explicit_entry_scope():
     entry.apply(default_machine(), "confirmed", "s", result=result(
         applicability=Applicability(hardware="RTX", workload="uniform16")))
     assert entry.result.applicability.workload == "uniform16"
+
+
+def test_a_non_string_prose_list_item_is_refused_at_the_record(store):
+    """A YAML `key: value` line in a sources/supersedes/related list collapses
+    to a mapping. The reader must refuse it loudly, naming the entry field --
+    not let it load and crash a renderer three layers away with a bare
+    TypeError, with nothing pointing back at the record that caused it."""
+    from autoresearch.errors import SchemaError
+    from conftest import make_entry
+    with pytest.raises(SchemaError, match="entry.sources"):
+        make_entry(store, sources=["a plain string", {"key": "value"}])
+    with pytest.raises(SchemaError, match="entry.supersedes"):
+        make_entry(store, supersedes=[{"id": "Q0"}])
+    with pytest.raises(SchemaError, match="entry.mechanisms"):
+        make_entry(store, mechanisms=["ok", ""])
