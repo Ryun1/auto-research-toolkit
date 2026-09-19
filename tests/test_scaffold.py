@@ -21,6 +21,22 @@ def test_a_scaffolded_domain_loads_and_validates(tmp_path):
     assert main(["--domain", str(root), "validate"]) == 0
 
 
+def test_the_scaffold_teaches_the_harness_debt_map(scaffolded):
+    """H4, from the field: closed harness defects never became onboarding
+    knowledge, and the first real domain hand-built the compensation layer --
+    a debt-map skill checked before re-filing or re-debugging. The scaffold
+    ships the pattern so the second domain does not re-learn it."""
+    skills = (scaffolded.paths.root / "docs/skills/README.md").read_text()
+    assert "harness-debt-map" in skills
+    assert "Start a harness-debt map early" in skills
+    agents = (scaffolded.paths.root / "AGENTS.md").read_text()
+    assert "When a toolkit command misbehaves" in agents
+    assert "--track harness" in agents
+    # The terminal-verdict lesson the field paid for: a defect track closes
+    # `fixed`, not `confirmed`.
+    assert "fixed" in agents and "not `confirmed`" in agents
+
+
 def test_it_ignores_the_state_that_must_not_cross_machines(scaffolded):
     """Stopping on one machine and resuming on another is the supported
     workflow; the claim lock and the workspace pool are the two things that

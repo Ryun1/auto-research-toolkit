@@ -111,6 +111,21 @@ path: you may prepare such a command, never run it. `bin/ar policy` shows the
 never-rules and proves each refuses something. `bin/ar validate` checks
 records, views, runs and policy before you go.
 
+## When a toolkit command misbehaves
+
+A crash, a wrong display, or a command acting on the wrong layer is a defect
+in the core, not a puzzle to work around -- and it may already be known. Check
+`docs/skills/` for a harness-debt map first (see that directory's README), then
+`docs/log/Harness Debt.md`. New findings go on the harness track with
+evidence, never into prose:
+
+    bin/ar entry new --track harness '<title>' --core auto --repro '<command>' \
+        --observed '<what happened>' --expected '<what should happen>'
+
+`bin/ar harness export` packages the open defects for upstream; publishing is
+a person's act. Closing uses this track's terminal verdicts (`fixed`/`wontfix`,
+not `confirmed`): `bin/ar close H-1 fixed --memo inbox/...`.
+
 ## Do not start the coordinator
 
 `ar loop` drives this domain autonomously and refuses to start unless

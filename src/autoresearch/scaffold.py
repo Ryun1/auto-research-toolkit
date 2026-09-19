@@ -405,6 +405,36 @@ Three rules, each enforced by `ar skill check` and by `ar validate`:
 
 Write one with `ar skill distil`, or by hand. `ar skill list` shows what exists,
 what is stale, and how many closed entries no skill cites yet.
+
+## Start a harness-debt map early
+
+The first real domain lost an afternoon to a defect that had already been
+found, fixed, and *forgotten* — nothing turned its closed harness entries into
+onboarding knowledge for the next session. It compensated by hand-writing one
+skill, `harness-debt-map`, and checking it before ever filing or debugging a
+toolkit command again. Adopt the same pattern as soon as your first harness
+entries close (the `H` track):
+
+```markdown
+---
+name: harness-debt-map
+description: "use when a toolkit command misbehaves in this domain — a crash,
+  a wrong display, a missing onboarding path, or an unexpected selection — to
+  check whether the defect is already recorded before filing it again or
+  debugging the wrong layer."
+cites: [H1, H2]
+distilled: {at: <re-stamp when the cited entries move>, core: <core version>}
+---
+
+# Known harness debt and where it landed
+
+- **[H1] <one-line title>**: status here, remedy there, reopen condition.
+```
+
+One bullet per defect: what it was, whether it is fixed (and in which core
+version), and the standing rule it taught. File new findings on the harness
+track with evidence (`ar entry new --track harness --repro ... --observed
+...`) — the map points at the records, it does not replace them.
 """
 
 
@@ -521,6 +551,21 @@ metered spend:
 path: you may prepare such a command, never run it. `bin/ar policy` shows the
 never-rules and proves each refuses something. `bin/ar validate` checks
 records, views, runs and policy before you go.
+
+## When a toolkit command misbehaves
+
+A crash, a wrong display, or a command acting on the wrong layer is a defect
+in the core, not a puzzle to work around -- and it may already be known. Check
+`docs/skills/` for a harness-debt map first (see that directory's README), then
+`docs/log/Harness Debt.md`. New findings go on the harness track with
+evidence, never into prose:
+
+    bin/ar entry new --track harness '<title>' --core auto --repro '<command>' \\
+        --observed '<what happened>' --expected '<what should happen>'
+
+`bin/ar harness export` packages the open defects for upstream; publishing is
+a person's act. Closing uses this track's terminal verdicts (`fixed`/`wontfix`,
+not `confirmed`): `bin/ar close H-1 fixed --memo inbox/...`.
 
 ## Do not start the coordinator
 
