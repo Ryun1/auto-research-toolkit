@@ -302,7 +302,9 @@ record now grows only for the roles that read it.
 Graph.md"` gets a second generated view: the hypothesis tree as a mermaid
 flowchart — branch lineage, supersessions, related work, nodes coloured by
 status — which Obsidian, GitHub or any mermaid renderer displays as a
-clickable picture. Like every view it is generated from the records, so
+clickable picture. Wide corpora are handled: entries no edge touches are
+grouped into status-labelled buckets instead of one endless row of loose
+nodes. Like every view it is generated from the records, so
 agents never maintain a diagram beside the record that would drift from it;
 `ar entry graph` prints the same markdown (paste it into a memo). A diagram
 of the agent's own — a mechanism sketch, a decision tree — is a ```mermaid
