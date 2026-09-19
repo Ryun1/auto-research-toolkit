@@ -95,7 +95,14 @@ def memos_index_view(config, entries) -> str:
 
 def _fmt(value, width=None):
     if isinstance(value, float):
+        # `,.4g` is the house format: sub-1 values keep their digits where
+        # `,.0f` rounded a 0.701 objective to "1" (H2). But `g` goes
+        # scientific -- 9999.99 reads "1e+04", a 6,000,000 target "6e+06" --
+        # so any magnitude at or above 1 that formats scientific falls back
+        # to `,.0f`. Tiny values keep the compact `1.23e-05` form.
         text = f"{value:,.4g}"
+        if "e" in text and abs(value) >= 1:
+            text = f"{value:,.0f}"
     elif isinstance(value, int):
         text = f"{value:,}"
     else:

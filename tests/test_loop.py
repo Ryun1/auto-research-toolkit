@@ -335,6 +335,23 @@ def test_the_iteration_seconds_ceiling_stops_new_work(sandbox):
     assert _phase(it, "qc").seconds >= 0, "the record still gets written"
 
 
+def test_the_iteration_report_keeps_sub1_objective_digits():
+    """H2: `,.0f` rounded a 0.701 objective to `1` here too, and the naive
+    `,.4g` fix would render a six-digit target as `6e+06`."""
+    it = Iteration(n=1, objective=0.701, target=6_000_000.0)
+    assert "objective: 0.701 vs target 6,000,000" in it.report()
+
+
+def test_the_house_format_never_reads_scientific_above_one():
+    """The boundary is not a threshold, it is the format itself: 9999.99
+    rounds *to* 10,000, so `,.4g` renders it "1e+04" even below 10**4."""
+    from autoresearch.render import _fmt
+    assert _fmt(9999.99) == "10,000"
+    assert _fmt(0.701) == "0.701"
+    assert _fmt(1.23e-05) == "1.23e-05"
+    assert _fmt(6_000_000.0) == "6,000,000"
+
+
 def test_a_workers_runs_and_gpu_hours_are_charged_to_the_campaign(sandbox):
     from autoresearch.entries import Store
     make_entry(Store(sandbox.paths.entries), "Q1", impact=1.0)

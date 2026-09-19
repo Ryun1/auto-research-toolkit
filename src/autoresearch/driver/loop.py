@@ -135,7 +135,8 @@ class Iteration:
             out.append("  verdicts:  " + ", ".join(
                 f"{k}={v}" for k, v in self.verdicts.items()))
         if self.objective is not None and self.target is not None:
-            out.append(f"  objective: {self.objective:,.0f} vs target {self.target:,.0f}")
+            out.append(f"  objective: {render._fmt(self.objective)} vs "
+                       f"target {render._fmt(self.target)}")
         out.append(f"  stop:      {self.stop}"
                    + (f" — {self.stop_detail}" if self.stop_detail else ""))
         return "\n".join(out)

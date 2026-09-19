@@ -504,8 +504,10 @@ def cmd_measure(args):
     path = runs_mod.append(config.paths.runs / f"{args.session}.jsonl", record)
     value = (config.goal.objective_value(record.metrics)
              if record.status == "ok" else None)
+    # H2: `,.0f` rounded a 0.701 objective to `1` -- a display 1000x off that
+    # masks pass/fail against the target. The house format is render._fmt.
     print(f"{record.id} {record.status}"
-          + (f"  objective={value:,.0f}" if value is not None else "")
+          + (f"  objective={render._fmt(value)}" if value is not None else "")
           + f"  -> {path.relative_to(config.paths.root)}")
     return 0
 
@@ -588,7 +590,7 @@ def cmd_budget(args):
         # target itself, which said "not met" for every maximise domain and
         # disagreed with the stop decision printed directly above it.
         met = config.goal.is_met(best[1].metrics, target)
-        print(f"best objective {best[0]:,.0f} vs target {target:,.0f}"
+        print(f"best objective {render._fmt(best[0])} vs target {render._fmt(target)}"
               + ("  ** GOAL MET **" if met else ""))
     return 0
 
