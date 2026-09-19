@@ -19,6 +19,7 @@ misconfigured domain fails *before* an iteration is spent, not during one.
 """
 from __future__ import annotations
 
+import math
 import pathlib
 import re
 import tomllib
@@ -58,6 +59,14 @@ _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
 #: misspelled price is a cost meter that silently reads zero.
 TYPESAFE_BRAIN_KEYS = {"typesafe_model", "typesafe_url",
                        "typesafe_input_per_mtok", "typesafe_output_per_mtok"}
+
+#: `timeout_seconds` is the one non-typesafe `[brain]` option: a per-ask
+#: ceiling for every backend built from the table (the subprocess ceiling for
+#: commands, the HTTP ceiling for the built-in brain). A wedged backend
+#: command must surface as a phase failure with its stderr named, not freeze
+#: the dispatch phase. 0 disables the ceiling (the pre-ceiling behavior);
+#: negative or non-numeric values are refused at load, fail-closed like the
+#: rest of the table.
 
 
 @dataclass
@@ -437,12 +446,14 @@ class DomainConfig:
 def _brain_spec(data) -> dict:
     """Read and check the top-level `brain` table.
 
-    Keys are `default`, a role name, `authorize_spend`, or one of
-    `TYPESAFE_BRAIN_KEYS`; values are `"typesafe"` (the built-in
+    Keys are `default`, a role name, `authorize_spend`, `timeout_seconds`, or
+    one of `TYPESAFE_BRAIN_KEYS`; values are `"typesafe"` (the built-in
     TypeSafe/Jev brain), a non-empty list of strings -- the command the
     ProcessBrain contract runs -- or, for
     `authorize_spend` and the `typesafe_*` options, a bool / string / number
-    per key. The built-in brain can incur API charges and is fail-closed:
+    per key. `timeout_seconds` is a nonnegative number (0 disables the
+    per-ask ceiling). The built-in brain can incur API charges and is
+    fail-closed:
     without `authorize_spend = true`, a domain naming it is refused at load,
     because a default that can spend without saying so is a bill waiting to
     happen.
@@ -473,6 +484,17 @@ def _brain_spec(data) -> dict:
             raise ConfigError(
                 f"brain.{key}: unknown typesafe option; allowed: "
                 f"{sorted(TYPESAFE_BRAIN_KEYS)}")
+        if key == "timeout_seconds":
+            # `not value >= 0` also refuses nan, which `value < 0` would
+            # wave through; `isfinite` refuses inf, which passes that check
+            # and then crashes urlopen with an uncaught OverflowError.
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not value >= 0 or not math.isfinite(value)):
+                raise ConfigError(
+                    f"brain.timeout_seconds: must be a finite nonnegative "
+                    f"number of seconds, 0 to disable, got {value!r}")
+            spec[key] = float(value)
+            continue
         if key != "default" and key not in Role.ALL:
             raise ConfigError(
                 f"brain.{key}: not a role; keys are 'default' or one of "

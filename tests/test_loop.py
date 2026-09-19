@@ -864,6 +864,97 @@ def test_the_brief_carries_the_mechanism_coverage_map(sandbox, store):
     assert "novel-tag" not in payload["mechanism_coverage"]
 
 
+BOARD_FIELDS = ("open_entries", "closed_directions", "mechanism_coverage",
+                "branch_families")
+
+
+def test_the_generator_and_scout_briefs_carry_the_board(sandbox, store):
+    """The board fields route on whose prompt reads them: a generator that
+    cannot see closed_directions proposes closed directions, so it must
+    carry all four."""
+    make_entry(store, "Q1", mechanisms=["known-tag"])
+    brief = json.loads(Coordinator(sandbox, ScriptedBrain(dict(IDLE)))
+                       ._brief(Role.GENERATOR, Iteration(n=1)))
+    for key in BOARD_FIELDS:
+        assert key in brief, f"the generator brief lost `{key}`"
+    scout = json.loads(Coordinator(sandbox, ScriptedBrain(dict(IDLE)))
+                       ._brief(Role.SCOUT, Iteration(n=1)))
+    for key in BOARD_FIELDS:
+        assert key in scout, f"the scout brief lost `{key}`"
+    assert scout["open_entries"], "an empty board proves nothing"
+
+
+def test_the_worker_brief_carries_no_board_and_the_curator_only_coverage(
+        sandbox, store):
+    """The record grows monotonically, so one superset brief made every
+    role's payload grow with it. The worker's data arrives through `extra`
+    (entry, lineage, record_command); the curator reasons over the coverage
+    map and this iteration's verdicts -- the rest of the board it does not
+    route on."""
+    make_entry(store, "Q1", mechanisms=["known-tag"])
+    briefs = {}
+
+    def capture(role):
+        base = IDLE[role]
+
+        def handler(brief):
+            briefs[role] = json.loads(brief)
+            return base(brief)
+        return handler
+
+    handlers = {role: capture(role)
+                for role in (Role.GENERATOR, Role.WORKER, Role.CURATOR)}
+    handlers[Role.QC] = IDLE[Role.QC]
+    it = Coordinator(sandbox, ScriptedBrain(handlers)).run_iteration(1)
+    for key in BOARD_FIELDS:
+        assert key in briefs[Role.GENERATOR]
+        assert key not in briefs[Role.WORKER], \
+            f"the worker brief carries `{key}`, which it never routes on"
+    assert {"entry", "lineage", "record_command", "instruction"} \
+        <= set(briefs[Role.WORKER])
+    curator = briefs[Role.CURATOR]
+    assert "mechanism_coverage" in curator, "the curator's prompt reads it"
+    assert "verdicts" in curator
+    for key in BOARD_FIELDS:
+        if key != "mechanism_coverage":
+            assert key not in curator
+    assert "open_entries" not in briefs[Role.WORKER]
+    assert it.verdicts  # the run itself stayed healthy
+
+
+def test_the_judge_brief_carries_an_excluded_summary_not_the_rows(
+        sandbox, store):
+    """The judge may not veto an excluded entry, so the unbounded per-row
+    list bought it nothing: a count by filter keeps the brief bounded while
+    the vetoable ranking rows ride in full."""
+    from conftest import close
+    close(sandbox, store, make_entry(store, "Q1"))       # terminal: excluded
+    make_entry(store, "Q2", impact=1.0, cost=1e9)        # unaffordable: excluded
+    make_entry(store, "Q3", impact=1.0)                  # shortlistable
+    briefs = []
+    handlers = dict(IDLE)
+    handlers[Role.JUDGE] = lambda b: briefs.append(b) or []
+    Coordinator(sandbox, ScriptedBrain(handlers)).run_iteration(1)
+    payload = json.loads(briefs[0])
+    assert payload["excluded"] == {"count": 2,
+                                   "by_filter": {"terminal": 1, "cost": 1}}
+    assert not any(entry_id in json.dumps(payload["excluded"])
+                   for entry_id in ("Q1", "Q2")), "the row list leaked"
+    assert [row["id"] for row in payload["ranking"]] == ["Q3"]
+    assert "You may not veto an excluded entry" in payload["instruction"]
+    for key in BOARD_FIELDS:
+        assert key not in payload, "the judge gets no board fields"
+
+
+def test_the_brief_is_compact_json(sandbox):
+    """A brief is a wire payload: the pretty-printed form was bytes every
+    backend paid for and never read."""
+    raw = Coordinator(sandbox, ScriptedBrain(dict(IDLE)))._brief(
+        Role.GENERATOR, Iteration(n=1))
+    assert "\n" not in raw
+    assert raw.startswith('{"role":"generator","iteration":1')
+
+
 def test_every_brief_is_strict_json(sandbox):
     """A brief is a payload for arbitrary backends, so it must parse as
     spec-compliant JSON. An unlimited meter's `remaining()` is float("inf"),

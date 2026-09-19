@@ -177,6 +177,60 @@ def read_all(directory, strict: bool = False) -> list[RunRecord]:
     return read_with_skipped(directory, strict)[0]
 
 
+def _file_signature(path: pathlib.Path) -> tuple[int, int]:
+    stat = path.stat()
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+#: Per-file read cache, keyed by `(resolved path, strict)`:
+#: `((size, mtime_ns), records, skipped)`. `read_all` runs 3-5 times per
+#: coordinator iteration, and re-parsing every JSONL each time dominated large
+#: corpora. The signature is re-stat'ed per file on every call, so an append --
+#: the only write rows ever get, one writer per session file (H100, H129) --
+#: or any other change re-parses the whole file on the next read. `strict` is
+#: part of the key: a file whose foreign rows were skipped under the default
+#: reader must not satisfy a strict reader that has to raise on them. Parsed
+#: errors are never cached -- a malformed line raises on every call until the
+#: row is fixed. The cached records are handed out as-is: rows are read-only
+#: evidence, and every writer in this codebase goes through `append`, never
+#: through a record read back from disk.
+_RUNS_CACHE: dict[tuple[str, bool], tuple[tuple[int, int], list, int]] = {}
+
+
+def _read_runs_file(path: pathlib.Path, strict: bool) -> tuple[list, int]:
+    """One file under the `read_with_skipped` rules: valid rows out, the
+    refusal (if any) named with file and line."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        lineno = exc.object.count(b"\n", 0, exc.start) + 1
+        raise SchemaError(f"{path}:{lineno}: {exc}") from exc
+    out, skipped = [], 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SchemaError(f"{path}:{lineno}: {exc}") from exc
+        if not isinstance(payload, dict):
+            if strict:
+                raise SchemaError(f"{path}:{lineno}: run record must be a JSON object")
+            skipped += 1
+            continue
+        if not strict and payload.get("schema") != SCHEMA:
+            skipped += 1        # a foreign row: not ours to interpret
+            continue
+        try:
+            out.append(RunRecord.from_dict(payload))
+        except (SchemaError, TypeError) as exc:
+            if strict:
+                raise SchemaError(f"{path}:{lineno}: {exc}") from exc
+            skipped += 1
+    return out, skipped
+
+
 def read_with_skipped(directory, strict: bool = False) -> tuple[list, int]:
     """`(records, skipped)`. The count is never dropped on the floor: a reader
     that says "12 rows" when it saw 9,455 is the ambiguity H81/H96 are about."""
@@ -184,34 +238,23 @@ def read_with_skipped(directory, strict: bool = False) -> tuple[list, int]:
     if not directory.exists():
         return [], 0
     out, skipped = [], 0
+    live = {(str(p.resolve()), strict) for p in directory.glob("*.jsonl")}
+    # Prune deleted files so a same-signature recreation cannot resurrect
+    # ghost rows: the signature describes bytes, not existence.
+    for stale in [k for k in list(_RUNS_CACHE) if k not in live]:
+        del _RUNS_CACHE[stale]
     for path in sorted(directory.glob("*.jsonl")):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            lineno = exc.object.count(b"\n", 0, exc.start) + 1
-            raise SchemaError(f"{path}:{lineno}: {exc}") from exc
-        for lineno, line in enumerate(text.splitlines(), 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise SchemaError(f"{path}:{lineno}: {exc}") from exc
-            if not isinstance(payload, dict):
-                if strict:
-                    raise SchemaError(f"{path}:{lineno}: run record must be a JSON object")
-                skipped += 1
-                continue
-            if not strict and payload.get("schema") != SCHEMA:
-                skipped += 1        # a foreign row: not ours to interpret
-                continue
-            try:
-                out.append(RunRecord.from_dict(payload))
-            except (SchemaError, TypeError) as exc:
-                if strict:
-                    raise SchemaError(f"{path}:{lineno}: {exc}") from exc
-                skipped += 1
+        key = (str(path.resolve()), strict)
+        sig = _file_signature(path)
+        cached = _RUNS_CACHE.get(key)
+        if cached is not None and cached[0] == sig:
+            out.extend(cached[1])
+            skipped += cached[2]
+            continue
+        records, file_skipped = _read_runs_file(path, strict)
+        _RUNS_CACHE[key] = (sig, records, file_skipped)
+        out.extend(records)
+        skipped += file_skipped
     return out, skipped
 
 
@@ -222,7 +265,25 @@ def snapshot(directory) -> dict:
             for p in directory.rglob("*.jsonl")}
 
 
+#: Whole-file digest cache, keyed by resolved path:
+#: `((size, mtime_ns), digest)`. `snapshot` runs once per worker per iteration
+#: and re-hashes every inherited file whose bytes are, in practice, identical
+#: across workers and iterations. The signature is re-stat'ed per call, so
+#: only the hashing of unchanged bytes is avoided; the returned
+#: `(st_size, digest)` structure is untouched. A truncated digest -- `size`
+#: below the file's length -- describes a prefix the signature does not
+#: capture, so it is computed and never cached.
+_DIGEST_CACHE: dict[str, tuple[tuple[int, int], bytes]] = {}
+
+
 def _digest(path, size=None):
+    sig = _file_signature(path)
+    # A size beyond the file's length reads to EOF, exactly like `None`.
+    whole = size is None or size >= sig[0]
+    key = str(path.resolve())
+    cached = _DIGEST_CACHE.get(key) if whole else None
+    if cached is not None and cached[0] == sig:
+        return cached[1]
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         while size is None or size > 0:
@@ -232,6 +293,8 @@ def _digest(path, size=None):
             digest.update(chunk)
             if size is not None:
                 size -= len(chunk)
+    if whole:
+        _DIGEST_CACHE[key] = (sig, digest.digest())
     return digest.digest()
 
 

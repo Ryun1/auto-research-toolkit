@@ -1,3 +1,6 @@
+import json
+import pathlib
+
 import pytest
 
 from autoresearch.errors import SchemaError
@@ -157,3 +160,53 @@ def test_invalid_rows_cannot_win_or_satisfy_goal():
     assert best_run(invalid, GOAL) is None
     value, winner = best_run([good, *invalid], GOAL)
     assert (value, winner.id) == (10.0, "good")
+
+
+def test_read_all_picks_up_rows_appended_outside_the_reader(tmp_path):
+    """Rows are append-only per session file, and workers append while the
+    coordinator reads: a cached read must still see every new row on the next
+    call, which the re-stat'ed (size, mtime_ns) signature guarantees."""
+    path = tmp_path / "s1.jsonl"
+    append(path, record(id="r1"))
+    assert [r.id for r in read_all(tmp_path)] == ["r1"]
+    appended = record(id="r2")
+    with path.open("a") as stream:  # a raw append, outside `runs.append`
+        stream.write(json.dumps(appended.to_dict(), sort_keys=True) + "\n")
+    assert [r.id for r in read_all(tmp_path)] == ["r1", "r2"]
+
+
+def test_skipped_count_is_recomputed_for_a_changed_file(tmp_path):
+    from autoresearch.runs import read_with_skipped
+    path = tmp_path / "mixed.jsonl"
+    path.write_text("[1, 2]\n")
+    append(path, record(id="valid"))
+    rows, skipped = read_with_skipped(tmp_path)
+    assert ([r.id for r in rows], skipped) == (["valid"], 1)
+    path.write_text(path.read_text() + "[3]\n")  # one more foreign row
+    rows, skipped = read_with_skipped(tmp_path)
+    assert ([r.id for r in rows], skipped) == (["valid"], 2)
+
+
+def test_snapshot_reuses_the_digest_of_unchanged_files(tmp_path, monkeypatch):
+    """`snapshot` runs once per worker per iteration over inherited files whose
+    bytes are identical across workers; only the hashing of unchanged bytes may
+    be cached, and the returned (st_size, digest) structure is untouched."""
+    from autoresearch import runs as runs_mod
+    path = tmp_path / "s1.jsonl"
+    append(path, record(id="r1"))
+    first = runs_mod.snapshot(tmp_path)
+    calls = []
+    real_sha256 = runs_mod.hashlib.sha256
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real_sha256(*args, **kwargs)
+
+    monkeypatch.setattr(runs_mod.hashlib, "sha256", counting)
+    assert runs_mod.snapshot(tmp_path) == first
+    assert calls == []  # unchanged bytes: no re-hash
+    with path.open("a") as stream:
+        stream.write("\n")
+    second = runs_mod.snapshot(tmp_path)
+    assert len(calls) == 1  # the changed file was re-hashed
+    assert second[pathlib.Path("s1.jsonl")][1] != first[pathlib.Path("s1.jsonl")][1]

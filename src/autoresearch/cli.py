@@ -2,8 +2,11 @@
 
 One entry point per verb, every verb reading the same records. There is no
 command here that edits a queue document, because there is no queue document to
-edit: `ar render` writes the views and `ar validate` refuses a view that was
-edited by hand.
+edit: the views are generated, and `ar validate` refuses a view that was edited
+by hand. Every verb that saves an entry record re-renders the views itself
+(`_render_views`), so a hand-driven agent never eats a failed validate between
+a mutation and its next read; `ar render` remains the surface that narrates
+what was written.
 
 Unknown flags are refused by argparse, deliberately. In the source harness
 **eight tools silently ignored an unrecognised flag and ran their default mode
@@ -13,8 +16,10 @@ instead, so a mistyped flag read as a successful run of what you asked for**
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime as dt
 import json
+import math
 import pathlib
 import subprocess
 import sys
@@ -70,6 +75,16 @@ def _make_probe(config):
 def _probe_target(config):
     """Resolve the goal's target, running the domain's probe if it needs one."""
     return config.goal.target.resolve(_make_probe(config))
+
+
+def _render_views(config) -> None:
+    """Re-write the generated views after a mutation. `ar validate` refuses a
+    view that disagrees with the records, and the queue view carries status and
+    claim state -- so a verb that saves an entry record re-renders here, or
+    every hand-driven mutation costs a failed validate before the next read.
+    Silent by design: `ar render` is the surface that narrates what was written.
+    """
+    render.write_views(config, _store(config).all())
 
 
 # -- verbs ----------------------------------------------------------------
@@ -272,6 +287,7 @@ def cmd_entry_new(args):
             "filenames, so a collision is loud here rather than a silent "
             "renumber after every citation was written (H79).")
     print(store.save(entry))
+    _render_views(config)
     return 0
 
 
@@ -301,6 +317,7 @@ def cmd_entry_amend(args):
         "set " + ", ".join(f"{name}={changes[name]!r}" for name in sorted(changes))))
     entry.updated = _iso()
     store.save(entry)
+    _render_views(config)
     print(f"{entry.id} amended: {', '.join(sorted(changes))}")
     return 0
 
@@ -324,6 +341,7 @@ def cmd_entry_reprice(args):
         changes={"confidence": args.confidence, "impact": args.impact,
                  "cost": args.cost},
         session=args.session, why=args.why)
+    _render_views(config)
     print(f"{entry.id} repriced: {', '.join(moved)}")
     return 0
 
@@ -420,8 +438,32 @@ def cmd_harness_update(args):
 def cmd_entry_show(args):
     config = _load(args)
     entry = _store(config).load(args.id)
-    print(json.dumps(entry.to_dict(), indent=2, default=str))
+    data = entry.to_dict()
+    if not getattr(args, "history", False):
+        # The default is the current state: the append-only history is the bulk
+        # of an old entry's JSON, and a coordinator brief already excludes it --
+        # so a state dump that inlines it is mostly bytes nobody reads. It is
+        # data, never lost -- `--history` opts into the full record.
+        data.pop("history", None)
+    print(json.dumps(data, indent=2, default=str))
     return 0
+
+
+def _entry_row(entry) -> dict:
+    """The projection `entry list --json` hands an agent: enough to pick work
+    without an N+1 of `entry show`. Deliberately not to_dict(): history and
+    prose are the bulk of an old entry, and a picker needs none of it."""
+    return {
+        "id": entry.id, "title": entry.title, "status": entry.status,
+        "track": entry.track, "kind": entry.kind, "parent": entry.parent,
+        "claim": ({"session": entry.claim.session, "at": entry.claim.at}
+                  if entry.claim else None),
+        "confidence": entry.confidence, "impact": entry.impact,
+        "cost": entry.cost,
+        "mechanisms": list(entry.mechanisms),
+        "gates": [dataclasses.asdict(g) for g in entry.gates],
+        "hardware": entry.hardware,
+    }
 
 
 def cmd_entry_list(args):
@@ -431,6 +473,9 @@ def cmd_entry_list(args):
         entries = [e for e in entries if e.status in args.status]
     if args.track:
         entries = [e for e in entries if e.track == args.track]
+    if getattr(args, "json", False):
+        print(json.dumps([_entry_row(e) for e in entries], indent=2))
+        return 0
     print(f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} read")
     for e in entries:
         held = f" [{e.claim.session}]" if e.claim else ""
@@ -443,6 +488,7 @@ def cmd_claim(args):
     claims = Claims(_store(config), config, args.session)
     entry = claims.claim(args.id, why=args.why or "", budget=args.budget or "",
                          max_runs=args.max_runs, max_hours=args.max_hours)
+    _render_views(config)
     print(f"{entry.id} claimed by {args.session} "
           f"(ceiling: {entry.claim.max_runs} runs / {entry.claim.max_hours} h)")
     return 0
@@ -451,6 +497,7 @@ def cmd_claim(args):
 def cmd_release(args):
     config = _load(args)
     entry = Claims(_store(config), config, args.session).release(args.id, args.why)
+    _render_views(config)
     print(f"{entry.id} released back to {entry.status}: {args.why}")
     return 0
 
@@ -460,6 +507,7 @@ def cmd_reap(args):
     claims = Claims(_store(config), config, args.session)
     if args.id:
         entry, former, age = claims.reap(args.id, ttl_hours=args.ttl_hours)
+        _render_views(config)
         print(f"{entry.id} reaped from {former} (silent {age:.1f} h)")
         return 0
     candidates = claims.reapable(ttl_hours=args.ttl_hours)
@@ -478,6 +526,7 @@ def cmd_close(args):
     if args.relabel:
         entry.relabel(args.relabel, who=args.session, why=args.why or "")
         store.save(entry)
+        _render_views(config)
         print(f"{entry.id} closure relabelled to {args.relabel}")
         return 0
 
@@ -486,6 +535,7 @@ def cmd_close(args):
                     why=args.why or "")
         entry.claim = None
         store.save(entry)
+        _render_views(config)
         print(f"{entry.id} reopened to {entry.status}")
         return 0
 
@@ -499,6 +549,7 @@ def cmd_close(args):
                 memo_exists=lambda m: (memo_root / m).exists())
     entry.claim = None
     store.save(entry)
+    _render_views(config)
     print(f"{entry.id} closed {args.status}"
           + (f" ({args.closure})" if args.closure else "")
           + f" — evidence: {result.memo}")
@@ -563,6 +614,13 @@ def cmd_measure(args):
     return 0
 
 
+def _score_row(score) -> dict:
+    """One row of `rank --json`: the same facts the prose table shows."""
+    return {"id": score.entry_id, "score": score.score, "terms": score.terms,
+            "title": score.title, "novel": score.novel,
+            "excluded": score.excluded}
+
+
 def cmd_rank(args):
     config = _load(args)
     entries = _store(config).all()
@@ -576,12 +634,29 @@ def cmd_rank(args):
         # The human-correction surface shows what the loop would dispatch,
         # which is the domain's prices when the seam is installed.
         ranking = scoring.seam_ranking(config, ranking, entries, risk)
-        print(f"priced by domain seam: {config.commands['score']}\n")
+        if not getattr(args, "json", False):
+            print(f"priced by domain seam: {config.commands['score']}\n")
     # Shortlisted first: `shortlist` is where the risk dial spends its slots,
     # and the table is the ranking a human corrects. A novel pick may sit low
     # in it by design, and one shown unmarked reads as the formula having
     # gone wrong.
     shortlist = ranking.shortlist(args.top) if args.top else []
+    if getattr(args, "json", False):
+        by_filter: dict[str, int] = {}
+        for card in ranking.excluded:
+            by_filter[card.excluded] = by_filter.get(card.excluded, 0) + 1
+        # An unlimited meter's remaining is float infinity, which is not a
+        # number any JSON consumer can parse -- it degrades to null.
+        print(json.dumps({
+            "ranking": [_score_row(s) for s in ranking.scored]
+                       + [_score_row(s) for s in ranking.excluded],
+            "shortlist": [_score_row(s) for s in shortlist],
+            "excluded_summary": {"count": len(ranking.excluded),
+                                 "by_filter": by_filter},
+            "risk": ranking.risk,
+            "remaining": remaining if math.isfinite(remaining) else None,
+        }, indent=2))
+        return 0
     print(ranking.explain())
     if args.top:
         print(f"\nshortlist (top {args.top}):")
@@ -589,6 +664,16 @@ def cmd_rank(args):
             print(f"  {s.entry_id}  {s.title}"
                   + ("  [novel]" if s.novel else "  [branch]"))
     return 0
+
+
+def _meter_json(meter) -> dict:
+    """One meter for `budget --json`. An unlimited meter's remaining is float
+    infinity, which no strict JSON consumer can parse -- it degrades to null,
+    like an undeclared ceiling does."""
+    remaining = meter.remaining()
+    return {"spent": meter.spent,
+            "remaining": remaining if math.isfinite(remaining) else None,
+            "ceiling": meter.ceiling}
 
 
 def cmd_budget(args):
@@ -603,22 +688,26 @@ def cmd_budget(args):
         spent_money=recorded["money"],
         spent_gpu_hours=recorded["gpu_hours"])
     iteration = budget_mod.iteration_budget(config)
-    print(domain.report())
-    print()
-    print(iteration.report())
+    meters = {name: _meter_json(meter) for name, meter in domain.meters.items()}
+    # The iteration meters share names with the domain's (`runs` on both), so
+    # they are namespaced rather than merged -- a meter silently overwriting
+    # another is the H8 shape in JSON form.
+    meters.update({"iteration." + name: _meter_json(meter)
+                   for name, meter in iteration.meters.items()})
+    claims = Claims(store, config, session=args.session)
     held = [e for e in entries if e.claim
             and not config.track_for(e.id).machine.status(e.status).terminal]
-    print(f"\n{len(held)} live claim(s)")
-    claims = Claims(store, config, session=args.session)
+    claim_rows = []
     for entry in held:
         spent = budget_mod.claim_runs(config, entry)
-        print(f"  {entry.id}  {entry.claim.session}")
-        claim = budget_mod.claim_budget(entry, config)
-        claim["runs"].spent = spent
-        print("    " + claim.report().replace("\n", "\n    "))
         over = claims.overrun(entry.id, runs_spent=spent)
-        if over:
-            print(f"    OVERRUN: {over[0]} {over[1]:g} > {over[2]:g}")
+        claim_rows.append({
+            "id": entry.id, "session": entry.claim.session,
+            "runs_spent": spent, "max_runs": entry.claim.max_runs,
+            "max_hours": entry.claim.max_hours,
+            "overrun": (f"{over[0]} {over[1]:g} > {over[2]:g}"
+                        if over else None),
+        })
 
     try:
         target = _probe_target(config)
@@ -632,6 +721,34 @@ def cmd_budget(args):
         budgets=[domain],
         independent_confirmation=budget_mod.independent_confirmation(
             config.goal, best, all_runs, target))
+
+    if getattr(args, "json", False):
+        # Non-finite objective/target values serialise as bare Infinity/NaN,
+        # which spec-compliant parsers reject (the brief builder fights the
+        # same failure at loop.py). "No number" rides as null, same contract.
+        def finite(v):
+            return v if isinstance(v, (int, float)) and math.isfinite(v) else None
+        print(json.dumps({
+            "meters": meters,
+            "claims": claim_rows,
+            "stop": {"reason": decision.reason, "detail": decision.detail},
+            "target": finite(target),
+            "best": finite(best[0]) if best else None,
+        }, indent=2))
+        return 0
+
+    print(domain.report())
+    print()
+    print(iteration.report())
+    print(f"\n{len(held)} live claim(s)")
+    for entry, row in zip(held, claim_rows, strict=True):
+        claim = budget_mod.claim_budget(entry, config)
+        claim["runs"].spent = row["runs_spent"]
+        print(f"  {entry.id}  {entry.claim.session}")
+        print("    " + claim.report().replace("\n", "\n    "))
+        if row["overrun"]:
+            print(f"    OVERRUN: {row['overrun']}")
+
     print(f"\nstop decision: {decision}")
     # `target` is tested for truth, not for None: a zero target cannot be
     # normalised against, and `is_met` refuses it rather than dividing by it.
@@ -761,6 +878,10 @@ def cmd_migrate(args):
     if not args.dry_run:
         for entry in pending.values():
             store.save(entry)
+        # Every verb that saves entry records re-renders the views itself:
+        # a migrated corpus whose queue view is born stale fails the next
+        # validate for a reason the verb could have prevented.
+        _render_views(config)
     print(f"\n{total} entries "
           + ("would be written (dry run)" if args.dry_run
              else f"written to {config.paths.entries}"))
@@ -817,7 +938,18 @@ def cmd_validate(args):
                          for p in record.problems(config.goal)]
     except AutoresearchError as exc:
         problems.append(str(exc))
-    for w in validate_mod.inbox_warnings(config) + validate_mod.core_warnings(config):
+    warnings = validate_mod.inbox_warnings(config) + validate_mod.core_warnings(config)
+
+    if getattr(args, "json", False):
+        # Only the document: warnings and the read-counts summary are prose
+        # channels, and a --json consumer parses stdout, not around it.
+        # `skipped_runs` rides in the document because a domain of nothing but
+        # foreign rows must not read as a clean board that read everything.
+        print(json.dumps({"ok": not problems, "problems": problems,
+                          "skipped_runs": skipped_runs}, indent=2))
+        return 1 if problems else 0
+
+    for w in warnings:
         print(f"! {w}")
 
     if skipped_runs:
@@ -868,7 +1000,35 @@ def cmd_skill_list(args):
         # bodies. Printing it is what keeps that an observation and not a claim.
         print(f"{body_lines} body lines held, {index_lines} index line(s) "
               f"carried into each brief")
-    return 1 if stale else 0
+    # An informational listing exits 0 even when it reports stale skills: the
+    # staleness is the content, not a failure of the command, and a shell that
+    # treats non-zero as fatal would stop on a perfectly fine listing.
+    # `ar skill check` keeps its non-zero exit for real refusals.
+    return 0
+
+
+def cmd_skill_find(args):
+    """Case-insensitive AND-match over skill name and description.
+
+    Routing should not cost a full-index read: an agent with a term in hand
+    gets one line per hit -- name, description, path -- against the same
+    in-memory read every other skill verb uses. No INDEX.json cache file sits
+    under this: `read_all`'s stat-signature cache already makes re-reading the
+    directory cheap, and a second copy of the index would be a staleness class
+    of bug in exchange for nothing.
+    """
+    config = _load(args)
+    found = _skills(config)
+    terms = [t.lower() for t in args.terms]
+    hits = [s for s in found
+            if all(t in s.name.lower() or t in s.description.lower()
+                   for t in terms)]
+    for skill in sorted(hits, key=lambda s: s.name):
+        print(skill.name)
+        print(f"    {textwrap.shorten(skill.description, 96)}")
+        print("    " + (str(skill.path.relative_to(config.paths.root))
+                        if skill.path else "(path unknown)"))
+    return 0
 
 
 def cmd_skill_show(args):
@@ -1120,21 +1280,27 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                    ).set_defaults(func=cmd_board)
     sub.add_parser("render", help="write the generated queue views"
                    ).set_defaults(func=cmd_render)
-    sub.add_parser("validate", help="check records, views, runs and policy"
-                   ).set_defaults(func=cmd_validate)
+    validatep = sub.add_parser("validate", help="check records, views, runs and policy")
+    validatep.add_argument("--json", action="store_true",
+                           help="print {ok, problems} as JSON and nothing else")
+    validatep.set_defaults(func=cmd_validate)
     sub.add_parser("policy", help="show never-rules and prove each refuses something"
                    ).set_defaults(func=cmd_policy)
 
     rankp = sub.add_parser("rank", help="score the queue and explain the numbers")
     rankp.add_argument("--top", type=int, default=3)
+    rankp.add_argument("--json", action="store_true",
+                       help="print the ranking, shortlist and exclusions as JSON")
     rankp.add_argument("--risk", type=float, default=None, metavar="R",
                        help="share of the shortlist aimed at novel branches "
                             "(entries with no parent); overrides the domain's "
                             f"coordinator.risk (core default {rank_mod.RISK})")
     rankp.set_defaults(func=cmd_rank)
 
-    sub.add_parser("budget", help="every meter, and the stop decision"
-                   ).set_defaults(func=cmd_budget)
+    bud = sub.add_parser("budget", help="every meter, and the stop decision")
+    bud.add_argument("--json", action="store_true",
+                     help="print meters, claims and the stop decision as JSON")
+    bud.set_defaults(func=cmd_budget)
 
     mig = sub.add_parser("migrate", help="convert a prose corpus into records (one way)")
     mig.add_argument("--source", help="root the documents live under")
@@ -1194,6 +1360,9 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     new.set_defaults(func=cmd_entry_new)
     show = esub.add_parser("show")
     show.add_argument("id")
+    show.add_argument("--history", action="store_true",
+                      help="include the append-only history (default: the "
+                           "current state only)")
     show.set_defaults(func=cmd_entry_show)
     amend = esub.add_parser("amend", help="complete or correct evidence fields")
     amend.add_argument("id")
@@ -1219,12 +1388,21 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     lst = esub.add_parser("list")
     lst.add_argument("--status", action="append")
     lst.add_argument("--track")
+    lst.add_argument("--json", action="store_true",
+                     help="print the pick-work projection (no history, no "
+                          "prose) as JSON")
     lst.set_defaults(func=cmd_entry_list)
 
     skill = sub.add_parser("skill", help="the domain's distilled, cited skills")
     ssub = skill.add_subparsers(dest="skill_cmd", required=True)
     ssub.add_parser("list", help="every skill, its citations and its staleness"
                     ).set_defaults(func=cmd_skill_list)
+    sfind = ssub.add_parser(
+        "find", help="route on a term: AND-match over skill names and descriptions")
+    sfind.add_argument("terms", nargs="+",
+                       help="every term must appear in a skill's name or "
+                            "description (case-insensitive)")
+    sfind.set_defaults(func=cmd_skill_find)
     sshow = ssub.add_parser("show")
     sshow.add_argument("name")
     sshow.set_defaults(func=cmd_skill_show)

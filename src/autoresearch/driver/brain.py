@@ -22,9 +22,11 @@ import math
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -114,12 +116,30 @@ class Brain(Protocol):
             max_turns: int | None = None) -> Reply: ...
 
 
+#: Prompt files by (path, mtime_ns). Re-read per ask is a stat-plus-read on
+#: every brief of every role; keyed on mtime_ns so a swapped file is still
+#: picked up, and a same-mtime cache hit re-reads nothing.
+_ROLE_PROMPTS: dict[tuple[str, int], str] = {}
+
+
 def role_prompt(role: str) -> str:
     path = AGENTS_DIR / f"{role}.md"
     if not path.exists():
         raise AutoresearchError(
             f"no prompt for role {role!r} at {path}; roles are {Role.ALL}")
-    return path.read_text()
+    key = (str(path), path.stat().st_mtime_ns)
+    text = _ROLE_PROMPTS.get(key)
+    if text is None:
+        text = path.read_text()
+        # A swapped file leaves its superseded entries behind; drop them so
+        # a hot-swapped prompt does not grow the cache.
+        # list() first: concurrent asks from the dispatch thread pool may
+        # insert while this prunes, and a dict that changes size during
+        # comprehension iteration raises.
+        for stale in [k for k in list(_ROLE_PROMPTS) if k[0] == key[0]]:
+            del _ROLE_PROMPTS[stale]
+        _ROLE_PROMPTS[key] = text
+    return text
 
 
 def extract_json(text: str):
@@ -192,16 +212,28 @@ class ProcessBrain:
 
     One subprocess and one temp directory per ask: no shared state, so the
     fan-out path can run several briefs of one role through the same brain.
+
+    Each ask is bounded by `timeout` seconds (`0` disables the ceiling). A
+    backend that overruns it is killed by process group -- children included
+    -- and the ask surfaces as a phase failure naming the role, the budget
+    and whatever stderr it managed; a wedged backend must never read as a
+    hang.
     """
 
     PLACEHOLDERS = ("role", "prompt_file", "workspace", "cost_file")
 
+    #: Per-ask ceiling for the backend command, seconds; 0 disables it.
+    #: A wedged backend command must surface as a phase failure with its
+    #: stderr named, not freeze the dispatch phase.
+    DEFAULT_TIMEOUT = 3600
+
     def __init__(self, command, root, ledger: CostLedger | None = None,
-                 name: str | None = None):
+                 name: str | None = None, timeout: float | None = None):
         self.command = [str(part) for part in command]
         self.root = pathlib.Path(root)
         self.ledger = ledger
         self.name = name or pathlib.Path(self.command[0]).name
+        self.timeout = self.DEFAULT_TIMEOUT if timeout is None else timeout
         self.spent_usd = 0.0
 
     def _argv(self, role: str, prompt_file: pathlib.Path,
@@ -226,15 +258,45 @@ class ProcessBrain:
             prompt_file = tmp / f"{role}.md"
             prompt_file.write_text(role_prompt(role))
             cost_file = tmp / "cost"
-            result = subprocess.run(
-                self._argv(role, prompt_file, pathlib.Path(workspace or self.root),
-                           cost_file),
-                input=brief, cwd=str(workspace or self.root),
-                capture_output=True, text=True)
-            if result.returncode != 0:
-                tail = " ; ".join((result.stderr or "").strip().splitlines()[-5:])
+            argv = self._argv(role, prompt_file,
+                              pathlib.Path(workspace or self.root), cost_file)
+            proc = subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, cwd=str(workspace or self.root),
+                text=True,
+                # Own process group: a backend that spawns children of its
+                # own loses them all at kill time, not just the leader.
+                start_new_session=True)
+            try:
+                stdout, stderr = proc.communicate(
+                    input=brief, timeout=self.timeout or None)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass  # already gone; drain what it managed to say
+                stdout, stderr = proc.communicate()
+                # The backend may have spent money before it wedged: whatever
+                # it managed to write to the cost file is the spend, and a
+                # written-but-unparsable cost is unknown spend -- both are
+                # charged, or a finite ceiling would stop nothing.
+                if cost_file.exists():
+                    try:
+                        if self.ledger is not None:
+                            self.ledger.spend(cost_value(float(
+                                cost_file.read_text().strip())))
+                    except (OSError, ValueError, AutoresearchError):
+                        if self.ledger is not None:
+                            self.ledger.spend(None)
+                tail = " ; ".join((stderr or "").strip().splitlines()[-5:])
                 raise AutoresearchError(
-                    f"{self.name} ({role}) exited {result.returncode}: "
+                    f"{self.name} ({role}) timed out after {self.timeout}s: "
+                    f"the attempt failed, it did not hang; "
+                    f"{tail or 'no stderr'}") from None
+            if proc.returncode != 0:
+                tail = " ; ".join((stderr or "").strip().splitlines()[-5:])
+                raise AutoresearchError(
+                    f"{self.name} ({role}) exited {proc.returncode}: "
                     f"{tail or 'no stderr'}")
             cost = None
             if cost_file.exists():
@@ -250,8 +312,14 @@ class ProcessBrain:
             self.ledger.spend(cost)
         self.spent_usd = (None if cost is None or self.spent_usd is None
                           else self.spent_usd + cost)
-        return Reply(role=role, data=extract_json(result.stdout),
-                     raw=result.stdout, cost_usd=cost, backend=self.name)
+        return Reply(role=role, data=extract_json(stdout),
+                     raw=stdout, cost_usd=cost, backend=self.name)
+
+
+class _TransientWire(Exception):
+    """A wire condition a retry can fix (URLError, socket timeout, HTTP 5xx)
+    -- the only class `_post` retries. A 4xx or unparsable JSON is the
+    endpoint's verdict, not a blip, and never gets this class."""
 
 
 class TypeSafeBrain:
@@ -305,6 +373,8 @@ class TypeSafeBrain:
     def __init__(self, model="jev-latest", url=None, input_per_mtok=None,
                  output_per_mtok=None, ledger: CostLedger | None = None,
                  timeout=30.0, name="typesafe", api_key=None):
+        """`timeout` bounds one HTTP attempt, seconds; 0 disables the
+        ceiling (`[brain] timeout_seconds` wires through here)."""
         self.model = model
         self.url = url or self.API_URL
         self.input_per_mtok = input_per_mtok
@@ -510,24 +580,55 @@ class TypeSafeBrain:
                 + tokens_out * self.output_per_mtok) / 1e6
 
     def _post(self, payload: dict) -> dict:
-        """One POST to the System One endpoint. A seam of its own so tests can
-        stand in for the wire without an HTTP stub."""
+        """One POST to the System One endpoint, retried on transient wire
+        failures only: up to two retries at 0.5s/1.0s backoff for a URLError,
+        a socket timeout, or an HTTP 5xx. A 4xx (bad request, bad key) or
+        unparsable JSON is the endpoint's verdict, not a blip -- retried it
+        re-fails and re-bills. A seam of its own so tests can stand in for
+        the wire without an HTTP stub."""
+        last: _TransientWire | None = None
+        for attempt in range(3):  # initial call + 2 retries
+            if last is not None:
+                time.sleep(0.5 * attempt)  # 0.5s, then 1.0s
+            try:
+                return self._post_once(payload)
+            except _TransientWire as exc:
+                last = exc
+        # A transient-failed POST may still have been processed (and billed)
+        # server-side: a 5xx after a full request, a socket timeout with the
+        # request in flight. The usage it consumed is unknowable from here,
+        # and a meter nobody feeds is a ceiling that does not exist -- so the
+        # cost is recorded as unknown, which under a finite ceiling refuses
+        # further dispatch until the spend is reconciled.
+        if self.ledger is not None:
+            self.ledger.spend(None)
+        raise AutoresearchError(str(last)) from last.__cause__
+
+    def _post_once(self, payload: dict) -> dict:
         request = urllib.request.Request(
             self.url, data=json.dumps(payload, default=str).encode(),
             headers={"Authorization": f"Bearer {self.api_key}",
                      "Content-Type": "application/json"},
             method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as r:
+            # 0 means disabled: no ceiling, the pre-timeout behavior.
+            with urllib.request.urlopen(request,
+                                        timeout=self.timeout or None) as r:
                 body = r.read().decode()
         except urllib.error.HTTPError as exc:
             try:
                 detail = exc.read()[:200].decode(errors="replace")
             except OSError:
                 detail = ""
-            raise AutoresearchError(
-                f"typesafe request failed: HTTP {exc.code}: {detail}") from exc
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+            message = f"typesafe request failed: HTTP {exc.code}: {detail}"
+            if 500 <= exc.code < 600:
+                raise _TransientWire(message) from exc
+            raise AutoresearchError(message) from exc
+        except (TimeoutError, urllib.error.URLError) as exc:
+            # socket.timeout rides under OSError; caught ahead of the generic
+            # verdict below because it is the one network error a retry fixes.
+            raise _TransientWire(f"typesafe request failed: {exc}") from exc
+        except (OSError, ValueError) as exc:
             raise AutoresearchError(f"typesafe request failed: {exc}") from exc
         try:
             return json.loads(body)
@@ -564,16 +665,20 @@ def build_brain(config, max_budget_usd: float | None = None,
     caller must pass `allow_paid=True` (`--allow-paid-brain`). An absent
     table, or an absent `default`, is a refusal that names the remedy: route
     the roles to commands.
+
+    `[brain] timeout_seconds` bounds every ask of every backend in the table
+    (the subprocess ceiling for commands, the HTTP ceiling for typesafe); 0
+    disables it.
     """
     spec = config.brain or {}
     # The flag GRANTS; it never revokes. argparse's store_true default is
     # False, not None, so a caller that did not pass the flag must not undo a
     # domain's own `authorize_spend = true`.
     authorized = bool(spec.get("authorize_spend", False)) or bool(allow_paid)
-    # Role routes only: `default`, `authorize_spend` and the `typesafe_*`
-    # options are settings, never backends.
+    # Role routes only: `default`, `authorize_spend`, `timeout_seconds` and
+    # the `typesafe_*` options are settings, never backends.
     roles = {key: value for key, value in spec.items()
-             if key not in ("default", "authorize_spend")
+             if key not in ("default", "authorize_spend", "timeout_seconds")
              and not key.startswith("typesafe_")}
     if "default" not in spec:
         raise AutoresearchError(
@@ -597,6 +702,10 @@ def build_brain(config, max_budget_usd: float | None = None,
     ledger = CostLedger(max_budget_usd if max_budget_usd is not None
                         else config.policy.spend_ceiling)
 
+    # `[brain] timeout_seconds`: one ceiling for every backend in the table.
+    # 0 means disabled, per the config contract.
+    timeout_seconds = spec.get("timeout_seconds")
+
     def one(value):
         if value == "typesafe":
             return TypeSafeBrain(
@@ -604,8 +713,12 @@ def build_brain(config, max_budget_usd: float | None = None,
                 url=spec.get("typesafe_url"),
                 input_per_mtok=spec.get("typesafe_input_per_mtok"),
                 output_per_mtok=spec.get("typesafe_output_per_mtok"),
-                ledger=ledger)
-        return ProcessBrain(value, root=config.paths.root, ledger=ledger)
+                ledger=ledger,
+                timeout=30.0 if timeout_seconds is None else timeout_seconds)
+        return ProcessBrain(value, root=config.paths.root, ledger=ledger,
+                            timeout=(ProcessBrain.DEFAULT_TIMEOUT
+                                     if timeout_seconds is None
+                                     else timeout_seconds))
 
     default = one(spec["default"])
     routes = {role: one(value) for role, value in roles.items()}

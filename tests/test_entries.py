@@ -237,3 +237,67 @@ def test_a_non_string_prose_list_item_is_refused_at_the_record(store):
         make_entry(store, supersedes=[{"id": "Q0"}])
     with pytest.raises(SchemaError, match="entry.mechanisms"):
         make_entry(store, mechanisms=["ok", ""])
+
+
+def test_all_reuses_the_parse_for_unchanged_files(store, monkeypatch):
+    """`all()` runs ~n+k+6 times per coordinator iteration plus once per
+    `next_id`; re-parsing every file each call is the cost the per-file
+    signature cache exists to remove."""
+    from autoresearch import entries as entries_mod
+    make_entry(store, "Q1")
+    make_entry(store, "Q2")
+    assert [e.id for e in store.all()] == ["Q1", "Q2"]
+    parses = []
+    real_safe_load = entries_mod.yaml.safe_load
+
+    def counting(text):
+        parses.append(text)
+        return real_safe_load(text)
+
+    monkeypatch.setattr(entries_mod.yaml, "safe_load", counting)
+    assert [e.id for e in store.all()] == ["Q1", "Q2"]
+    assert parses == []  # unchanged files: nothing re-parsed
+
+
+def test_all_picks_up_a_hand_edited_file(store, sandbox):
+    """Entries are written by other processes too (`ar entry new` from
+    native dispatch): a file changed outside the Store re-parses on the next
+    read, because the (size, mtime_ns) signature is re-stat'ed every call."""
+    make_entry(store, "Q1")
+    assert [e.title for e in store.all()] == ["Q1 title"]
+    path = sandbox.paths.entries / "Q1.yaml"
+    path.write_text(path.read_text().replace("Q1 title", "hand-edited"))
+    assert [e.title for e in store.all()] == ["hand-edited"]
+
+
+def test_a_removed_file_leaves_no_ghost_row(store, sandbox):
+    make_entry(store, "Q1")
+    make_entry(store, "Q2")
+    assert [e.id for e in store.all()] == ["Q1", "Q2"]
+    (sandbox.paths.entries / "Q2.yaml").unlink()
+    assert [e.id for e in store.all()] == ["Q1"]
+
+
+def test_save_refreshes_the_cache(store):
+    """A save re-stats the written file, so the next `all()` serves the saved
+    content and never the pre-save row."""
+    make_entry(store, "Q1")
+    entry = store.load("Q1")
+    entry.title = "rewritten"
+    store.save(entry)
+    assert [e.title for e in store.all()] == ["rewritten"]
+
+
+def test_an_unparsable_file_raises_on_every_call_and_is_never_cached(store, sandbox):
+    """A refusal path must not become a cache miss: the error is re-raised on
+    every read until the file is fixed or removed, and the good rows beside it
+    stay readable throughout."""
+    from autoresearch.errors import SchemaError
+    make_entry(store, "Q1")
+    (sandbox.paths.entries / "Q2.yaml").write_text("{ not yaml: [")
+    with pytest.raises(SchemaError, match="Q2.yaml"):
+        store.all()
+    with pytest.raises(SchemaError, match="Q2.yaml"):
+        store.all()
+    (sandbox.paths.entries / "Q2.yaml").unlink()
+    assert [e.id for e in store.all()] == ["Q1"]

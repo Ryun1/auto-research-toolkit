@@ -103,6 +103,34 @@ def test_the_score_table_marks_novel_branches_too(sandbox, store, capsys):
     assert "[branch]" in shortlist
 
 
+def test_rank_json_is_json_and_agrees_with_the_prose_shortlist(
+        sandbox, store, capsys):
+    """An agent parses `--json` stdout and gets the same answer the human
+    reads: the shortlist in the document must name exactly what the prose
+    shortlist names."""
+    import json
+    _no_seam(sandbox)
+    _with_branch(store)
+    assert cli.main(["--domain", str(sandbox.paths.root),
+                     "rank", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)     # only the document on stdout
+    assert set(doc["ranking"][0]) == {"id", "score", "terms", "title",
+                                      "novel", "excluded"}
+    assert doc["risk"] == 0.5
+    def prose_id(row):
+        return row["id"]
+
+    json_shortlist = [prose_id(row) for row in doc["shortlist"]]
+    assert json_shortlist == ["Q10", "Q11", "Q95"]   # 2 novel slots + 1 branch
+
+    assert cli.main(["--domain", str(sandbox.paths.root), "rank", "--top", "3"]) == 0
+    prose = capsys.readouterr().out
+    shortlist = prose.split("shortlist (top 3):")[1]
+    for entry_id in json_shortlist:
+        assert entry_id in shortlist
+    assert "Q90" not in shortlist
+
+
 def test_rank_prices_through_the_domain_seam(sandbox, store, capsys):
     """The toy domain ships `score = "bin/score"`; the human-correction
     surface shows what the loop would dispatch, which is the domain's prices,

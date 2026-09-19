@@ -29,15 +29,43 @@ def test_list_names_the_ratio_the_design_turns_on(sandbox, store, capsys):
     assert "body lines held" in out and "index line(s) carried" in out
 
 
-def test_list_exits_nonzero_when_a_skill_is_stale(sandbox, store, capsys):
+def test_list_exits_zero_and_marks_a_stale_skill(sandbox, store, capsys):
+    """Staleness is the listing's content, not a failure of the command: an
+    informational `skill list` that exits 1 stops every `set -e` shell on a
+    perfectly fine read. The refusals stay with `ar skill check`."""
     entry = close(sandbox, store, make_entry(store, "Q1"))
     make_skill(sandbox, "was-true", cites=["Q1"])
     machine = sandbox.track_for("Q1").machine
     entry.apply(machine, machine.initial, "test", why="new evidence")
     store.save(entry)
 
-    assert _ar(sandbox, "skill", "list") == 1
-    assert "STALE" in capsys.readouterr().out
+    assert _ar(sandbox, "skill", "list") == 0
+    out = capsys.readouterr().out
+    assert "STALE" in out
+
+
+def test_find_matches_by_name_and_description_terms(sandbox, store, capsys):
+    """Routing must not cost a full-index read: terms matched AND-wise over
+    name and description, one hit printed with its address."""
+    close(sandbox, store, make_entry(store, "Q1"))
+    make_skill(sandbox, "retry-etiquette",
+               description="Use when a run fails and a retry could be wasteful.")
+    make_skill(sandbox, "knob-hygiene", cites=["Q1"],
+               description="Use when tuning knobs before reading the record.")
+    assert _ar(sandbox, "skill", "find", "retry") == 0
+    out = capsys.readouterr().out
+    assert "retry-etiquette" in out and "knob-hygiene" not in out
+    assert f"{sandbox.skills.dir}/retry-etiquette/SKILL.md" in out
+
+    capsys.readouterr()
+    # AND-match across name and description, case-insensitively.
+    assert _ar(sandbox, "skill", "find", "RETRY", "wasteful") == 0
+    out = capsys.readouterr().out
+    assert "retry-etiquette" in out and "knob-hygiene" not in out
+
+    capsys.readouterr()
+    assert _ar(sandbox, "skill", "find", "nonexistent-term") == 0
+    assert capsys.readouterr().out.strip() == ""
 
 
 def test_check_is_a_gate(sandbox, store, capsys):

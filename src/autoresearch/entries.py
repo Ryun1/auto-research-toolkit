@@ -33,6 +33,7 @@ in the source corpus were refutations).
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import datetime as dt
 import json
@@ -463,6 +464,24 @@ class Entry:
         return cls(**data)
 
 
+#: Per-file parse cache, keyed by resolved directory then filename:
+#: `(size, mtime_ns) -> the parsed record dict`. `all()` runs ~n+k+6 times per
+#: coordinator iteration plus once per `next_id`, and re-reading and re-parsing
+#: every file each time dominated large corpora. The glob still runs on every
+#: call and the signature is re-stat'ed per file, so a file changed by hand or
+#: by another process (`ar entry new` from native-dispatch agents) re-parses on
+#: the next read. Parsed errors are never cached: an unparsable file raises on
+#: every call until it is fixed or removed, and a removed file leaves no ghost
+#: row. Hits are rebuilt through `from_dict`, so callers receive fresh objects
+#: exactly as a re-read would produce.
+_ENTRY_CACHE: dict[str, dict[str, tuple[tuple[int, int], dict]]] = {}
+
+
+def _signature(path: pathlib.Path) -> tuple[int, int]:
+    stat = path.stat()
+    return (stat.st_size, stat.st_mtime_ns)
+
+
 class Store:
     """Every entry, addressed by id, one file each.
 
@@ -489,22 +508,53 @@ class Store:
         return Entry.from_dict(yaml.safe_load(path.read_text()) or {})
 
     def save(self, entry: Entry) -> pathlib.Path:
+        import os
         entry.__post_init__()
         self.dir.mkdir(parents=True, exist_ok=True)
         path = self.path(entry.id)
-        path.write_text(yaml.safe_dump(entry.to_dict(), sort_keys=False,
-                                       allow_unicode=True, width=100))
+        body = yaml.safe_dump(entry.to_dict(), sort_keys=False,
+                              allow_unicode=True, width=100)
+        # Atomic replace, not truncate-then-write: a concurrent `all()` (a
+        # CLI in one terminal, the coordinator in another) must never read a
+        # half-written YAML -- the same window `loop._record` closes for
+        # iteration records, and the same failure class the defect log
+        # exists because of.
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            temporary.write_text(body)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        # Re-stat after the write: the cached signature must describe the bytes
+        # actually on disk, or the next all() would re-parse (harmless) or,
+        # worse, trust a signature the write already invalidated.
+        _ENTRY_CACHE.setdefault(str(self.dir.resolve()), {})[path.name] = \
+            (_signature(path), entry.to_dict())
         return path
 
     def all(self) -> list[Entry]:
         if not self.dir.exists():
             return []
-        out = []
+        cache = _ENTRY_CACHE.setdefault(str(self.dir.resolve()), {})
+        out, seen = [], set()
         for path in sorted(self.dir.glob("*.yaml")):
+            seen.add(path.name)
+            sig = _signature(path)
+            cached = cache.get(path.name)
+            if cached is not None and cached[0] == sig:
+                out.append(Entry.from_dict(copy.deepcopy(cached[1])))
+                continue
             try:
-                out.append(Entry.from_dict(yaml.safe_load(path.read_text()) or {}))
+                raw = yaml.safe_load(path.read_text()) or {}
+                entry = Entry.from_dict(raw)
             except (SchemaError, TypeError, yaml.YAMLError) as exc:
                 raise SchemaError(f"{path}: {exc}") from exc
+            cache[path.name] = (sig, raw)
+            out.append(entry)
+        # list() first: a concurrent all() may insert while we prune, and a
+        # dict that changes size during comprehension iteration raises.
+        for name in [n for n in list(cache) if n not in seen]:
+            del cache[name]
         return sorted(out, key=lambda e: (e.prefix, e.number))
 
     def by_track(self, track) -> list[Entry]:

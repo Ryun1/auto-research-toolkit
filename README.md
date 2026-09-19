@@ -212,7 +212,7 @@ ar rank        score the queue and show the numbers it ranked on
                (--risk R overrides the domain's novel-branch dial)
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
-ar skill       list, show, check, distil and retire the domain's skills
+ar skill       list, find, show, check, distil and retire the domain's skills
 ar entry       file, show, amend, reprice and list entries
 ar claim       take one entry (serialised, always with a ceiling)
 ar release     hand a claim back, with a reason
@@ -249,6 +249,18 @@ every new domain).
 across selected sources are refused before any entries are written. `--dry-run`
 performs the same collision checks. Resolve collisions in the source corpus;
 use `ar entry amend` for deliberate changes to existing records.
+
+**A hand-driven agent should not parse prose it only needs to route on.**
+`ar rank`, `ar budget`, `ar validate` and `ar entry list` each take `--json`
+(the whole document, nothing else, on stdout; exit codes unchanged), and
+`ar entry show` defaults to current state — pass `--history` for the full
+append-only record. Every verb that saves an entry record re-renders the
+generated views itself, so `mutate → validate` no longer needs an `ar render`
+in between. `ar skill find <terms>` routes on descriptions the same way a
+brief does, without reading the whole index. The coordinator's own asks moved
+the same direction: briefs are role-scoped (the worker gets its entry, the
+generator the whole board) and compact, so a payload that once grew with the
+record now grows only for the roles that read it.
 
 **Which verdicts are terminal is per-track config.** The default machine closes
 research on `confirmed`/`refuted`; a defect track closes on `fixed`/`wontfix`
@@ -794,6 +806,14 @@ refuses further spend until the usage is reconciled. Unknown cost is not zero;
 known usage below the ceiling may continue. Measured zero remains valid and
 costs nothing. Every backend shares one money ceiling, so two spenders
 halve it rather than each holding a copy.
+
+**A backend that wedges is a phase failure, not a hang.** `[brain]
+timeout_seconds` bounds every ask of every backend in the table — the
+subprocess ceiling for commands, the HTTP ceiling for the built-in brain
+(3600 by default; `0` disables it). A backend that overruns is killed by
+process group, its `{cost_file}` spend is still charged, and the ask
+surfaces as a named failure the dispatch phase records, so one wedged
+command can no longer freeze the iteration while the wall-clock meter runs.
 
 ## Plugins: a declared seam for domain tooling
 

@@ -251,6 +251,39 @@ def test_reconcile_refuses_a_valid_record_and_a_mismatched_id(sandbox, store):
         attempts.reconcile(sandbox, "d" * 32, "owner", 0, "why")
 
 
+def test_reserve_admits_the_declared_concurrency_when_the_key_is_missing(
+        sandbox, store):
+    """A domain.toml that omits `max_parallel` used to meet reserve's private
+    default of 1: the second concurrent reservation was refused while
+    loop._map ran five workers. Both now share DEFAULT_MAX_PARALLEL."""
+    claim(sandbox, store, "Q1")
+    claim(sandbox, store, "Q2")
+    first = attempts.reserve(sandbox, "Q1", "owner", 30)
+    second = attempts.reserve(sandbox, "Q2", "owner", 30)
+    assert {r["entry"] for r in attempts.records(sandbox)} == {"Q1", "Q2"}
+    assert first["status"] == second["status"] == "reserved"
+
+
+def test_the_record_cache_never_hides_a_new_row_a_changed_one_or_a_gone_one(
+        sandbox, store):
+    """The cache is an accelerator, not a second truth: save() refreshes the
+    row it wrote, a file changed underneath it has a different (size,
+    mtime_ns) signature and is re-read, and a row deleted on disk stops
+    existing."""
+    claim(sandbox, store)
+    reservation = attempts.reserve(sandbox, "Q1", "owner", 30)
+    assert attempts.records(sandbox) == [json.loads(json.dumps(reservation))]
+    attempts.settle(sandbox, reservation["id"], "owner", "completed")
+    assert attempts.records(sandbox)[0]["status"] == "completed"
+    path = attempts.directory(sandbox) / reservation["id"] / "record.json"
+    row = json.loads(path.read_text())
+    row["status"] = "failed"
+    path.write_text(json.dumps(row))
+    assert attempts.records(sandbox)[0]["status"] == "failed"
+    path.unlink()
+    assert attempts.records(sandbox) == []
+
+
 def test_a_tombstone_whose_evidence_moved_refuses_the_meter(sandbox, store):
     claim(sandbox, store)
     identity = "e" * 32

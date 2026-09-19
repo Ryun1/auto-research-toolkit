@@ -1,5 +1,5 @@
 from autoresearch.validate import INBOX_WARN_BYTES, inbox_warnings
-from conftest import memo
+from conftest import make_entry, memo
 
 BIG = INBOX_WARN_BYTES + 1024
 
@@ -29,6 +29,28 @@ def test_a_small_memo_draws_no_warning(sandbox):
     memo(sandbox, "inbox/Q1.md", "the result held\n")
 
     assert inbox_warnings(sandbox) == []
+
+
+def test_validate_json_prints_only_ok_and_problems(sandbox, store, capsys):
+    """A `--json` consumer parses stdout, not around prose: warnings and the
+    read-counts summary stay off the document channel, and the exit code is
+    unchanged."""
+    import json
+
+    from autoresearch import cli, render
+
+    render.write_views(sandbox, store.all())
+    assert cli.main(["--domain", str(sandbox.paths.root),
+                     "validate", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc == {"ok": True, "problems": [], "skipped_runs": 0}
+
+    make_entry(store, "Q1", hardware="typo")
+    assert cli.main(["--domain", str(sandbox.paths.root),
+                     "validate", "--json"]) == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["ok"] is False
+    assert any("typo" in p for p in doc["problems"])
 
 
 def test_an_empty_inbox_is_silent(sandbox):

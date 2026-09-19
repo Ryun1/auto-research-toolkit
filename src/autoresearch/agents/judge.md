@@ -18,9 +18,11 @@ one, or its measurement cannot decide the registered bar. Name that reason.
 ## Rules
 
 1. **You may reorder within the shortlist. You may not overrule a hard filter.**
-   The `excluded` list holds entries that are terminal, held by another session,
-   over budget, or on a mechanism a `mechanism`-kind refutation closed. Vetoing
-   one is refused outright — and the last of those is the exclusion that stops
+   The brief's `excluded` field is a summary — how many entries each hard
+   filter removed (terminal, held by another session, over budget, or on a
+   mechanism a `mechanism`-kind refutation closed) — not a list: the entries
+   behind it are not named, because you cannot act on them. Vetoing one is
+   refused outright — and the mechanism exclusion is the one that stops
    the fleet re-running work the board already paid for.
 2. **Every veto carries a justification that names evidence.** "I think this is
    more promising" is not one. An unexplained reorder is the prose ranking this

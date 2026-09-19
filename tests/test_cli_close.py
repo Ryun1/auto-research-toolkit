@@ -35,3 +35,18 @@ def test_a_terminal_close_prints_no_warning(sandbox, store, capsys):
     code = _claim_and_close(sandbox, "Q1", "confirmed", "--memo", "inbox/Q1.md")
     assert code == 0
     assert "not terminal" not in capsys.readouterr().out
+
+
+def test_a_close_leaves_the_views_valid_so_validate_passes(sandbox, capsys):
+    """The queue view carries status and claim state; a close that left it
+    stale made every hand-driven mutation eat a failed `ar validate` before
+    the next read. Mutating verbs re-render, so validate follows close with
+    no manual `ar render` in between."""
+    root = ["--domain", str(sandbox.paths.root), "--session", "s"]
+    assert cli.main([*root, "entry", "new", "Q1 title",
+                     "--track", "research", "--id", "Q1"]) == 0
+    assert cli.main([*root, "claim", "Q1", "--why", "taking it"]) == 0
+    assert cli.main([*root, "close", "Q1", "confirmed",
+                     "--memo", memo(sandbox, "inbox/Q1.md")]) == 0
+    assert cli.main([*root, "validate"]) == 0
+    assert "problem" not in capsys.readouterr().out

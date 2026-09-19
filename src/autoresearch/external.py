@@ -161,6 +161,18 @@ def _fold_back_verdict(config, identity, entry_id, verdict):
         return
 
 
+def _refresh_views(config) -> None:
+    """Re-write the generated views after complete/cancel mutate an entry.
+
+    Both paths change entry status and claim state through `_apply_verdict`
+    or claim release, and `ar validate` refuses a view that disagrees with
+    the records -- the same failed-validate-between-mutation-and-read cost
+    the CLI's mutating verbs exist to prevent, on the native-dispatch path.
+    """
+    from . import render
+    render.write_views(config, Store(config.paths.entries).all())
+
+
 def complete(config, identity, session, report):
     """Settle an external assignment: retain its evidence, apply the verdict.
 
@@ -289,9 +301,11 @@ def _command(args):
         except (OSError, ValueError) as exc:
             raise AutoresearchError(f"unreadable completion report: {exc}") from exc
         row = complete(config, args.id, args.session, report)
+        _refresh_views(config)   # complete applied a verdict: views must match
     elif args.external_action == "cancel":
         row = cancel(config, args.id, args.session, args.reason,
                      confirm_inactive=args.confirm_inactive)
+        _refresh_views(config)   # cancel releases the claim: views must follow
     else:
         row = attempts.load(config, args.id, args.session)
     print(json.dumps(row, indent=2))

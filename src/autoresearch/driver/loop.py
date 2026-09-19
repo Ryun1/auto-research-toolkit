@@ -64,6 +64,38 @@ def _iso() -> str:
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
 
+# Prefix a rank.py hard-filter reason starts with, normalized to the filter
+# that produced it -- the reason text names a concrete entry or session, and
+# the judge needs the shape of the filtering, not the rows.
+_EXCLUDED_FILTERS = (
+    ("terminal", "terminal"),
+    ("held", "held"),
+    ("not claimable", "not-claimable"),
+    ("cost", "cost"),
+    ("host", "host"),
+    ("mechanism", "mechanism-refuted"),
+)
+
+
+def _excluded_summary(cards) -> dict:
+    """`{count, by_filter}` instead of the excluded row list.
+
+    The judge may not veto excluded entries (`apply_veto` refuses), so the
+    per-row payload -- an id and a reason per hard-filtered entry, growing
+    with the record -- bought it nothing. A summary of how much was filtered
+    and by what keeps the judge's brief bounded while the `ranking` rows it
+    IS allowed to act on ride in full.
+    """
+    by_filter: dict[str, int] = {}
+    for card in cards:
+        label = "other"
+        if card.excluded:
+            label = next((name for prefix, name in _EXCLUDED_FILTERS
+                          if card.excluded.startswith(prefix)), "other")
+        by_filter[label] = by_filter.get(label, 0) + 1
+    return {"count": len(cards), "by_filter": by_filter}
+
+
 @dataclass
 class Phase:
     name: str
@@ -352,7 +384,15 @@ class Coordinator:
         """Everything a role needs, assembled once. The knowledge guides and the
         skills are included by path rather than inlined: a worker has tools and
         can read them, and a generator that cannot see the closed-directions map
-        will propose closed directions."""
+        will propose closed directions.
+
+        The board fields (open_entries, closed_directions, mechanism_coverage,
+        branch_families) ride only into the roles whose prompts route on them.
+        The record grows monotonically, so one superset brief made every
+        role's payload grow with the record; a worker's data arrives through
+        `extra` (entry, lineage, record_command, memos_directory, workspace,
+        instruction) and the board it does not route on bought nothing but
+        tokens."""
         entries = self.store.all()
         skill_index, skill_problems = self._skill_index()
         payload = {
@@ -381,35 +421,7 @@ class Coordinator:
                         "machine and the concurrency it was taken at",
             },
             "measure_command": self.config.commands.get("measure"),
-            "open_entries": [
-                {"id": e.id, "title": e.title, "status": e.status,
-                 "mechanisms": e.mechanisms, "hypothesis": e.hypothesis}
-                for e in entries
-                if not self.config.track_for(e.id).machine.status(e.status).terminal],
-            "closed_directions": [
-                {"id": e.id, "verdict": e.result.verdict,
-                 "closure_kind": e.result.closure_kind,
-                 "mechanisms": e.mechanisms,
-                 "reopen_condition": e.result.reopen_condition,
-                 "summary": e.result.summary}
-                for e in entries
-                if e.result is not None],
-            # Coverage map: how many terminal experiment entries have tested
-            # each mechanism tag. A tag missing from this map, or with
-            # `"tested": 0`, is untested -- the coverage reserve's lane, and
-            # the one kind of proposal this board is shortest of.
-            "mechanism_coverage": self._mechanism_coverage(entries),
-            # Scoped sibling memory (AIRA arXiv 2507.02554 §4.1): what each
-            # branchable parent's children already concluded, plus the
-            # complexity cue a next child should aim at. A generator branching
-            # off P reads P's family, not the whole record -- siblings that
-            # differ push diversity; siblings that repeat are mode collapse.
-            "branch_families": self._branch_families(entries),
             "budget_remaining": {
-                # float("inf") serializes as bare `Infinity`, which is not
-                # valid JSON: spec-compliant parsers reject it (the TypeSafe
-                # System One endpoint answers HTTP 500). An unlimited meter
-                # is "no number", so it rides as null.
                 # float("inf") serializes as bare `Infinity`, which is not
                 # valid JSON: spec-compliant parsers reject it (the TypeSafe
                 # System One endpoint answers HTTP 500). An unlimited meter
@@ -417,15 +429,47 @@ class Coordinator:
                 name: (None if math.isinf(v := meter.remaining()) else v)
                 for name, meter in self.domain_budget.meters.items()},
         }
+        if role in (Role.GENERATOR, Role.SCOUT):
+            payload.update({
+                "open_entries": [
+                    {"id": e.id, "title": e.title, "status": e.status,
+                     "mechanisms": e.mechanisms, "hypothesis": e.hypothesis}
+                    for e in entries
+                    if not self.config.track_for(e.id).machine.status(e.status).terminal],
+                "closed_directions": [
+                    {"id": e.id, "verdict": e.result.verdict,
+                     "closure_kind": e.result.closure_kind,
+                     "mechanisms": e.mechanisms,
+                     "reopen_condition": e.result.reopen_condition,
+                     "summary": e.result.summary}
+                    for e in entries
+                    if e.result is not None],
+                # Coverage map: how many terminal experiment entries have tested
+                # each mechanism tag. A tag missing from this map, or with
+                # `"tested": 0`, is untested -- the coverage reserve's lane, and
+                # the one kind of proposal this board is shortest of.
+                "mechanism_coverage": self._mechanism_coverage(entries),
+                # Scoped sibling memory (AIRA arXiv 2507.02554 §4.1): what each
+                # branchable parent's children already concluded, plus the
+                # complexity cue a next child should aim at. A generator branching
+                # off P reads P's family, not the whole record -- siblings that
+                # differ push diversity; siblings that repeat are mode collapse.
+                "branch_families": self._branch_families(entries),
+            })
+        elif role == Role.CURATOR:
+            # Its prompt reasons over the coverage map when a verdict is the
+            # first ever on a mechanism tag; the rest of the board it does not
+            # route on.
+            payload["mechanism_coverage"] = self._mechanism_coverage(entries)
         payload.update(extra)
-        return json.dumps(payload, indent=2, default=str)
+        return json.dumps(payload, separators=(",", ":"), default=str)
 
     # -- phases ------------------------------------------------------------
 
     def _mechanism_coverage(self, entries) -> dict:
         """Terminal experiment verdicts per mechanism tag, for the briefs.
 
-        Generator, scout and judge all need the same fact -- which mechanism
+        Generator, scout and curator all need the same fact -- which mechanism
         tags the record has actually tested and which it has only named -- so
         it is computed once here. Untested is the interesting row: a tag the
         board keeps proposing but never measuring is exactly the failure the
@@ -730,8 +774,7 @@ class Coordinator:
                 ranking=[{"id": s.entry_id, "score": s.score, "terms": s.terms,
                           "title": s.title, "novel": s.novel}
                          for s in ranking.scored],
-                excluded=[{"id": s.entry_id, "why": s.excluded}
-                          for s in ranking.excluded],
+                excluded=_excluded_summary(ranking.excluded),
                 instruction=(
                     f"The risk dial is {self.config.risk:.0%}: that share of "
                     "the shortlist goes to novel branches (`novel: true`, no "
@@ -1117,8 +1160,6 @@ class Coordinator:
         start = time.time()
         entries = self.store.all()
         phase.read = len(entries)
-        render.write_views(self.config, entries)
-        phase.did += 1
         try:
             budget.spend("spawns", note="curator")
             reply = self._ask(Role.CURATOR, self._brief(
@@ -1412,8 +1453,13 @@ class Coordinator:
         """
         if not items:
             return []
+        # Declared concurrency ceiling; attempts.reserve shares
+        # DEFAULT_MAX_PARALLEL. The old local default (5) disagreed with
+        # reserve's (1), so a domain without the key serialized its
+        # dispatches while its workers thought they had room.
         workers = max(1, min(len(items),
-                             int(self.config.coordinator.get("max_parallel", 5))))
+                             int(self.config.coordinator.get(
+                                 "max_parallel", attempts.DEFAULT_MAX_PARALLEL))))
         out = []
         with futures.ThreadPoolExecutor(max_workers=workers) as pool:
             submitted = [(item, pool.submit(fn, item)) for item in items]

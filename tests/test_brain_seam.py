@@ -4,8 +4,12 @@ The loop must never learn a backend exists, and the config must refuse a
 broken brain table before anything spends -- a misspelled placeholder is a
 scout that runs without its prompt.
 """
+import io
 import json
+import os
 import sys
+import time
+import urllib.error
 
 import pytest
 
@@ -107,6 +111,116 @@ def test_an_absent_cost_file_blocks_further_spend_under_a_ceiling(sandbox):
         brain.ask("scout", "[]")
 
 
+# -- the ask timeout: a wedged backend fails, it does not hang ---------------
+
+#: A backend that reports its grandchild's pid, then wedges. The grandchild
+#: shares the backend's process group, so a group kill must take both.
+WEDGED_AGENT = (
+    "import os, pathlib, subprocess, time\n"
+    "child = subprocess.Popen(['sleep', '300'])\n"
+    "pathlib.Path(os.environ['PID_FILE']).write_text(str(child.pid))\n"
+    "time.sleep(300)\n"
+)
+
+
+def test_a_wedged_backend_is_killed_and_names_the_failure(sandbox, monkeypatch,
+                                                          tmp_path):
+    from autoresearch.driver.brain import ProcessBrain
+    pid_file = tmp_path / "grandchild.pid"
+    monkeypatch.setenv("PID_FILE", str(pid_file))
+    brain = ProcessBrain([sys.executable, "-c", WEDGED_AGENT],
+                         root=sandbox.paths.root, timeout=1)
+    started = time.monotonic()
+    with pytest.raises(AutoresearchError,
+                       match=r"timed out after 1s.*attempt failed"):
+        brain.ask("scout", "[]")
+    assert time.monotonic() - started < 60, "the ask returned, it did not hang"
+    # The kill is by process group: the grandchild is gone with it.
+    grandchild = int(pid_file.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(grandchild, 0)
+
+
+def test_timeout_stderr_travels_with_the_timeout_error(sandbox):
+    from autoresearch.driver.brain import ProcessBrain
+    brain = ProcessBrain(
+        [sys.executable, "-c",
+         "import sys, time; sys.stderr.write('halfway\\n'); "
+         "sys.stderr.flush(); time.sleep(300)"],
+        root=sandbox.paths.root, timeout=1)
+    with pytest.raises(AutoresearchError, match="timed out.*halfway"):
+        brain.ask("scout", "[]")
+
+
+def test_timeout_zero_disables_the_ceiling(sandbox):
+    from autoresearch.driver.brain import ProcessBrain
+    brain = ProcessBrain(
+        [sys.executable, "-c", "import time; time.sleep(1.5); print('[]')"],
+        root=sandbox.paths.root, timeout=0)
+    assert brain.ask("scout", "[]").data == [], "0 means no timeout, not none"
+
+
+def test_a_timed_out_backend_still_charges_what_it_spent(sandbox):
+    """A backend can burn API money, write its cost file, and only then
+    wedge past the ceiling. The kill is not a refund: the cost it managed to
+    write is the spend, and a finite ceiling must stop on it."""
+    from autoresearch.driver.brain import CostLedger, ProcessBrain
+    # {cost_file} is the placeholder ProcessBrain substitutes; the agent
+    # writes its cost, prints a partial reply, and then hangs.
+    spend_then_wedge = (
+        "import sys, time\n"
+        "cost_path = sys.argv[sys.argv.index('--cost-file') + 1]\n"
+        "open(cost_path, 'w').write('0.02')\n"
+        "time.sleep(300)\n"
+    )
+    ledger = CostLedger(1.0)
+    brain = ProcessBrain([sys.executable, "-c", spend_then_wedge,
+                          "--cost-file", "{cost_file}"],
+                         root=sandbox.paths.root, timeout=1, ledger=ledger)
+    with pytest.raises(AutoresearchError, match="timed out after 1s"):
+        brain.ask("scout", "[]")
+    assert ledger.spent == 0.02, "the spend the backend managed is charged"
+    # An unparsable cost on the timeout path is unknown spend, which refuses
+    # under a finite ceiling rather than passing free.
+    ledger2 = CostLedger(1.0)
+    junk_then_wedge = (
+        "import sys, time\n"
+        "cost_path = sys.argv[sys.argv.index('--cost-file') + 1]\n"
+        "open(cost_path, 'w').write('junk')\n"
+        "time.sleep(300)\n"
+    )
+    brain2 = ProcessBrain([sys.executable, "-c", junk_then_wedge,
+                           "--cost-file", "{cost_file}"],
+                          root=sandbox.paths.root, timeout=0.5,
+                          ledger=ledger2)
+    with pytest.raises(AutoresearchError, match="timed out"):
+        brain2.ask("scout", "[]")
+    with pytest.raises(AutoresearchError, match="cost is unknown"):
+        ledger2.remaining(), "unknown spend refuses under a ceiling"
+
+
+def test_the_role_prompt_cache_invalidates_on_mtime_change(tmp_path,
+                                                           monkeypatch):
+    """Re-reading every prompt per ask is the stat tax the cache exists to
+    stop; a swapped file carries a new mtime and must still be picked up."""
+    from autoresearch.driver import brain as brain_mod
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    prompt = agents / "scout.md"
+    prompt.write_text("v1")
+    monkeypatch.setattr(brain_mod, "AGENTS_DIR", agents)
+    assert brain_mod.role_prompt("scout") == "v1"
+    original = prompt.stat().st_mtime_ns
+    # Same mtime, new content: the cached copy answers -- re-reading every
+    # ask is exactly what the cache exists to stop.
+    prompt.write_text("v2")
+    os.utime(prompt, ns=(original, original))
+    assert brain_mod.role_prompt("scout") == "v1"
+    # A new mtime: the swap travels.
+    os.utime(prompt, ns=(original + 1_000_000, original + 1_000_000))
+    assert brain_mod.role_prompt("scout") == "v2"
+
+
 # -- routing -----------------------------------------------------------------
 
 def test_roles_route_to_the_backend_the_domain_named(sandbox):
@@ -177,6 +291,20 @@ def test_brain_table_rejects_a_malformed_command():
 def test_brain_table_rejects_an_unknown_placeholder():
     with pytest.raises(ConfigError, match="unknown placeholder.*promt_file"):
         _brain_spec({"curator": ["agent", "--prompt", "{promt_file}"]})
+
+
+def test_brain_table_accepts_timeout_seconds():
+    assert _brain_spec({"default": ["bin"], "timeout_seconds": 90}) \
+        == {"default": ["bin"], "timeout_seconds": 90.0}
+    assert _brain_spec({"default": ["bin"], "timeout_seconds": 0}) \
+        == {"default": ["bin"], "timeout_seconds": 0.0}, \
+        "0 means disabled, and is a value, not an absence"
+
+
+def test_brain_table_rejects_a_bad_timeout_seconds():
+    for bad in (-5, -0.5, "hour", True, None, float("nan"), float("inf")):
+        with pytest.raises(ConfigError, match="timeout_seconds"):
+            _brain_spec({"default": ["bin"], "timeout_seconds": bad})
 
 
 # -- the built-in brain is fail-closed: API money is authorized, not defaulted
@@ -385,6 +513,120 @@ def test_an_unpriced_model_reports_unknown_cost_never_zero():
     assert reply.cost_usd is None
 
 
+# -- the wire retries: a blip is not a verdict --------------------------------
+
+def http_error(code: int, body: bytes = b"") -> urllib.error.HTTPError:
+    """A stand-in HTTPError with a readable body, as urlopen raises it."""
+    return urllib.error.HTTPError("http://typesafe.test/v1", code, "err",
+                                  {}, io.BytesIO(body))
+
+
+def monkeypatch_sleep(monkeypatch) -> list:
+    sleeps: list = []
+    monkeypatch.setattr("autoresearch.driver.brain.time.sleep",
+                        lambda s: sleeps.append(s))
+    return sleeps
+
+
+def test_a_transient_wire_failure_is_retried_with_backoff(monkeypatch):
+    """URLError and socket timeout are conditions a retry can fix; the
+    backoff is 0.5s then 1.0s, and only two retries are granted."""
+    from autoresearch.driver import brain as brain_mod
+    from autoresearch.driver.brain import TypeSafeBrain
+    failures = [urllib.error.URLError("connection reset"),
+                TimeoutError("timed out"),  # the socket timeout
+                {"answers": {"problem_0": {"type": "noul", "noul": 0.9}}}]
+    calls = []
+
+    def flaky_once(self, payload):
+        calls.append(1)
+        outcome = failures.pop(0)
+        if isinstance(outcome, dict):
+            return outcome
+        raise brain_mod._TransientWire(str(outcome)) from outcome
+
+    monkeypatch.setattr(TypeSafeBrain, "_post_once", flaky_once)
+    sleeps = monkeypatch_sleep(monkeypatch)
+    brain = TypeSafeBrain(api_key="test")
+    reply = brain.ask("qc", json.dumps({"mechanical_problems": ["p"]}))
+    assert reply.data["problems"] == ["p"]
+    assert len(calls) == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_an_http_5xx_is_retried_and_exhaustion_names_the_last_failure(
+        monkeypatch):
+    from autoresearch.driver.brain import TypeSafeBrain
+
+    def unavailable(request, timeout=None):
+        raise http_error(503, b"backend overloaded")
+
+    monkeypatch.setattr(urllib.request, "urlopen", unavailable)
+    sleeps = monkeypatch_sleep(monkeypatch)
+    brain = TypeSafeBrain(api_key="test")
+    with pytest.raises(AutoresearchError, match="HTTP 503.*backend overloaded"):
+        brain._post({})
+    assert len(sleeps) == 2, "two retries, then the failure is final"
+
+
+def test_a_socket_timeout_is_transient_but_an_odd_wire_error_is_not(
+        monkeypatch):
+    from autoresearch.driver.brain import TypeSafeBrain
+    for outcome, transient in ((TimeoutError("socket timed out"), True),
+                               (ValueError("unknown url type"), False)):
+        calls = []
+
+        def wire(request, timeout=None, outcome=outcome, calls=calls):
+            calls.append(1)
+            raise outcome
+
+        monkeypatch.setattr(urllib.request, "urlopen", wire)
+        sleeps = monkeypatch_sleep(monkeypatch)
+        brain = TypeSafeBrain(api_key="test")
+        with pytest.raises(AutoresearchError, match="typesafe request failed"):
+            brain._post({})
+        assert (len(calls) == 3) == transient
+        assert (len(sleeps) == 2) == transient
+
+
+def test_a_4xx_is_a_verdict_never_a_retry(monkeypatch):
+    """Auth and bad-request failures re-fail identically when retried; the
+    retry budget is for wire blips, not for the endpoint's own answers."""
+    from autoresearch.driver.brain import TypeSafeBrain
+    for code in (400, 401):
+        calls = []
+
+        def unavailable(request, timeout=None, code=code, calls=calls):
+            calls.append(1)
+            raise http_error(code, b"bad key")
+
+        monkeypatch.setattr(urllib.request, "urlopen", unavailable)
+        sleeps = monkeypatch_sleep(monkeypatch)
+        brain = TypeSafeBrain(api_key="test")
+        with pytest.raises(AutoresearchError, match=f"HTTP {code}"):
+            brain._post({})
+        assert len(calls) == 1 and sleeps == []
+
+
+def test_retry_exhaustion_records_unknown_spend(monkeypatch):
+    """A transient-failed POST may have been processed and billed server-side;
+    the usage is unknowable, so exhaustion marks the ledger unknown -- under a
+    finite ceiling that refuses further dispatch until reconciled."""
+    from autoresearch.driver.brain import CostLedger, TypeSafeBrain
+
+    def refused(request, timeout=None):
+        raise urllib.error.URLError("connection reset mid-request")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refused)
+    monkeypatch_sleep(monkeypatch)
+    ledger = CostLedger(1.0)
+    brain = TypeSafeBrain(api_key="test", ledger=ledger)
+    with pytest.raises(AutoresearchError, match="connection reset"):
+        brain._post({})
+    with pytest.raises(AutoresearchError, match="cost is unknown"):
+        ledger.remaining(), "unknown spend refuses under a ceiling"
+
+
 # -- the typesafe brain in the table and the router ---------------------------
 
 def test_brain_table_accepts_typesafe_routes_and_options():
@@ -459,3 +701,39 @@ def test_the_default_may_be_the_typesafe_brain(sandbox, monkeypatch):
     brain = build_brain(sandbox)
     assert isinstance(brain.default, TypeSafeBrain)
     assert brain.routes == {}, "no routes named, every role falls to the default"
+
+
+# -- timeout_seconds wiring: one ceiling for every backend in the table -------
+
+def test_timeout_seconds_wires_through_to_both_backends(sandbox, monkeypatch):
+    from autoresearch.driver.brain import TypeSafeBrain, build_brain
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    sandbox.brain = {"default": echo_command(), "judge": "typesafe",
+                     "authorize_spend": True, "timeout_seconds": 90}
+    brain = build_brain(sandbox, allow_paid=True)
+    assert brain.default.timeout == 90
+    assert brain.routes["judge"].timeout == 90
+    assert isinstance(brain.routes["judge"], TypeSafeBrain)
+    assert set(brain.routes) == {"judge"}, \
+        "a table option must never become a backend"
+
+
+def test_absent_timeout_seconds_keeps_each_backend_s_default(sandbox,
+                                                             monkeypatch):
+    from autoresearch.driver.brain import ProcessBrain, build_brain
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    sandbox.brain = {"default": echo_command(), "judge": "typesafe",
+                     "authorize_spend": True}
+    brain = build_brain(sandbox, allow_paid=True)
+    assert brain.default.timeout == ProcessBrain.DEFAULT_TIMEOUT
+    assert brain.routes["judge"].timeout == 30.0
+
+
+def test_timeout_zero_reaches_the_brain_as_disabled(sandbox, monkeypatch):
+    """0 is 'no ceiling', not 'instant expiry': it must survive the wire and
+    disable the subprocess kill, not time every ask out at once."""
+    from autoresearch.driver.brain import build_brain
+    sandbox.brain = {"default": echo_command(), "timeout_seconds": 0}
+    brain = build_brain(sandbox)
+    assert brain.default.timeout == 0
+    assert brain.default.ask("scout", "[]").cost_usd == 0.25

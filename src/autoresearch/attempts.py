@@ -6,6 +6,7 @@ an explicit inactive-owner attestation; PID age alone never proves inactivity.
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import json
@@ -28,6 +29,13 @@ from .errors import AutoresearchError
 SCHEMA = "ar-attempt-1"
 ACTIVE = {"reserved", "running", "assigned", "completing", "cancelling"}
 TERMINAL = {"completed", "failed", "cancelled", "timed-out"}
+
+# The declared concurrency ceiling when a domain.toml omits `max_parallel` --
+# the value the scaffold writes. One source for both this module's reserve
+# check and the coordinator's thread pool (`loop._map`): two defaults that
+# disagreed made a hand-written domain silently serialize its dispatches while
+# its parallel workers thought they had room.
+DEFAULT_MAX_PARALLEL = 3
 
 
 def now():
@@ -70,17 +78,55 @@ def _problem(path: Path, row) -> str | None:
     return None
 
 
+# Parsed attempt records, keyed by file path -> (size, mtime_ns, row). The
+# cache is transparent to callers: a file changed underneath us -- another
+# process settling, a legacy row dropped in by hand -- has a different
+# (size, mtime_ns) signature and is re-read.
+_RECORD_CACHE: dict[Path, tuple[int, int, dict]] = {}
+
+
+def _cached_row(path: Path) -> dict | None:
+    """The parsed record at `path`, re-parsed only when its bytes may have
+    changed, or None when it cannot be read.
+
+    reserve() re-reads every active record under the claim lock for each
+    shortlisted card, so re-globbing and re-parsing identical bytes per call
+    was the hot path this cache exists for. Unreadable files are never cached:
+    `problems()` must report them on every call.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        _RECORD_CACHE.pop(path, None)
+        return None
+    key = (stat.st_size, stat.st_mtime_ns)
+    cached = _RECORD_CACHE.get(path)
+    if cached is not None and (cached[0], cached[1]) == key:
+        return cached[2]
+    try:
+        row = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    _RECORD_CACHE[path] = (stat.st_size, stat.st_mtime_ns, row)
+    return row
+
+
 def problems(config) -> list[dict]:
     """Every attempt record that cannot feed a meter, with its reason.
 
     Inspection is deliberately separate from metering: `ar attempt list`
     reports these instead of dying on the first one, because a ledger one
     legacy row bricks is a ledger nobody can even enumerate to fix.
+
+    Quarantined and unreadable rows are reported on every call -- the cache
+    only skips the re-parse of bytes it has already seen unchanged.
     """
     out = []
     for path in sorted(directory(config).glob("*/record.json")):
         try:
-            row = json.loads(path.read_text())
+            row = _cached_row(path)
+            if row is None:
+                row = json.loads(path.read_text())
         except (OSError, ValueError) as exc:
             out.append({"path": str(path), "id": None, "reason": f"unreadable: {exc}"})
             continue
@@ -98,10 +144,13 @@ def records(config):
             f"invalid attempt record {found[0]['path']}: {found[0]['reason']}; "
             f"reconcile before spending ({len(found)} invalid record(s)): "
             "`ar attempt reconcile <id> --charged-runs N --reason ...`")
-    result = []
-    for path in sorted(directory(config).glob("*/record.json")):
-        result.append(json.loads(path.read_text()))
-    return result
+    live = set(directory(config).glob("*/record.json"))
+    # list() first: reserve() under the claim lock may insert a fresh row
+    # while a lock-free reader prunes here, and a dict that changes size
+    # during comprehension iteration raises.
+    for path in [p for p in list(_RECORD_CACHE) if p not in live]:
+        _RECORD_CACHE.pop(path)
+    return [_cached_row(path) for path in sorted(live)]
 
 
 TOMBSTONE_SCHEMA = "ar-attempt-tombstone-1"
@@ -200,12 +249,22 @@ def load(config, attempt_id, session=None):
         raise AutoresearchError(f"unknown attempt {attempt_id}")
     if session is not None and row["session"] != session_required(session):
         raise AutoresearchError("attempt belongs to another session")
-    return row
+    # A deep copy: the row came from _RECORD_CACHE, and settle()/checkpoint()
+    # mutate what they load. save() pops the cache entry before writing, so
+    # the copy is what reaches disk -- but a caller that mutates and then
+    # refuses (an exception between load and save) must not leave a state in
+    # the cache that never existed on disk.
+    return copy.deepcopy(row)
 
 
 def save(config, row):
     target = directory(config) / row["id"] / "record.json"
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Drop the cache entry before writing (load() hands out a deep copy since
+    # the cache landed, but reserve() still reads rows by reference): a save
+    # that fails before the rename must not leave the previous bytes looking
+    # like this row, and the re-read below repopulates it from what landed.
+    _RECORD_CACHE.pop(target, None)
     fd, temporary = tempfile.mkstemp(prefix=".record-", dir=target.parent)
     try:
         with os.fdopen(fd, "w") as stream:
@@ -219,6 +278,10 @@ def save(config, row):
             os.fsync(fd)
         finally:
             os.close(fd)
+        # Re-read the bytes we just put on disk, so the next records() call
+        # serves what a cold read would -- the cache is an accelerator, never
+        # a second copy of the truth.
+        _cached_row(target)
     finally:
         Path(temporary).unlink(missing_ok=True)
 
@@ -266,7 +329,8 @@ def reserve(config, entry_id, session, seconds, command=(), *, kind="exec", unit
         if budget.total_runs(config) + units > domain_ceiling:
             raise AutoresearchError("domain run ceiling exhausted")
         budget.require_money(config, budget.recorded_usage(config)["money"])
-        parallel = config.coordinator.get("max_parallel", 1)
+        # Declared concurrency ceiling; loop._map shares DEFAULT_MAX_PARALLEL.
+        parallel = config.coordinator.get("max_parallel", DEFAULT_MAX_PARALLEL)
         if not isinstance(parallel, int) or parallel <= 0:
             raise AutoresearchError("max_parallel must be a finite positive integer")
         if sum(r["status"] in ACTIVE for r in records(config)) >= parallel:

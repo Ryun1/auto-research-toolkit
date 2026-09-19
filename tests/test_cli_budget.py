@@ -100,6 +100,26 @@ def test_budget_shows_reservations_in_domain_and_claim(sandbox, store, capsys):
     assert next(line for line in domain.splitlines() if line.strip().startswith("runs")).split()[1] == "2"
 
 
+def test_budget_json_reports_meters_claims_and_stop(sandbox, store, capsys):
+    """`--json` prints only the document: meters, live claims, and the stop
+    decision, against the same in-memory structures the prose reads."""
+    import json
+    make_entry(store, "Q1", claim=Claim(session="s1", at=NOW, why="",
+                                        budget="", max_runs=2, max_hours=4.0))
+    assert cli.main(["--domain", str(sandbox.paths.root),
+                     "budget", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert set(doc) == {"meters", "claims", "stop", "target", "best"}
+    assert set(doc["meters"]["runs"]) == {"spent", "remaining", "ceiling"}
+    # The iteration meters share names with the domain's, so they are
+    # namespaced rather than silently overwriting.
+    assert "iteration.runs" in doc["meters"]
+    assert doc["claims"][0]["session"] == "s1"
+    assert doc["claims"][0]["overrun"] is None
+    assert doc["stop"]["reason"]
+    assert doc["best"] is None
+
+
 def test_rank_accounts_for_reserved_and_failed_execution(sandbox, store, capsys):
     from autoresearch import attempts
     from autoresearch.claims import Claims

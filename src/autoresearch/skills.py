@@ -142,6 +142,17 @@ def parse(text: str, path=None) -> Skill:
         path=pathlib.Path(path) if path else None)
 
 
+#: Per-file parse cache: (path, size, mtime_ns) -> the parsed Skill. Brief
+#: assembly and `ar skill list` re-read the whole corpus several times per
+#: run; re-parsing identical bytes is pure waste. Keyed on the stat signature
+#: rather than a contents hash because a stat is cheaper than a read, and on
+#: the path as well because two different files can share a size and a
+#: timestamp, and a cache that can confuse two skills is worse than no cache.
+#: Files that fail to parse are never cached: an unreadable skill must be
+#: reported on every call, and a fix on disk must be picked up immediately.
+_SKILL_CACHE: dict[tuple[str, int, int], Skill] = {}
+
+
 def read_all(config) -> tuple[list[Skill], list[str]]:
     """Every skill under `skills.dir`, plus one problem line per file that could
     not be read.
@@ -150,11 +161,19 @@ def read_all(config) -> tuple[list[Skill], list[str]]:
     a reader that stops at the first bad file makes "no skills" and "one broken
     skill" the same screen. A missing directory is zero skills and no problem --
     a domain that has not distilled anything yet is not misconfigured.
+
+    Parsing is cached per file on its stat signature; callers neither know nor
+    care. A file whose bytes change gets a new signature and is re-read.
     """
     root = config.paths.root / config.skills.dir
     skills, problems = [], []
     if not root.is_dir():
+        # The cache holds only this domain's files, keyed by absolute path,
+        # but entries of a removed skill directory would otherwise serve a
+        # same-signature recreation; prune against what is live now.
+        _SKILL_CACHE.clear()
         return skills, problems
+    live_paths = set()
     for sub in sorted(p for p in root.iterdir() if p.is_dir()):
         path = sub / SKILL_FILE
         if not path.exists():
@@ -162,12 +181,31 @@ def read_all(config) -> tuple[list[Skill], list[str]]:
                 f"skills: {sub.name}/ has no {SKILL_FILE}; a skill is a "
                 f"directory containing one")
             continue
+        live_paths.add(str(path))
         try:
-            skills.append(parse(path.read_text(), path))
+            st = path.stat()
+        except OSError as exc:
+            problems.append(f"skills: {path}: {exc}")
+            continue
+        key = (str(path), st.st_size, st.st_mtime_ns)
+        cached = _SKILL_CACHE.get(key)
+        if cached is not None:
+            skills.append(cached)
+            continue
+        try:
+            skill = parse(path.read_text(), path)
         except SchemaError as exc:
             problems.append(f"skills: {exc}")
+            continue
         except (OSError, UnicodeError) as exc:
             problems.append(f"skills: {path}: {exc}")
+            continue
+        _SKILL_CACHE[key] = skill
+        skills.append(skill)
+    # Prune keys of files that no longer exist, so a deleted-then-recreated
+    # skill directory with a colliding signature cannot resurrect a ghost.
+    for stale in [k for k in list(_SKILL_CACHE) if k[0] not in live_paths]:
+        del _SKILL_CACHE[stale]
     return skills, problems
 
 

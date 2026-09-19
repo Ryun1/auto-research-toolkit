@@ -50,6 +50,42 @@ def test_unreadable_skill_does_not_hide_valid_sibling(sandbox):
     assert len(problems) == 1 and str(broken) in problems[0]
 
 
+def test_read_all_caches_a_parse_until_the_file_changes(sandbox, monkeypatch):
+    """Brief assembly re-reads the whole corpus several times a run; the
+    per-file signature cache must skip re-parsing identical bytes and must
+    re-read a file whose bytes changed."""
+    make_skill(sandbox, "cached", cites=["Q1"])
+    calls = []
+    original = skills_mod.parse
+
+    def counting(text, path=None):
+        calls.append(str(path))
+        return original(text, path)
+
+    monkeypatch.setattr(skills_mod, "parse", counting)
+    first, _ = skills_mod.read_all(sandbox)
+    second, _ = skills_mod.read_all(sandbox)
+    assert len(calls) == 1
+    assert [s.name for s in second] == [s.name for s in first] == ["cached"]
+
+    path = sandbox.paths.root / sandbox.skills.dir / "cached" / "SKILL.md"
+    path.write_text(path.read_text().replace("might apply", "changed trigger"))
+    third, _ = skills_mod.read_all(sandbox)
+    assert len(calls) == 2
+    assert "changed trigger" in third[0].description
+
+
+def test_an_unparseable_skill_is_reported_on_every_call(sandbox):
+    """A problem is never cached: a reader that reported a broken skill once
+    and then went quiet would make the fix-on-disk invisible."""
+    path = sandbox.paths.root / sandbox.skills.dir / "broken" / "SKILL.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("no frontmatter here\n")
+    _, first = skills_mod.read_all(sandbox)
+    _, second = skills_mod.read_all(sandbox)
+    assert first == second and len(first) == 1 and "frontmatter" in first[0]
+
+
 def test_render_round_trips(sandbox, store):
     _entries(sandbox, store, "Q1")
     path = make_skill(sandbox, "round-trip", cites=["Q1"])
