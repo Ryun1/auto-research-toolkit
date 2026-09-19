@@ -6,8 +6,9 @@ agent. Both must clear the same gate with the same refusals, or the two
 paths diverge into different trees. The coordinator owns the structure: an
 unknown parent, a lineage past `tree_max_depth`, more siblings per parent
 than `tree_max_children`, a branch crossing tracks, or a kind on a root is
-refused here, with a reason, before anything is written.
-"""
+refused here, with a reason, before anything is written. A parent the record
+has marked stagnant (`branch_stagnation`: enough refuted children, none
+confirmed) is refused a new child for the same reason."""
 from __future__ import annotations
 
 from .entries import KINDS
@@ -62,3 +63,14 @@ def check_branch(config, store, parent: str, kind: str,
             raise AutoresearchError(
                 f"parent {parent!r} already has {siblings} branch(es); "
                 f"tree_max_children={max_children}")
+    stagnation = getattr(config, "branch_stagnation", 0)
+    if stagnation:
+        from .rank import stagnant_parents
+        stagnant = stagnant_parents(
+            store.all(), lambda eid: config.track_for(eid).machine, stagnation)
+        if parent in stagnant:
+            raise AutoresearchError(
+                f"parent {parent!r} is stagnant: {stagnant[parent]} refuted "
+                f"branch(es) with none confirmed "
+                f"(branch_stagnation={stagnation}); a refusal here is "
+                "information, the same one the tree caps give")

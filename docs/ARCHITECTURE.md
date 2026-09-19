@@ -115,7 +115,12 @@ Four things about this shape are deliberate:
   "no cadence" and "nothing to distil" and "the librarian was refused" are three
   distinguishable lines rather than one blank.
 - **QC is mechanical first.** `ar validate`-style checks answer most of it with
-  no model; the QC role is asked only about what code cannot check.
+  no model; the QC role is asked only about what code cannot check. Among the
+  mechanical checks since the corpus taught the class: a closed `confirmed`
+  entry's typed summary is traced against the run ledger — every non-trivial
+  number in it must be a row metric, that row's objective value, the row
+  count, or arithmetic over matched values (AgentRxiv's fabricated results,
+  arXiv 2503.18102; CodeScientist's unfaithful experiments, arXiv 2503.22708).
 - **Wall clock gates the three phases that start new work.** `generate`, `rank`
   and `dispatch` each ask whether the iteration's `iteration_max_seconds`
   remains before beginning; `curate` and `qc` are not gated, because they close
@@ -138,12 +143,18 @@ phase's detail lines. The shortlist splits on the same field:
 `[coordinator] risk` (default 0.5 — the neutral 50/50 stance between improving
 the incumbent and opening new territory) decides what share of the slots goes
 to roots; within each partition the score decides; an unfilled share returns
-to the other partition; `k=1` is never spent on a partition. A domain may
+to the other partition; `k=1` is never spent on a partition. Another hard
+filter guards yield: with `branch_stagnation` set, a parent whose children
+closed `refuted` at least that many times without a single `confirmed` is
+stagnant — its remaining children are excluded from ranking and a new child
+is refused at filing. The exclusion is recomputed from the record every rank,
+so one confirmed sibling clears it. A domain may
 replace the formula's pricing with its own through `[commands] score =
 "bin/score"` — a seam shaped like `preflight` (stdin `{"risk", "entries"}`,
 stdout `{"scores": [{id, score, reason}]}`, claimable candidates only). The
 hard filters run before the seam either way, so neither the dial nor a
-domain's prices can resurrect a `mechanism`-refuted direction; and a seam
+domain's prices can resurrect a `mechanism`-refuted direction or a stagnant
+lineage; and a seam
 failure refuses the rank phase and skips dispatch rather than falling back to
 the formula the domain replaced.
 
@@ -245,6 +256,17 @@ spending dispatch resources or creating a claim/workspace. Domains without a
 hook retain existing behavior after the measurement-command policy check.
 The hook is domain-owned and must be read-only; this is not a sandbox or a
 substitute for native-agent permission checks.
+
+**Replication at the close boundary.** `[coordinator] confirm_runs` (default 1)
+demands that many valid run rows in the ledger before a `confirmed` experiment
+closure is accepted — on both close paths (`_apply_verdict` and `ar close`),
+so neither can bypass the other's guard. A short ledger refuses the close and
+releases the claim back to the queue; `refuted` verdicts are exempt, because a
+legitimate refutation may hold only `invalid`/`failed` rows and demanding
+clean rows for a `no` would cry wolf. This is per-entry replication, weaker
+than the goal-level `confirm_independently` (different session or entry), and
+the two guard different threats: one noisy run closing a discovery versus a
+proxy overfitting across claims.
 
 ```mermaid
 sequenceDiagram

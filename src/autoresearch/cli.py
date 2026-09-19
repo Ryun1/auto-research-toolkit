@@ -544,6 +544,15 @@ def cmd_close(args):
         verdict=args.status, memo=args.memo or "", at=_iso(), session=args.session,
         summary=args.summary or "", closure_kind=args.closure,
         reopen_condition=args.reopen_condition or "")
+    # Same replication gate the coordinator applies: a close path that
+    # bypassed it would make the loop's guard vacuous (invariant 3 -- a guard
+    # that only refuses on one path is not a guard).
+    if (args.status == "confirmed"
+            and config.confirm_runs > 1):
+        evidence = runs_mod.closure_evidence(
+            runs_mod.read_all(config.paths.runs), args.id, config.confirm_runs)
+        if evidence:
+            raise AutoresearchError("; ".join(evidence))
     entry.apply(track.machine, args.status, who=args.session, why=args.why or "",
                 result=result,
                 memo_exists=lambda m: (memo_root / m).exists())

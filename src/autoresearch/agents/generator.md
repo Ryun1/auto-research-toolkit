@@ -102,6 +102,11 @@ A branch stays on its parent's track; depth and sibling counts are capped by
 the domain's `tree_max_depth` and `tree_max_children`, and a proposal past
 either cap is refused at filing with a reason. A refusal is information: it
 means the board wants that parent's children spent on a different exchange.
+The same is true of `branch_stagnation`: when enough of a parent's children
+have closed `refuted` with none `confirmed`, a new child of it is refused —
+branch that parent's *record*, not its lineage. If the refutations name a
+re-open condition you can test, file a root that tests it; otherwise open new
+territory.
 
 **Name the branch's intent with `kind`.** `improve` refines a premise that
 held; `debug` repairs one that failed or came back inconclusive; `probe`

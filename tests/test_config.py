@@ -197,6 +197,31 @@ def test_a_non_integer_tree_cap_is_refused_at_load(tmp_path):
             tmp_path, "[coordinator]\ntree_max_children = 2.5\n"))
 
 
+# -- stagnation and replication budgets -------------------------------------
+
+
+def test_stagnation_and_confirm_runs_have_off_defaults(tmp_path):
+    config = DomainConfig.load(_minimal(tmp_path))
+    assert config.branch_stagnation == 0      # disabled: no behavior change
+    assert config.confirm_runs == 1           # the historical contract
+
+
+def test_a_domain_may_set_stagnation_and_confirm_runs(tmp_path):
+    config = DomainConfig.load(_minimal(
+        tmp_path, "[coordinator]\nbranch_stagnation = 3\nconfirm_runs = 2\n"))
+    assert config.branch_stagnation == 3
+    assert config.confirm_runs == 2
+
+
+def test_a_negative_stagnation_or_confirm_runs_is_refused_at_load(tmp_path):
+    with pytest.raises(ConfigError, match="coordinator.branch_stagnation"):
+        DomainConfig.load(_minimal(
+            tmp_path, "[coordinator]\nbranch_stagnation = -1\n"))
+    with pytest.raises(ConfigError, match="coordinator.confirm_runs"):
+        DomainConfig.load(_minimal(
+            tmp_path, "[coordinator]\nconfirm_runs = -2\n"))
+
+
 def test_seams_declared_inside_domain_table_are_refused(tmp_path):
     """H135 in config form: `plugins` typed under [domain] is valid TOML the
     loader cannot see -- the seam reads as absent and every plugin verb is an

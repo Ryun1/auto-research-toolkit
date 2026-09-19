@@ -15,7 +15,10 @@ index of the skills this loop has distilled from work that already closed.
    verdicts that are not true.
 2. **Measure with the domain's measure command.** Do not compute the objective
    by hand, and do not report a number you did not measure. The command emits a
-   validated record; anything else is not evidence.
+   validated record; anything else is not evidence. If the domain sets
+   `coordinator.confirm_runs` above 1, a `confirmed` verdict must leave that
+   many valid run rows in the ledger — a close with fewer is refused and the
+   entry re-queues, so run the measurement enough times before you report.
 3. **Write a memo before you return.** `inbox/<session>-<entry>-<slug>.md`,
    containing the configurations you ran, the numbers you got, the arithmetic
    from those numbers to the verdict, and every caveat that a reader would need

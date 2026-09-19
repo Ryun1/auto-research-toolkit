@@ -221,6 +221,20 @@ class DomainConfig:
     #: maximum children filed against one parent. Siblings are the drafts of a
     #: search step -- the part exchanges. 0 disables the cap.
     tree_max_children: int = 4
+    #: when this many of a parent's children have closed `refuted` (as
+    #: experiment dispositions) and none has closed `confirmed`, the parent is
+    #: stagnant: its remaining children are excluded from ranking by a hard
+    #: filter, and filing a new child of it is refused. A stalled lineage
+    #: costs full dispatch price forever otherwise (CodeScientist's finding:
+    #: stuck search paths need a termination rule, not patience). 0 disables.
+    branch_stagnation: int = 0
+    #: valid run rows a `confirmed` experiment closure demands in the ledger
+    #: before it is accepted. 1 keeps the historical contract (the harvest step
+    #: already refuses a measured verdict whose evidence never landed); 2 or
+    #: more demands replication -- a discovery one noisy or fabricated run
+    #: closed forever is the CodeScientist failure (arXiv 2503.22708: several
+    #: discoveries that passed review died on replication). 0 disables.
+    confirm_runs: int = 1
     #: run the distil phase every N iterations; 0 turns it off. Typed out of the
     #: coordinator dict for the same reason as `risk`: it decides
     #: whether a phase runs at all, and discovering it was misspelled mid-loop
@@ -431,6 +445,10 @@ class DomainConfig:
                                        "lineage depth"),
             tree_max_children=_tree_count(coordinator, "tree_max_children", 4,
                                           "sibling"),
+            branch_stagnation=_tree_count(coordinator, "branch_stagnation", 0,
+                                          "refuted branches"),
+            confirm_runs=_tree_count(coordinator, "confirm_runs", 1,
+                                     "valid run rows"),
             distil_every=_distil_every(coordinator),
             dispatch=_dispatch_mode(coordinator),
             plugins=_plugins(data),

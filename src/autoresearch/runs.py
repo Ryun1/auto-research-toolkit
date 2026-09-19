@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import time
 import uuid
@@ -134,6 +135,103 @@ def append(path, record: RunRecord) -> pathlib.Path:
     with path.open("a") as fh:
         fh.write(json.dumps(record.to_dict(), sort_keys=True) + "\n")
     return path
+
+
+def closure_evidence(records, entry_id: str, min_ok: int) -> list[str]:
+    """Valid run rows backing a `confirmed` closure, or the refusal.
+
+    Counted by row id: two rows from the same worker are two executions, which
+    is the point -- this guard is against ONE noisy or fabricated measurement
+    closing an entry forever, not against proxy overfitting (that is the
+    stop-level `confirm_independently`, which demands a different session or
+    entry; arXiv 2507.02554 §5.3). The domain decides what makes
+    re-measurement honest -- a fresh seed, a new split -- and states it in the
+    entry; the core enforces only that more than one execution said so
+    (CodeScientist, arXiv 2503.22708: discoveries that survived paper review
+    died on replication with more samples).
+    """
+    ok = [r for r in records if r.entry == entry_id and r.status == OK]
+    if len(ok) >= min_ok:
+        return []
+    return [f"confirmed requires {min_ok} valid run row(s) for {entry_id} in "
+            f"the ledger; holds {len(ok)} -- run the measurement again, or "
+            "lower coordinator.confirm_runs if one row really is enough"]
+
+
+def faithfulness_problems(records, entry, goal) -> list[str]:
+    """Mechanical memo-vs-ledger faithfulness for a closed experiment entry.
+
+    The failure this names is documented, not hypothetical: AgentRxiv's agents
+    fabricated plausible results (arXiv 2503.18102), and CodeScientist found
+    experiments whose paper claimed a discovery the code never produced
+    (arXiv 2503.22708). Both are checkable against records the loop already
+    retains, so they are checked mechanically, before any model is asked.
+
+    Two checks, both over the TYPED summary the coordinator stores -- never a
+    regex over the memo's free prose (failure class 3.2: prose parsed by
+    regex reaches a decision), and only on `confirmed` verdicts. A legitimate
+    refutation may hold only `invalid`/`failed` rows -- a configuration that
+    measured but failed its validity gates still decided the bar (the source
+    corpus's Tier-2 finding: three outcomes, not two) -- so demanding `ok`
+    rows for a `no` would cry wolf.
+    1. the entry has at least one valid run row in the ledger;
+    2. every non-trivial number in `result.summary` traces to the ledger --
+       a metric value of one of the entry's rows, that row's objective value,
+       the row count, or arithmetic (difference/ratio) over two matched
+       values. A number matching nothing is named.
+    """
+    if (entry.result is None or entry.result.disposition != "experiment"
+            or entry.result.verdict != "confirmed"):
+        return []
+    rows = [r for r in records if r.entry == entry.id and r.status == OK]
+    if not rows:
+        return [f"{entry.id}: verdict closed with no valid run row in the "
+                "ledger -- a summary nothing measured backs is not evidence"]
+    out: list[str] = []
+    anchor: set[float] = set()
+    for row in rows:
+        anchor.update(abs(float(v)) for v in row.metrics.values())
+        try:
+            anchor.add(abs(goal.objective_value(row.metrics)))
+        except Exception:
+            pass
+    anchor.add(float(len(rows)))
+    for token in re.findall(r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+\.\d+",
+                            entry.result.summary):
+        value = abs(float(token))
+        if value == 0.0:
+            continue
+        if any(_tolerates(value, a) for a in anchor):
+            continue
+        # The worker contract promises "the arithmetic from those numbers to
+        # the verdict" (worker contract item 3): a difference, ratio, or
+        # percentage change of two matched anchors is that arithmetic, so it
+        # is accepted -- anything else cannot be traced to a measurement.
+        if any(_tolerates(value, d)
+               for a in anchor for b in anchor if a is not b
+               for d in (a - b,
+                         a / b if b else None,
+                         (a / b - 1) * 100 if b else None,
+                         (1 - a / b) * 100 if b else None)
+               if d is not None):
+            continue
+        out.append(
+            f"{entry.id}: summary number {token} matches no retained run row "
+            f"metric, objective value, or arithmetic over them "
+            f"({len(rows)} row(s) retained)")
+    return out
+
+
+def _tolerates(value: float, anchor: float, rel: float = 5e-3) -> bool:
+    """A summary number is a rounded REPORT of the ledger's number, not a
+    byte-copy: workers write `3.01` for a ledger `3.014` and `16.7%` for a
+    ratio of `0.16667`. Half a percent of relative slack absorbs ordinary
+    rounding while still refusing a number invented from nothing (a
+    fabrication is not `0.5%` off a real measurement -- and if it is, the QC
+    model sees the named number and judges it)."""
+    if anchor == 0:
+        return value == 0
+    return abs(value - anchor) <= rel * max(abs(value), abs(anchor))
 
 
 def best_run(records, goal):

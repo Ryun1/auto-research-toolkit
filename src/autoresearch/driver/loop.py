@@ -1128,6 +1128,20 @@ class Coordinator:
 
         try:
             applicability = report.get("applicability")
+            # Replication gate: a `confirmed` experiment closure must leave
+            # coordinator.confirm_runs valid rows in the ledger. Harvest
+            # retains the worker's rows BEFORE this runs, so the evidence is
+            # on disk by the time it is asked for; a verdict with too few rows
+            # is refused and the claim goes back to the queue, runs cost
+            # already charged -- the worker adds rows on the next pass.
+            if (verdict == "confirmed"
+                    and str(report.get("disposition", "experiment")) == "experiment"
+                    and self.config.confirm_runs > 1):
+                evidence = runs_mod.closure_evidence(
+                    runs_mod.read_all(self.config.paths.runs),
+                    entry_id, self.config.confirm_runs)
+                if evidence:
+                    raise AutoresearchError("; ".join(evidence))
             result = Result(
                 verdict=verdict, memo=str(report.get("memo", "")), at=_iso(),
                 session=self.session, summary=str(report.get("summary", "")),
@@ -1383,6 +1397,9 @@ class Coordinator:
         problems += skill_problems
         problems += skills_mod.check(self.config, found, entries,
                                      skills_mod.best_measurements(self.config))
+        # One ledger read for every closed entry's faithfulness check, not one
+        # per entry: a read inside the loop is O(closed x rows).
+        all_runs = runs_mod.read_all(self.config.paths.runs)
         for entry in entries:
             machine = self.config.track_for(entry.id).machine
             status = machine.status(entry.status)
@@ -1394,6 +1411,16 @@ class Coordinator:
                     f"{entry.id}: evidence memo {entry.result.memo!r} missing")
             if not status.terminal and entry.result is not None:
                 problems.append(f"{entry.id}: open entry carries a stale result")
+            # Mechanical faithfulness: a closed experiment's typed summary must
+            # trace to the run ledger it claims to summarise. Runs before the
+            # model ask, so the QC role sees the named problem and judges
+            # fabrication against bookkeeping gap -- it does not discover it.
+            # One ledger read for the whole pass: a read per closed entry is
+            # O(closed x rows), and the corpus this core came from is 400 x
+            # 9,453.
+            if status.terminal:
+                problems += runs_mod.faithfulness_problems(
+                    all_runs, entry, self.config.goal)
         # Nothing dispatched this iteration may still be held: a claim that
         # outlives its iteration is the squat H78/H125 describe.
         for entry_id in it.shortlist:

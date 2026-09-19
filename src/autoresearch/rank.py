@@ -192,6 +192,38 @@ def _dead_mechanisms(entries, machine_for):
     return hard, soft
 
 
+def stagnant_parents(entries, machine_for, threshold: int) -> dict[str, int]:
+    """Parents whose branch line has stalled, when `branch_stagnation` is set.
+
+    A parent is stagnant when at least `threshold` of its children closed
+    `refuted` (as experiment dispositions -- a blocked or inconclusive sibling
+    is not evidence against a direction) and none closed `confirmed`/`fixed`.
+    Recomputed from the record on every call: one confirmed sibling clears the
+    parent, so the exclusion self-heals and is never a state to store.
+
+    AIDE caps failed repairs with `max_debug_depth` and ml-Master prunes on
+    improvement stagnation (arXiv 2502.13138, 2506.16499): compute left on a
+    lineage whose every child refutes is the same burn. Mechanism-kind
+    refutations usually already hard-exclude the family through tags; this
+    covers the `slope`/`cell` refutations that do not.
+    """
+    refuted: dict[str, int] = {}
+    confirmed: set[str] = set()
+    for entry in entries:
+        machine = machine_for(entry.id)
+        if (not entry.parent
+                or not machine.status(entry.status).terminal
+                or entry.result is None
+                or entry.result.disposition != "experiment"):
+            continue
+        if entry.result.verdict == "refuted":
+            refuted[entry.parent] = refuted.get(entry.parent, 0) + 1
+        elif entry.result.verdict in ("confirmed", "fixed"):
+            confirmed.add(entry.parent)
+    return {parent: n for parent, n in refuted.items()
+            if n >= threshold and parent not in confirmed}
+
+
 def rank(entries, config, *, prior_weight: float = 3.0,
          verdicts_since=None, budget_ok=None, host=None,
          risk: float = 0.0) -> Ranking:
@@ -209,6 +241,9 @@ def rank(entries, config, *, prior_weight: float = 3.0,
     machine_for = lambda eid: config.track_for(eid).machine   # noqa: E731
     calibration = calibrate(entries, machine_for)
     hard_dead, soft_dead = _dead_mechanisms(entries, machine_for)
+    stagnation = getattr(config, "branch_stagnation", 0)
+    stagnant = (stagnant_parents(entries, machine_for, stagnation)
+                if stagnation else {})
     # Closure dates, so staleness can ask "what has the board learned since this
     # entry was last priced" rather than "how much has it ever learned". The
     # first version compared against the total closed count, which on a corpus
@@ -251,6 +286,16 @@ def rank(entries, config, *, prior_weight: float = 3.0,
                 card.excluded = (
                     f"mechanism {mechanism!r} was refuted by {closed.id} "
                     "with closure_kind=mechanism within matching applicability")
+        if not card.excluded and entry.parent and entry.parent in stagnant:
+            # Truth exclusions before yield exclusions: this sits after the
+            # mechanism filter because a dead direction is dead regardless of
+            # its lineage's luck. It excludes ranking, not claiming -- `ar
+            # claim` still works, which is the escape hatch when the record
+            # says the parent is spent but a filer disagrees.
+            card.excluded = (
+                f"parent {entry.parent} stagnant: {stagnant[entry.parent]} "
+                f"refuted branch(es), none confirmed "
+                f"(branch_stagnation={stagnation})")
         if card.excluded:
             excluded.append(card)
             continue

@@ -94,6 +94,12 @@ workers_per_iteration = 3
 risk                  = 0.5    # share of each shortlist aimed at novel branches (no parent)
 tree_max_depth        = 3      # cap on branch lineage depth; 0 disables
 tree_max_children     = 4      # cap on siblings per parent; 0 disables
+# branch_stagnation   = 3      # a parent with this many refuted children and none
+#                              # confirmed is excluded from ranking, and refuses
+#                              # new children at filing; 0 disables
+# confirm_runs        = 2      # valid run rows a `confirmed` experiment closure
+#                              # must leave in the ledger (replication); 1 keeps
+#                              # the default contract
 
 [commands]
 measure      = "bin/measure"
@@ -121,6 +127,34 @@ goal:
   # rising after the true one has stopped.
   confirm_independently: true
 ```
+
+Two guards the *coordinator* owns sit on top of the goal, and both are
+`[coordinator]` keys rather than goal fields because they gate closures and
+ranking, not the stop decision:
+
+- **`confirm_runs`** (default `1` = off): a `confirmed` *experiment closure*
+  must leave that many valid run rows in the ledger, counted by row id. The
+  refusal is identical on both close paths — the loop's `_apply_verdict` and
+  `ar close` — and releases the claim back to the queue; the rows stay
+  charged, and the next worker adds the missing one. This is per-entry
+  replication and deliberately weaker than the goal's
+  `confirm_independently`: that one guards proxy overfitting across claims
+  (AIRA arXiv 2507.02554 §5.3); this one guards one noisy or fabricated run
+  closing a discovery forever (CodeScientist, arXiv 2503.22708 — discoveries
+  that passed paper review died on replication with more samples). Refuted
+  verdicts are exempt: a legitimate refutation may hold only `invalid`/
+  `failed` rows — a configuration that measured but failed its validity gates
+  still decided the bar — so demanding clean rows for a `no` would cry wolf.
+- **Faithfulness, mechanical, always on:** at QC, before any model is asked,
+  every closed `confirmed` entry's typed `summary` is checked against the
+  ledger — each non-trivial number in it must be a metric value of one of the
+  entry's run rows, that row's objective value, the row count, or arithmetic
+  (difference/ratio) over matched values, else QC's mechanical problems name
+  it. The failure is documented, not hypothetical: AgentRxiv's agents
+  fabricated plausible results (arXiv 2503.18102), and CodeScientist found
+  experiments whose paper claimed a discovery the code never produced. The
+  check reads the typed summary, never the memo's free prose — prose parsed
+  by regex reaching a decision is failure class 3.2, deleted, not mitigated.
 
 ## Install
 
@@ -706,8 +740,7 @@ branch names its intent with `kind` — `improve`,
 `debug`, or `probe` — and the kind scopes its memory the way AIRA measured it
 (arXiv 2507.02554 §4.1): a `debug` branch is handed its full ancestral chain
 so it never re-undoes a repair its parent already made, while the others see
-only their siblings' verdicts, which pushes diversity instead of mode
-collapse. The generator's brief carries each branchable parent's family
+only their siblings' verdicts, which pushes diversity instead of modecollapse. The generator's brief carries each branchable parent's family
 verdicts plus a complexity cue (minimal/moderate/advanced, keyed to the
 parent's child count) so the next child's premise is as deep as the family
 has actually earned.
@@ -723,6 +756,20 @@ that moved 22.5% in 18.8 days wants a different one from a domain polishing a
 converged number. Both ends are legitimate stances — `0` refines the
 incumbent only, `1` opens new territory only. `ar rank --risk R` overrides it
 for one look.
+
+**A stalled lineage is pruned, not fed.** `[coordinator] branch_stagnation`
+(off by default; `3` is a reasonable first setting): when this many of a
+parent's children have closed `refuted` — as experiment dispositions, so a
+blocked or inconclusive sibling is not evidence against a direction — and
+none has closed `confirmed`, the parent is *stagnant*. Its remaining children
+drop out of ranking by a hard filter, and filing a new child of it is refused
+at filing, with a reason, through the same gate as the tree caps. The
+exclusion is recomputed from the record on every rank, so one confirmed
+sibling clears the parent — nothing to store, nothing to un-set. The evidence
+for the guard is external: AIDE caps failed repairs with `max_debug_depth`
+(arXiv 2502.13138) and ml-Master prunes nodes on improvement stagnation
+(arXiv 2506.16499) — compute left on a lineage whose every child refutes is
+the same burn in any search shape.
 
 **A domain may own the score itself.** `[commands] score = "bin/score"` hands
 the *pricing* of claimable branches to a domain command — the same seam shape

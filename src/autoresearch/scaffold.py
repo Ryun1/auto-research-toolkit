@@ -156,6 +156,14 @@ def _domain_toml(name: str) -> str:
         # lineage from growing unbounded. 0 disables either cap.
         tree_max_depth           = 3
         tree_max_children        = 4
+        # Prune stalled lineages: when this many of a parent's children have
+        # closed `refuted` and none `confirmed`, its remaining children drop
+        # out of ranking and a new child is refused at filing. 0 disables.
+        # branch_stagnation       = 3
+        # Valid run rows a `confirmed` experiment closure must leave in the
+        # ledger before it is accepted; 2+ demands a replication run. 0 or 1
+        # keeps the default contract.
+        # confirm_runs            = 2
         # Distil closed work into skills every N iterations. Not every one:
         # a librarian asked to distil after a single verdict writes a skill
         # that says what one entry already says. 0 turns distillation off.
