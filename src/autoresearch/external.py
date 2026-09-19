@@ -162,6 +162,18 @@ def _fold_back_verdict(config, identity, entry_id, verdict):
 
 
 def complete(config, identity, session, report):
+    """Settle an external assignment: retain its evidence, apply the verdict.
+
+    Transactional by construction: every check that can reject the completion
+    -- workspace evidence, usage accounting, harvest, memo retention, run
+    allocation -- runs BEFORE the `completing` state and the prepared report
+    are persisted. A rejected completion therefore leaves the assignment still
+    actionable, and a corrected report simply re-runs this command; the harvest
+    and retention steps deduplicate, so a retry never double-retains. A row
+    that does reach `completing` (a crash between retention and settlement) is
+    recovered by re-running this command with the prepared report, or by
+    `external cancel --confirm-inactive`, which refuses only terminal rows.
+    """
     if not isinstance(report, dict):
         raise AutoresearchError("completion report must be a JSON object")
     with _lock(config, identity, session):
@@ -182,12 +194,8 @@ def complete(config, identity, session, report):
             return attempts.settle(config, identity, session, "completed",
                                    consumed=row["charged_runs"], run_ids=row["run_ids"],
                                    verdict=committed["verdict"])
-        with attempts.claims(config, session)._lock():
-            attempts.live_claim(config, row)
-            if dt.datetime.now(dt.UTC) > dt.datetime.fromisoformat(row["ceiling"]["expires"]):
-                raise AutoresearchError("assignment deadline exhausted; cancel and preserve evidence")
-            row.update(status="completing", report=report)
-            attempts.save(config, row)
+        # Read-only validation first (outside the claims lock): nothing below
+        # mutates the assignment, so any rejection here leaves it untouched.
         workspace = _workspace(config, row)
         before = {Path(k): (v[0], bytes.fromhex(v[1])) for k, v in row["snapshot"].items()}
         directory, observed = _appended(config, row, workspace, before)
@@ -210,6 +218,8 @@ def complete(config, identity, session, report):
                      attempts.directory(config))
         with attempts.claims(config, session)._lock():
             attempts.live_claim(config, row)
+            if dt.datetime.now(dt.UTC) > dt.datetime.fromisoformat(row["ceiling"]["expires"]):
+                raise AutoresearchError("assignment deadline exhausted; cancel and preserve evidence")
             harvest = runs.harvest(directory, before, paths.runs, workspace=workspace,
                                    root=paths.root, goal=config.goal, lanes=config.lanes,
                                    protected=protected)
@@ -217,11 +227,16 @@ def complete(config, identity, session, report):
                 raise AutoresearchError("; ".join(harvest.problems))
             if report.get("memo"):
                 runs.retain_output(workspace, paths.root, report["memo"], config.lanes, protected)
-            row.update(run_ids=sorted(r.id for r in observed),
-                       charged_runs=max(1, len(observed), reported), gpu_hours=gpu_hours)
-            attempts.save(config, row)
-            if row["charged_runs"] > row["reserved_runs"]:
+            charged = max(1, len(observed), reported)
+            if charged > row["reserved_runs"]:
                 raise AutoresearchError("assignment exceeded its run allocation; evidence retained, cancel required")
+            # Transactional point: the completing state and the prepared report
+            # are persisted only now -- past every check that can reject the
+            # completion -- so a refusal above leaves the assignment actionable.
+            row.update(status="completing", report=report,
+                       run_ids=sorted(r.id for r in observed),
+                       charged_runs=charged, gpu_hours=gpu_hours)
+            attempts.save(config, row)
             # No constructor/model invocation: reuse only the ordinary verdict application.
             coordinator = Coordinator.__new__(Coordinator)
             coordinator.config, coordinator.session = config, session
@@ -297,6 +312,8 @@ def register_parser(subparsers):
         if action == "complete":
             child.add_argument("--report", required=True)
         if action == "cancel":
-            child.add_argument("--reason", required=True)
-            child.add_argument("--confirm-inactive", action="store_true")
+            child.add_argument("--reason", required=True,
+                               help="why the assignment is abandoned; recorded on the row")
+            child.add_argument("--confirm-inactive", action="store_true",
+                               help="confirm the worker is not running; this is also the recovery path for an assignment stuck in `completing` (cancel refuses only terminal rows)")
         child.set_defaults(func=_command)

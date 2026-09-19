@@ -132,3 +132,63 @@ def test_a_blocked_card_never_becomes_an_assignment(coordinator, store, monkeypa
     it = coordinator.run_iteration(1)
     assert it.verdicts == {"Q1": "blocked"}
     assert it.attempt_ids == []
+
+
+GOOD_REPORT = {"runs": 1, "verdict": "confirmed", "memo": "inbox/native.md",
+               "summary": "the pre-registered bar was met",
+               "verification": {"reread": True,
+                                "claims_checked": ["the measurement was retained"]}}
+
+
+def _assigned_assignment(coordinator):
+    """One dispatched external assignment with one retained run record."""
+    it = coordinator.run_iteration(1)
+    identity = it.attempt_ids[0]
+    workspace = pathlib.Path(attempts.load(coordinator.config, identity)["workspace"])
+    append(pathlib.Path(workspace) / "data/runs/owner.jsonl", RunRecord(
+        id="native-run", entry="Q1", session="coordinator",
+        metrics={"ops": 30, "peak": 2}, provenance={"source": "worker"}))
+    return identity, workspace
+
+
+def test_a_rejected_completion_leaves_the_assignment_actionable(coordinator, store):
+    """A completion whose memo path fails the findings-lane check must refuse
+    without persisting the `completing` state. Persisting it first wedged the
+    assignment permanently: the bad report was saved, a corrected report was
+    then refused as "a different report", and the original re-failed forever
+    on the same retention check. A refusal must leave the row assigned and
+    report-free, so the corrected report simply re-runs."""
+    from autoresearch.errors import AutoresearchError
+    identity, workspace = _assigned_assignment(coordinator)
+    bad = dict(GOOD_REPORT, memo="findings.md")     # not in the findings lane
+    (workspace / "findings.md").write_text("wrong lane")
+    with pytest.raises(AutoresearchError):
+        external.complete(coordinator.config, identity, "coordinator", bad)
+    row = attempts.load(coordinator.config, identity)
+    assert row["status"] == "assigned", row["status"]
+    assert row.get("report") is None
+    (workspace / "inbox/native.md").write_text("the bar was met")
+    completed = external.complete(coordinator.config, identity, "coordinator", GOOD_REPORT)
+    assert completed["status"] == "completed"
+    assert store.load("Q1").result.verdict == "confirmed"
+
+
+def test_an_assignment_stuck_in_completing_is_recoverable(coordinator, store):
+    """A row that did reach `completing` (a crash between retention and
+    settlement) has a documented recovery: cancel refuses only terminal rows,
+    so a completing row is cancellable; and the prepared report is still
+    protected -- a different report is refused until the row is freed."""
+    from autoresearch.errors import AutoresearchError
+    identity, workspace = _assigned_assignment(coordinator)
+    (pathlib.Path(workspace) / "inbox/native.md").write_text("the bar was met")
+    stuck = attempts.load(coordinator.config, identity)
+    stuck.update(status="completing", report=dict(GOOD_REPORT))
+    attempts.save(coordinator.config, stuck)
+    with pytest.raises(AutoresearchError, match="different report"):
+        external.complete(coordinator.config, identity, "coordinator",
+                          dict(GOOD_REPORT, summary="a different report"))
+    external.cancel(coordinator.config, identity, "coordinator",
+                    "stuck in completing; freeing for re-assignment",
+                    confirm_inactive=True)
+    assert attempts.load(coordinator.config, identity)["status"] == "cancelled"
+    assert store.load("Q1").claim is None
