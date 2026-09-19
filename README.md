@@ -213,7 +213,7 @@ ar rank        score the queue and show the numbers it ranked on
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar skill       list, show, check, distil and retire the domain's skills
-ar entry       file, show, amend and list entries
+ar entry       file, show, amend, reprice and list entries
 ar claim       take one entry (serialised, always with a ceiling)
 ar release     hand a claim back, with a reason
 ar reap        free ONE abandoned claim past the TTL
@@ -221,6 +221,7 @@ ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
 ar research    spin up targeted research agents; their ideas land in the record
 ar harness     check for and pull the latest core; export defects upstream
+ar doctor      which core answered, and whether it meets the domain's floor
 ar migrate     convert an existing prose corpus into records (one way)
 ar render      write the generated queue views
 ar validate    check records, views, runs and policy
@@ -248,6 +249,35 @@ every new domain).
 across selected sources are refused before any entries are written. `--dry-run`
 performs the same collision checks. Resolve collisions in the source corpus;
 use `ar entry amend` for deliberate changes to existing records.
+
+**Which verdicts are terminal is per-track config.** The default machine closes
+research on `confirmed`/`refuted`; a defect track closes on `fixed`/`wontfix`
+— so `ar close H2 confirmed` is a legal move that leaves the entry actionable
+and returning to the queue. The first real domain filed a harness defect with
+the research-track verb and learned the rule only by watching the entry
+bounce. `ar close` now warns at the moment it happens, naming the track's
+terminal set; `ar entry reprice` corrects filing-time confidence/impact/cost
+on an open entry with the same writer (and the same H140 guard) the loop's
+curator phase uses, because a hand-driven curator pass once had no path
+except editing the YAML.
+
+**The installed core is part of the environment the records trust.** A copied
+(non-editable) install lags its checkout silently, and a stale install
+resurrects fixed defects — the first field domain verified its install by
+hand, md5 against the checkout, and pinned reopen conditions to "reinstall ≥
+the fix commit" in prose. Declare a floor instead:
+
+```toml
+[upstream]
+url      = "https://github.com/Ryun1/auto-research-toolkit"
+ref      = "main"
+min_core = "0.2.0"   # refuse to run on an install older than the fixes cited
+```
+
+`ar doctor` reports which core, interpreter and module answered (read-only;
+non-zero exit when a check fails, so a schedule can watch it), and `ar
+validate` names a stale core as a warning — never a failure, per that
+command's contract.
 
 ## Hardware awareness
 
