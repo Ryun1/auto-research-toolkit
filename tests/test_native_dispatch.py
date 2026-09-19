@@ -192,3 +192,109 @@ def test_an_assignment_stuck_in_completing_is_recoverable(coordinator, store):
                     confirm_inactive=True)
     assert attempts.load(coordinator.config, identity)["status"] == "cancelled"
     assert store.load("Q1").claim is None
+
+
+REFUTED_REPORT = dict(GOOD_REPORT, verdict="refuted",
+                      summary="refuted against the registered bar",
+                      closure_kind="mechanism")
+
+
+def test_a_refused_close_keeps_the_assignment_actionable(coordinator, store):
+    """H9, the live Q19 repro: a close-gate refusal (refuted without a
+    closure kind) applied no verdict, so it must write no external-complete
+    receipt and must not settle the row. A refused close used to settle
+    completed/refused behind a verdict-shaped receipt, and every later
+    complete() then settled refused without applying the corrected report."""
+    from autoresearch.entries import Store
+    identity, workspace = _assigned_assignment(coordinator)
+    (pathlib.Path(workspace) / "inbox/native.md").write_text("the bar was met")
+    bad = dict(REFUTED_REPORT)
+    bad.pop("closure_kind")
+    refused = external.complete(coordinator.config, identity, "coordinator", bad)
+    assert refused["status"] == "assigned", refused["status"]
+    assert refused.get("report") is None
+    assert any("close refused" in line for line in refused["detail"])
+    entry = store.load("Q1")
+    assert entry.claim is not None and entry.claim.session == "coordinator"
+    assert external._receipt(entry, identity, "external-complete") is None
+    completed = external.complete(coordinator.config, identity, "coordinator",
+                                  REFUTED_REPORT)
+    assert completed["status"] == "completed"
+    assert completed["verdict"] == "refuted"
+    entry = Store(coordinator.config.paths.entries).load("Q1")
+    assert entry.status == "refuted"
+    assert external._receipt(entry, identity,
+                             "external-complete")["verdict"] == "refuted"
+
+
+def test_a_missing_verification_block_keeps_the_assignment_actionable(
+        coordinator, store):
+    """The no-verification refusal applied no verdict either: the claim stays
+    with the external worker and a corrected report re-runs the command."""
+    identity, workspace = _assigned_assignment(coordinator)
+    (pathlib.Path(workspace) / "inbox/native.md").write_text("the bar was met")
+    bad = dict(GOOD_REPORT)
+    bad.pop("verification")
+    refused = external.complete(coordinator.config, identity, "coordinator", bad)
+    assert refused["status"] == "assigned", refused["status"]
+    entry = store.load("Q1")
+    assert entry.claim is not None and entry.claim.session == "coordinator"
+    assert external._receipt(entry, identity, "external-complete") is None
+    completed = external.complete(coordinator.config, identity, "coordinator",
+                                  GOOD_REPORT)
+    assert completed["status"] == "completed"
+    assert store.load("Q1").result.verdict == "confirmed"
+
+
+def test_an_unknown_verdict_is_refused_not_settled(coordinator, store):
+    """H9 hardening: the settled-verdict path takes only the output
+    contract's vocabulary. A report with an out-of-contract verdict used to
+    ride the non-terminal release with a receipt carrying the junk string --
+    exactly the shape the H9 poison check keys on."""
+    identity, workspace = _assigned_assignment(coordinator)
+    (pathlib.Path(workspace) / "inbox/native.md").write_text("the bar was met")
+    refused = external.complete(coordinator.config, identity, "coordinator",
+                                dict(GOOD_REPORT, verdict="refused"))
+    assert refused["status"] == "assigned", refused["status"]
+    assert any("not a verdict" in line for line in refused["detail"])
+    entry = store.load("Q1")
+    assert entry.claim is not None and entry.claim.session == "coordinator"
+    assert external._receipt(entry, identity, "external-complete") is None
+    completed = external.complete(coordinator.config, identity, "coordinator",
+                                  GOOD_REPORT)
+    assert completed["status"] == "completed"
+    assert store.load("Q1").result.verdict == "confirmed"
+
+
+def test_a_legacy_refused_receipt_never_poisons_a_retry(coordinator, store):
+    """Rows poisoned before the fix (settled completed/refused behind a
+    refused receipt) must recover through the protocol: a retry refuses
+    honestly on the released claim instead of silently settling refused, and
+    cancel -- blocked before by the same receipt -- is a path out."""
+    from autoresearch.entries import Event
+    identity, workspace = _assigned_assignment(coordinator)
+    (pathlib.Path(workspace) / "inbox/native.md").write_text("the bar was met")
+    bad = dict(REFUTED_REPORT)
+    bad.pop("closure_kind")
+    external.complete(coordinator.config, identity, "coordinator", bad)
+    # Hand-craft the pre-fix poison: settled refused + verdict-shaped receipt
+    # + released claim, exactly what the old refusal path left on disk.
+    attempts.settle(coordinator.config, identity, "coordinator", "completed",
+                    verdict="refused")
+    entry = store.load("Q1")
+    entry.history.append(Event(attempts.now(), "external-complete", "coordinator",
+                               json.dumps({"assignment": identity,
+                                           "verdict": "refused"})))
+    store.save(entry)
+    attempts.claims(coordinator.config, "coordinator").release(
+        "Q1", why="legacy refusal released the claim")
+    from autoresearch.errors import AutoresearchError
+    with pytest.raises(AutoresearchError, match="claim identity changed"):
+        external.complete(coordinator.config, identity, "coordinator",
+                          REFUTED_REPORT)
+    row = attempts.load(coordinator.config, identity)
+    assert row["status"] == "assigned"      # re-opened, not settled refused
+    external.cancel(coordinator.config, identity, "coordinator",
+                    "legacy poison; protocol recovery",
+                    confirm_inactive=True)
+    assert attempts.load(coordinator.config, identity)["status"] == "cancelled"

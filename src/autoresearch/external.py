@@ -185,6 +185,10 @@ def complete(config, identity, session, report):
     that does reach `completing` (a crash between retention and settlement) is
     recovered by re-running this command with the prepared report, or by
     `external cancel --confirm-inactive`, which refuses only terminal rows.
+    The one rejection after the `completing` persist -- a close-gate refusal
+    inside verdict application -- applies no verdict: the claim is kept, the
+    row reverts to assigned with no receipt written, and a corrected report
+    re-runs this command (H9).
     """
     if not isinstance(report, dict):
         raise AutoresearchError("completion report must be a JSON object")
@@ -193,16 +197,28 @@ def complete(config, identity, session, report):
         if row["kind"] != "external":
             raise AutoresearchError("not an external assignment")
         if row["status"] == "completed":
-            if row.get("report") != report:
+            if row.get("verdict") == "refused":
+                # Legacy H9 poison: a close-gate refusal used to settle the
+                # row completed/refused behind a verdict-shaped receipt, which
+                # no retry could get past. A refusal applied no verdict, so a
+                # corrected report re-opens the row; if the era's refusal also
+                # released the claim, live_claim below names it and cancel +
+                # re-assign is the protocol path out.
+                row.update(status="assigned", verdict=None, report=None)
+                attempts.save(config, row)
+            elif row.get("report") != report:
                 raise AutoresearchError("assignment already completed with a different report")
-            return row
+            else:
+                return row
         if row["status"] in attempts.TERMINAL or row["status"] == "cancelling":
             raise AutoresearchError("assignment is not completable")
         if row.get("report") is not None and row["report"] != report:
             raise AutoresearchError("completion already prepared with a different report")
         store = Store(config.paths.entries)
+        # A `refused` receipt is legacy poison (pre-H9 refusal path): a
+        # refusal applied no verdict, so it must never settle a retry.
         committed = _receipt(store.load(row["entry"]), identity, "external-complete")
-        if committed:
+        if committed and committed.get("verdict") != "refused":
             return attempts.settle(config, identity, session, "completed",
                                    consumed=row["charged_runs"], run_ids=row["run_ids"],
                                    verdict=committed["verdict"])
@@ -255,7 +271,19 @@ def complete(config, identity, session, report):
             coordinator.store = store
             coordinator.claims = attempts.claims(config, session)
             phase = Phase("external-complete")
-            verdict = coordinator._apply_verdict_locked(row["entry"], report, phase, receipt_id=identity)
+            verdict = coordinator._apply_verdict_locked(row["entry"], report, phase,
+                                                        receipt_id=identity,
+                                                        release_on_refuse=False)
+            if verdict == "refused":
+                # H9: the close gate refused the report; no verdict was
+                # applied. The claim is kept and the row returns to assigned
+                # without settling, so a corrected report re-runs this command
+                # -- the same transactional contract as every earlier check.
+                # Settling completed/refused here is what poisoned retries.
+                row.update(status="assigned", verdict=None, report=None,
+                           detail=phase.detail)
+                attempts.save(config, row)
+                return row
             row.update(verdict=verdict, detail=phase.detail)
             attempts.save(config, row)
             _fold_back_verdict(config, identity, row["entry"], verdict)
@@ -277,7 +305,10 @@ def cancel(config, identity, session, reason, *, confirm_inactive=False):
                 raise AutoresearchError("assignment already settled")
             owner = attempts.claims(config, session)
             entry = owner.store.load(row["entry"])
-            if _receipt(entry, identity, "external-complete"):
+            # A `refused` receipt is legacy poison (pre-H9 refusal path): a
+            # refusal applied no verdict, so cancel stays a protocol path out.
+            committed = _receipt(entry, identity, "external-complete")
+            if committed and committed.get("verdict") != "refused":
                 raise AutoresearchError("completion already applied; retry complete with its prepared report")
             row.update(status="cancelling", reason=reason)
             attempts.save(config, row)

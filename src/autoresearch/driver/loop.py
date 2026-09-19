@@ -1102,7 +1102,7 @@ class Coordinator:
             return self._apply_verdict_locked(entry_id, report, phase)
 
     def _apply_verdict_locked(self, entry_id: str, report: dict, phase: Phase,
-                              receipt_id=None) -> str:
+                              receipt_id=None, release_on_refuse=True) -> str:
         """Record a worker's verdict, enforcing the evidence rules.
 
         Idempotent on purpose: a worker with tool access may have run `ar close`
@@ -1119,10 +1119,10 @@ class Coordinator:
             return entry.status
         # The re-review is the completion protocol, not advice: a verdict the
         # worker did not re-check against its own deliverable is a claim the
-        # record would take on faith. Refused loudly, claim handed back. The
-        # flag must be a real True and the checks non-empty (H101: a
-        # verification that reported OK having checked strictly less than the
-        # gate is the vacuous-pass shape this record does not survive).
+        # record would take on faith. Refused loudly. The flag must be a real
+        # True and the checks non-empty (H101: a verification that reported OK
+        # having checked strictly less than the gate is the vacuous-pass shape
+        # this record does not survive).
         verification = report.get("verification")
         claims = verification.get("claims_checked") if isinstance(
             verification, dict) else None
@@ -1132,18 +1132,38 @@ class Coordinator:
             phase.detail.append(
                 f"{entry_id}: reply refused — no verification block; the work "
                 "was not re-reviewed before it was shared")
-            try:
-                self.claims.release_locked(entry_id,
-                                    why="reply refused: no verification block", event=receipt("refused"))
-            except AutoresearchError as exc:
-                phase.detail.append(f"{entry_id}: {exc}")
+            # A refusal applied no verdict, so it writes no verdict receipt
+            # (H9): the receipt is how an external retry detects an
+            # already-applied verdict, and a refusal receipt made every retry
+            # settle refused without applying the corrected report.
+            if release_on_refuse:
+                try:
+                    self.claims.release_locked(entry_id,
+                                        why="reply refused: no verification block")
+                except AutoresearchError as exc:
+                    phase.detail.append(f"{entry_id}: {exc}")
             return "refused"
 
         verdict = str(report.get("verdict", "inconclusive"))
         if verdict not in machine.terminal_names:
             # Inconclusive is a real outcome and must be sayable. H26: the loop
             # had no way to report "audited, found nothing", so agents reached
-            # for a status that was not true.
+            # for a status that was not true. But the vocabulary is still the
+            # output contract's: anything else is a malformed report, refused
+            # like any other (H9 -- an arbitrary verdict string must never
+            # ride the settled-verdict path, where it would collide with the
+            # refusal marker a receipt check keys on).
+            if verdict not in ("inconclusive", "blocked"):
+                phase.detail.append(
+                    f"{entry_id}: reply refused — {verdict!r} is not a verdict "
+                    "in the output contract")
+                if release_on_refuse:
+                    try:
+                        self.claims.release_locked(
+                            entry_id, why=f"reply refused: unknown verdict {verdict!r}")
+                    except AutoresearchError as exc:
+                        phase.detail.append(f"{entry_id}: {exc}")
+                return "refused"
             try:
                 self.claims.release_locked(
                     entry_id,
@@ -1188,12 +1208,15 @@ class Coordinator:
             return verdict
         except AutoresearchError as exc:
             # The close was refused -- missing evidence, missing closure kind.
-            # The claim goes back rather than the entry being closed anyway.
+            # A refusal applied no verdict, so it writes no verdict receipt
+            # (H9): a refusal receipt made every later complete() settle
+            # refused without applying the corrected report.
             phase.detail.append(f"{entry_id}: close refused — {exc}")
-            try:
-                self.claims.release_locked(entry_id, why=f"close refused: {exc}", event=receipt("refused"))
-            except AutoresearchError:
-                pass
+            if release_on_refuse:
+                try:
+                    self.claims.release_locked(entry_id, why=f"close refused: {exc}")
+                except AutoresearchError:
+                    pass
             return "refused"
 
     def curate(self, it: Iteration, budget) -> Phase:
