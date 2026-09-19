@@ -248,6 +248,7 @@ ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar skill       list, find, show, check, distil and retire the domain's skills
 ar entry       file, show, amend, reprice and list entries
+               (entry graph: the hypothesis tree as a mermaid diagram)
 ar claim       take one entry (serialised, always with a ceiling)
 ar release     hand a claim back, with a reason
 ar reap        free ONE abandoned claim past the TTL
@@ -263,6 +264,7 @@ ar policy      show the never-rules and prove each refuses something
 ar exec         reserve and run one bounded local command under a live claim
 ar attempt      execution ledger: list, show, checkpoint, reconcile
 ar external     assign work to an external coordinator, settle or cancel it
+ar challenge    the public challenge's shared intel: pull, show, check, target
 ar usage        record, list and price out-of-band spend
 ar gates        per-entry acceptance gates: configure, update, show
 ar evidence     portable integrity-only evidence bundles: pack, verify, import
@@ -296,6 +298,17 @@ the same direction: briefs are role-scoped (the worker gets its entry, the
 generator the whole board) and compact, so a payload that once grew with the
 record now grows only for the roles that read it.
 
+**The record draws its own map.** A track that declares `graph_view = "docs/log/Hypothesis
+Graph.md"` gets a second generated view: the hypothesis tree as a mermaid
+flowchart — branch lineage, supersessions, related work, nodes coloured by
+status — which Obsidian, GitHub or any mermaid renderer displays as a
+clickable picture. Like every view it is generated from the records, so
+agents never maintain a diagram beside the record that would drift from it;
+`ar entry graph` prints the same markdown (paste it into a memo). A diagram
+of the agent's own — a mechanism sketch, a decision tree — is a ```mermaid
+fence in an entry body or a memo: markdown renders it, and nothing parses
+markdown back, so a picture cannot become a second source of truth.
+
 **Which verdicts are terminal is per-track config.** The default machine closes
 research on `confirmed`/`refuted`; a defect track closes on `fixed`/`wontfix`
 — so `ar close H2 confirmed` is a legal move that leaves the entry actionable
@@ -324,6 +337,52 @@ min_core = "0.2.0"   # refuse to run on an install older than the fixes cited
 non-zero exit when a check fails, so a schedule can watch it), and `ar
 validate` names a stale core as a warning — never a failure, per that
 command's contract.
+
+## The public challenge's shared intel
+
+Auto-research domains are usually one entry in a public challenge with a
+leaderboard and a bulletin. That shared state — the published record, the
+measurement contract other solvers' rates were taken under, the research graph
+of what was already tried and refuted — is domain input, and it is the same
+input for every challenge-chasing domain, so core reads it once:
+
+```toml
+[challenge]
+source          = "provablyfast"   # or "yukon"
+url             = "https://provably.fast/data/index.json"   # optional override
+refresh_seconds = 1800
+```
+
+```
+ar challenge pull     fetch-if-stale, normalize, cache under state/challenge/
+ar challenge show     render the cached snapshot (no network)
+ar challenge check    compare the published policy against this host and [policy]
+ar challenge target   print the target number, one line (fetch-if-stale)
+```
+
+It splits on the harness's two enforcement classes:
+
+- **Enforced.** The published record *is* the moving target. `bin/probe-target`
+  can be one line — `exec ar challenge target` — and `Target.resolve`'s own
+  TTL governs the cadence. `stop_when` keeps its meaning: "met" is met against
+  the *current* record, not the number someone hand-copied last week. There is
+  deliberately no second refresh path: the loop itself never fetches, and
+  `orient` reads the cache only.
+- **Advisory.** The record, the top-of-board saturation, and the source's own
+  truth label ride into the generator, judge and scout briefs as a
+  role-gated `challenge` block — never into the record. External verdicts
+  would pollute `mechanism_coverage`, the yield floor and the meters with
+  work this campaign never paid for.
+
+`ar challenge check` makes comparability loud instead of assumed: a host whose
+fingerprint disagrees with the published one, a `[policy]` that does not cover
+the challenge's forbidden paths, or a stale snapshot are exit-1 findings —
+because two rates measured on different machines are not comparable without
+saying so, and a rejected submission is the expensive way to learn your
+policy was incomplete.
+
+Submission is never automated: it is irreversible and public, which is exactly
+what `[[policy.human_only]]` is for.
 
 ## Hardware awareness
 

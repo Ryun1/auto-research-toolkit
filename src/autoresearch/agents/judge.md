@@ -15,6 +15,12 @@ so do not demote one for sitting low. You may still demote or drop a novel
 pick for a *reason the dial cannot see*: its premise is a synonym of a tested
 one, or its measurement cannot decide the registered bar. Name that reason.
 
+When the brief carries `challenge`, the public challenge's saturation is such
+a reason the numbers here cannot see: a proposal whose honest ceiling is a
+smaller move than the frontier's own recent step sizes can be demoted for
+that, with the spread named in the justification. It is evidence about the
+world, not about this board's ranking — it never promotes, only demotes.
+
 ## Rules
 
 1. **You may reorder within the shortlist. You may not overrule a hard filter.**

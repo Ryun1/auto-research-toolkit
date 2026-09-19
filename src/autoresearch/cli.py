@@ -28,6 +28,7 @@ import textwrap
 from . import attempts as attempts_mod
 from . import budget as budget_mod
 from . import bundles as bundles_mod
+from . import challenge as challenge_mod
 from . import defects as defects_mod
 from . import entries as entries_mod
 from . import escalate as escalate_mod
@@ -166,6 +167,119 @@ def cmd_hardware(args):
     return 1 if blocked else 0
 
 
+# -- challenge: the public challenge's shared intel --------------------------
+
+def _challenge_params(config):
+    c = config.challenge
+    if not c.source:
+        raise AutoresearchError(
+            "this domain declares no [challenge] table; add `source = "
+            "\"provablyfast\"` (or \"yukon\") to domain.toml to follow one")
+    return (c.source, c.url or challenge_mod.DEFAULT_URLS.get(c.source, ""),
+            c.benchmark, c.refresh_seconds, c.timeout_seconds)
+
+
+def cmd_challenge_pull(args):
+    """Fetch-if-stale, normalize, cache under state/challenge/. No record is
+    touched: a leaderboard is input, not a verdict this campaign paid for."""
+    config = _load(args)
+    snapshot, action = challenge_mod.pull(
+        *_challenge_params(config), config.paths.root,
+        force=args.force)
+    print(f"{snapshot.source}/{snapshot.challenge}"
+          + (f"/{snapshot.benchmark}" if snapshot.benchmark else "")
+          + f": {action}")
+    if snapshot.record:
+        print(f"  record  {snapshot.record.value:,.10g} {snapshot.record.unit}"
+              + (f"  by {snapshot.record.by}" if snapshot.record.by else "")
+              + (f"  {snapshot.record.at}" if snapshot.record.at else ""))
+    if snapshot.bar:
+        print(f"  bar     {snapshot.bar}")
+    if snapshot.board:
+        print(f"  board   {len(snapshot.board)} row(s)")
+    if snapshot.truth_label:
+        print(f"  label   {snapshot.truth_label}")
+    return 0
+
+
+def cmd_challenge_show(args):
+    """Render the cached snapshot. Reads no network -- what `pull` last saw."""
+    config = _load(args)
+    source, *_ = _challenge_params(config)
+    snapshot = challenge_mod.load_snapshot(config.paths.root)
+    if snapshot is None:
+        print("no snapshot cached; run `ar challenge pull` first",
+              file=sys.stderr)
+        return 1
+    print(f"{snapshot.source}/{snapshot.challenge}"
+          + (f"/{snapshot.benchmark}" if snapshot.benchmark else "")
+          + f"  (fetched {snapshot.fetched_at}"
+          + (f", published {snapshot.generated_at}" if snapshot.generated_at
+             else "") + ")")
+    credit = challenge_mod.SOURCE_CREDIT.get(snapshot.source)
+    if credit:
+        print(f"credit: {credit}")
+    if snapshot.truth_label:
+        print(f"truth: {snapshot.truth_label}")
+    if snapshot.record:
+        print(f"\nrecord: {snapshot.record.value:,.10g} {snapshot.record.unit}"
+              + (f"  by {snapshot.record.by}" if snapshot.record.by else "")
+              + (f"  {snapshot.record.at}" if snapshot.record.at else ""))
+    target = snapshot.target_value()
+    if target is not None:
+        print(f"target (what bin/probe-target should chase): {target:,.10g}")
+    if snapshot.bar:
+        print(f"bar: {snapshot.bar}")
+    saturation = snapshot.saturation()
+    if saturation:
+        print(f"saturation: top-5 spread {saturation['top5_spread_pct']}%, "
+              f"{saturation['n_solvers']} solver(s)")
+    if snapshot.board:
+        print(f"\n{'rank':>4}  {'solver':<24} {'value':>16} {'delta':>12}  when")
+        for row in snapshot.board:
+            print(f"{row['rank']:>4}  {row['solver']:<24} {row['value']:>16,} "
+                  f"+{row['delta']:>11,}  {row['at']}")
+    else:
+        print("\nboard: no rows parsed from this source")
+    if snapshot.policy:
+        policy = snapshot.policy
+        print(f"\npolicy: {len(policy.get('allowed_paths') or [])} allowed, "
+              f"{len(policy.get('forbidden_paths') or [])} forbidden path(s)")
+        for path in (policy.get("allowed_paths") or []):
+            print(f"  allowed: {path}")
+        if policy.get("selection_basis"):
+            print(f"  basis: {policy['selection_basis']}")
+    if snapshot.upstream:
+        print(f"upstream: {snapshot.upstream}")
+    if snapshot.graph:
+        print(f"graph: {snapshot.graph}")
+    return 0
+
+
+def cmd_challenge_check(args):
+    """Comparability findings against the published policy. Findings are
+    loud notes, not refusals -- but they are exit-1 findings, so a mismatch
+    cannot scroll past unnoticed."""
+    config = _load(args)
+    findings = challenge_mod.check(config)
+    for finding in findings:
+        print(f"! {finding}")
+    if not findings:
+        print("published policy consistent with this host and [policy]")
+    return 1 if findings else 0
+
+
+def cmd_challenge_target(args):
+    """Print the target number, one line. The domain's `bin/probe-target`
+    wraps this: `exec ar challenge target` -- the probe reads the last stdout
+    line as a float. Notes go to stderr, which the probe keeps for failures."""
+    config = _load(args)
+    value = challenge_mod.target_value(
+        *_challenge_params(config), config.paths.root)
+    print(f"{value:.10g}")
+    return 0
+
+
 def cmd_escalate(args):
     """Should this stop running locally, and what should be rented instead.
 
@@ -252,6 +366,25 @@ def cmd_render(args):
     config = _load(args)
     for path in render.write_views(config, _store(config).all()):
         print(f"wrote {path.relative_to(config.paths.root)}")
+    return 0
+
+
+def cmd_entry_graph(args):
+    """Print the graph view: the hypothesis tree as a mermaid diagram.
+
+    Same markdown `ar render` writes to the track's `graph_view`, so an agent
+    can paste it into a memo or hand-driven doc without a second renderer
+    that could disagree with the generated one."""
+    config = _load(args)
+    if args.track and args.track not in config.tracks:
+        raise AutoresearchError(
+            f"track {args.track!r} is not declared by this domain; "
+            f"declared: {sorted(config.tracks)}")
+    entries = _store(config).all()
+    for track in config.tracks.values():
+        if args.track and track.id != args.track:
+            continue
+        print(render.graph_view(track, entries), end="")
     return 0
 
 
@@ -1401,6 +1534,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                      help="print the pick-work projection (no history, no "
                           "prose) as JSON")
     lst.set_defaults(func=cmd_entry_list)
+    graph = esub.add_parser(
+        "graph", help="the hypothesis tree as a mermaid diagram")
+    graph.add_argument("--track", help="one track (default: every track)")
+    graph.set_defaults(func=cmd_entry_graph)
 
     skill = sub.add_parser("skill", help="the domain's distilled, cited skills")
     ssub = skill.add_subparsers(dest="skill_cmd", required=True)
@@ -1466,6 +1603,24 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     meas.add_argument("--entry")
     meas.add_argument("rest", nargs="*", help="passed through to the domain command")
     meas.set_defaults(func=cmd_measure)
+
+    challenge = sub.add_parser(
+        "challenge",
+        help="the public challenge's shared intel: record, board, published policy")
+    csub = challenge.add_subparsers(dest="challenge_cmd", required=True)
+    cpull = csub.add_parser("pull", help="fetch-if-stale, normalize, cache the snapshot")
+    cpull.add_argument("--force", action="store_true",
+                       help="refetch even if the cache is inside refresh_seconds")
+    cpull.set_defaults(func=cmd_challenge_pull)
+    cshow = csub.add_parser("show", help="render the cached snapshot (no network)")
+    cshow.set_defaults(func=cmd_challenge_show)
+    ccheck = csub.add_parser(
+        "check", help="compare the published policy against this host and [policy]")
+    ccheck.set_defaults(func=cmd_challenge_check)
+    ctgt = csub.add_parser(
+        "target", help="print the target number, one line (fetch-if-stale); "
+                       "bin/probe-target wraps this")
+    ctgt.set_defaults(func=cmd_challenge_target)
 
     sub.add_parser("doctor", help="diagnose the installed core against this "
                    "domain's declarations").set_defaults(func=cmd_doctor)

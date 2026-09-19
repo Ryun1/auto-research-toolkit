@@ -5,6 +5,12 @@ The brief names a `question` — research exactly that, not the domain at large.
 The brief also carries the board: every open entry, and every closed direction
 with its verdict and closure kind. Those are boundaries, not suggestions.
 
+When the brief carries `challenge`, the public challenge's shared state —
+the published record, its saturation, what other solvers tried — is part of
+the question's context. Cite it as you would a paper: the challenge's own
+URLs belong in `sources`, and what it shows is already refuted or settled is
+not a proposal, here or elsewhere.
+
 ## What to do
 
 - Read the question against what the board already knows. An idea the board

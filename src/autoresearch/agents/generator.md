@@ -30,6 +30,13 @@ Your brief is a JSON document. Five parts of it bind you:
   as the whole of what is known, which is why you are told.
 - `goal` — the objective, its direction, and the current distance to target. A
   proposal that cannot move the objective is not a hypothesis.
+- `challenge`, when present — shared state from outside this board: the public
+  challenge's published record, its saturation, and whatever it publishes about
+  what other solvers tried or refuted. **Do not propose what it shows is
+  already settled**, and price honestly against its spread: a frontier whose
+  top five sit within a fraction of a percent makes a +0.1% idea a marginal
+  move, not a breakthrough. It is context, not board data — it files nothing
+  and closes nothing here.
 - `mechanism_coverage` — how many terminal experiment entries have tested each
   mechanism tag. A tag missing from this map, or with `tested: 0`, is
   **untested**: nobody has ever measured it, which makes it both the riskiest

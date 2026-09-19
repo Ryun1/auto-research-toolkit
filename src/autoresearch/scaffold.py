@@ -78,6 +78,10 @@ def _domain_toml(name: str) -> str:
         prefix = "Q"
         title  = "Hypothesis Queue"
         view   = "docs/log/Hypothesis Queue.md"
+        # The hypothesis tree drawn from the records: a generated mermaid view
+        # that renders in Obsidian or GitHub. Delete the line (or set it empty)
+        # to turn the graph off; either way `ar validate` stops checking it.
+        graph_view = "docs/log/Hypothesis Graph.md"
         description = "Leads on the score. Nothing here is about the harness."
 
         [[tracks]]
@@ -142,6 +146,17 @@ def _domain_toml(name: str) -> str:
         url = "https://github.com/Ryun1/auto-research-toolkit"
         ref  = "main"
 
+        # [challenge]
+        # A public challenge's shared intel: its leaderboard, its published
+        # measurement policy, what other solvers tried. Adds `ar challenge
+        # pull|show|check|target` and a `challenge` block to the generator,
+        # judge and scout briefs. The loop never fetches: `bin/probe-target`
+        # can be one line -- `exec ar challenge target` -- and `Target`'s own
+        # refresh TTL governs the cadence.
+        # source          = "provablyfast"   # or "yukon"
+        # url             = "https://provably.fast/data/index.json"
+        # refresh_seconds = 1800
+
         [coordinator]
         workers_per_iteration    = 3
         generators_per_iteration = 2
@@ -193,6 +208,8 @@ __METRICS__
     # source: bin/probe-target
     # moving: true
     # refresh_seconds: 1800
+    # With [challenge] declared, bin/probe-target can be one line:
+    #   exec ar challenge target
 
   stop_when: "objective < target"
 
@@ -459,6 +476,14 @@ macOS). Start every session with the board:
     bin/ar rank          # why the queue is ordered the way it is
     bin/ar entry list    # the entries themselves
     bin/ar budget        # every meter, and the stop decision
+
+The record draws its own map: `bin/ar entry graph` prints the hypothesis tree
+-- branch lineage, supersessions, related work, coloured by status -- as a
+mermaid diagram, the same markdown `ar render` writes into the graph view. A
+diagram of your own (a mechanism sketch, a decision tree) is a ```mermaid
+fence in an entry body or a memo: markdown renders it (Obsidian, GitHub) and
+nothing parses it back, so a picture can never drift from the record the way
+a hand-maintained map would.
 
 ## The protocol: claim -> work -> measure -> close
 

@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 
 from .. import attempts, preflight, render, scoring
 from .. import budget as budget_mod
+from .. import challenge as challenge_mod
 from .. import entries as entries_mod
 from .. import hardware as hw
 from .. import rank as rank_mod
@@ -218,6 +219,9 @@ class Coordinator:
         self.store = Store(config.paths.entries)
         self.claims = Claims(self.store, config, session)
         self.probe_target = probe_target
+        #: the challenge block for the briefs that route on it; loaded from
+        #: the cache in orient, never fetched here
+        self._challenge = None
         # Resumed from disk, so stopping here and picking the work up on
         # another machine continues the numbering and the yield floor's
         # window rather than restarting both at one.
@@ -461,6 +465,13 @@ class Coordinator:
             # first ever on a mechanism tag; the rest of the board it does not
             # route on.
             payload["mechanism_coverage"] = self._mechanism_coverage(entries)
+        if role in (Role.GENERATOR, Role.SCOUT, Role.JUDGE) and self._challenge:
+            # Shared state from outside the board (the public challenge's
+            # record, saturation, published policy). Knowledge, never board
+            # data: nothing here may file, close or price an entry. Roles
+            # that do not route on it -- worker, curator, qc -- buy nothing
+            # but tokens carrying it, so they do not.
+            payload["challenge"] = self._challenge
         payload.update(extra)
         return json.dumps(payload, separators=(",", ":"), default=str)
 
@@ -599,6 +610,22 @@ class Coordinator:
             phase.detail.append(
                 f"{self.foreign_rows} pre-adoption run row(s) present and not "
                 f"charged to this campaign's budget")
+        # The challenge block is a cache read, same class as the record reads
+        # above -- orient does no network IO. The one refresher is the
+        # moving-target probe (`ar challenge target`), because Target.resolve
+        # already TTLs its probe; a second refresh path here would disagree
+        # with the first about what "fresh" means.
+        self._challenge = None
+        if self.config.challenge.source:
+            try:
+                self._challenge = challenge_mod.brief_payload(
+                    self.config.paths.root, self.config.challenge.source)
+            except AutoresearchError as exc:
+                phase.detail.append(f"challenge brief unavailable: {exc}")
+            if self._challenge is None:
+                phase.detail.append(
+                    "challenge: no cached snapshot; `ar challenge pull` "
+                    "would fetch one")
         # Free any claim whose holder has gone silent. Targeted, one at a time,
         # never all-or-nothing (H83).
         for entry, age in self.claims.reapable():

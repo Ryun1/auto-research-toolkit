@@ -51,7 +51,8 @@ DISTIL_EVERY = 5
 
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
-              "skills", "upstream", "brain", "plugins", "session"}
+              "skills", "upstream", "brain", "plugins", "session",
+              "challenge"}
 
 #: Option keys a `[brain]` table may carry for the built-in TypeSafe brain
 #: (`value = "typesafe"`), beyond `default` / role names / `authorize_spend`.
@@ -85,6 +86,11 @@ class Track:
     #: Distinct from `view` so a staged cutover can render beside the live
     #: document instead of over it.
     migrate_from: str = ""
+    #: the track's hypothesis tree drawn from the records: a generated mermaid
+    #: view (`render.graph_view`), written by `ar render` and checked byte-identical
+    #: by `ar validate` like any other view. Empty (the default) disables it --
+    #: not every track wants a picture, and an unconfigured check must not fail.
+    graph_view: str = ""
     #: entries on this track are defects against the harness itself, so each
     #: must carry the evidence that makes it reproducible by someone who has
     #: never seen this project: `core`, `repro` and `observed` (entries.py).
@@ -134,6 +140,64 @@ class Upstream:
             raise ConfigError(
                 f"upstream.min_core must be a string, got {min_core!r}")
         return cls(url=url, ref=ref, min_core=min_core)
+
+
+@dataclass
+class Challenge:
+    """A public challenge's shared intel: its leaderboard, its published
+    measurement policy, the research graph other solvers left behind.
+
+    Declares a source; `ar challenge pull|show|check|target` reads it, and
+    the generator/judge/scout briefs gain a `challenge` block. Empty `source`
+    means no challenge: the verbs refuse and the loop is byte-identical.
+
+    The loop itself never fetches. `orient` reads the cache only; the one
+    refresher is the moving-target probe (`ar challenge target`, which the
+    domain's `bin/probe-target` wraps), because `Target.resolve` already TTLs
+    its probe and a second refresh path would disagree with the first about
+    what "fresh" means -- two clocks on one target is the stale-read defect
+    in miniature.
+    """
+    source: str = ""
+    #: overrides the adapter's default page
+    url: str = ""
+    #: which of the challenge's boards (yukon runs pinning and subset)
+    benchmark: str = ""
+    #: fetch-if-stale window for `pull` / `target`; check flags a snapshot
+    #: older than four windows
+    refresh_seconds: float = 1800.0
+    #: one GET's timeout; offline fails loudly in a minute, never hangs a probe
+    timeout_seconds: float = 60.0
+
+    @classmethod
+    def from_dict(cls, spec: dict) -> Challenge:
+        unknown = set(spec) - {"source", "url", "benchmark",
+                               "refresh_seconds", "timeout_seconds"}
+        if unknown:
+            raise ConfigError(
+                f"[challenge] has unknown key(s) {sorted(unknown)}; "
+                f"known: ['source', 'url', 'benchmark', 'refresh_seconds', "
+                f"'timeout_seconds']")
+        source = spec.get("source", "")
+        if not isinstance(source, str):
+            raise ConfigError(f"challenge.source must be a string, got {source!r}")
+        url = spec.get("url", "")
+        if not isinstance(url, str):
+            raise ConfigError(f"challenge.url must be a string, got {url!r}")
+        benchmark = spec.get("benchmark", "")
+        if not isinstance(benchmark, str):
+            raise ConfigError(
+                f"challenge.benchmark must be a string, got {benchmark!r}")
+        out = {}
+        for key, default in (("refresh_seconds", 1800.0),
+                             ("timeout_seconds", 60.0)):
+            raw = spec.get(key, default)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or raw <= 0:
+                raise ConfigError(f"challenge.{key} must be a positive number, got {raw!r}")
+            out[key] = float(raw)
+        return cls(source=source, url=url, benchmark=benchmark,
+                   refresh_seconds=out["refresh_seconds"],
+                   timeout_seconds=out["timeout_seconds"])
 
 
 @dataclass
@@ -273,6 +337,8 @@ class DomainConfig:
     remote: list = field(default_factory=list)
     #: where the core comes from, for `ar harness check` / `update`
     upstream: Upstream = field(default_factory=Upstream)
+    #: the public challenge this domain chases, when it chases one
+    challenge: Challenge = field(default_factory=Challenge)
     description: str = ""
 
     # -- lookup -----------------------------------------------------------
@@ -343,6 +409,14 @@ class DomainConfig:
                     f"goal.required_gates names {name!r}, which no track's "
                     f"[[tracks.gates]] defines; declared: "
                     f"{sorted(gate_names) or '(none)'}")
+        if self.challenge.source:
+            # Lazy: keeps the config module's import graph free of the
+            # adapters, which need only `errors`.
+            from .challenge import ADAPTERS
+            if self.challenge.source not in ADAPTERS:
+                problems.append(
+                    f"challenge.source {self.challenge.source!r} is not a "
+                    f"known adapter; known: {', '.join(sorted(ADAPTERS))}")
         return problems
 
     # -- construction -----------------------------------------------------
@@ -415,6 +489,7 @@ class DomainConfig:
                 gates=gate_definitions(spec.get("gates", [])),
                 description=spec.get("description", ""),
                 migrate_from=spec.get("migrate_from", ""),
+                graph_view=spec.get("graph_view", ""),
                 requires_defect_evidence=bool(spec.get(
                     "requires_defect_evidence", False)))
 
@@ -458,7 +533,8 @@ class DomainConfig:
                       for name, spec in (data.get("hardware") or {}).items()},
             remote=[RemoteClass.from_dict(spec)
                     for spec in (data.get("remote") or [])],
-            upstream=Upstream.from_dict(dict(data.get("upstream") or {})))
+            upstream=Upstream.from_dict(dict(data.get("upstream") or {})),
+            challenge=Challenge.from_dict(dict(data.get("challenge") or {})))
 
 
 def _brain_spec(data) -> dict:

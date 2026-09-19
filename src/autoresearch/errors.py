@@ -43,3 +43,7 @@ class ClaimError(AutoresearchError):
 
 class GoalError(AutoresearchError):
     """A goal is malformed, or an objective cannot be evaluated."""
+
+
+class ChallengeError(AutoresearchError):
+    """A challenge source could not be fetched, parsed, cached, or checked."""
