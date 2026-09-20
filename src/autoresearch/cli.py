@@ -37,6 +37,7 @@ from . import gates as gates_mod
 from . import hardware as hw
 from . import plugins as plugins_mod
 from . import rank as rank_mod
+from . import relocate as relocate_mod
 from . import render, scoring
 from . import runs as runs_mod
 from . import skills as skills_mod
@@ -1747,6 +1748,7 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     bundles_mod.register_parser(sub)
     gates_mod.register_parser(sub)
+    relocate_mod.register_parser(sub)
     attempts_mod.register_parser(sub)
     external_mod.register_parser(sub)
     usage = sub.add_parser("usage", help="out-of-band spend, metered like any other")

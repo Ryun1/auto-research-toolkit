@@ -268,6 +268,7 @@ ar challenge    the public challenge's shared intel: pull, show, check, target
 ar usage        record, list and price out-of-band spend
 ar gates        per-entry acceptance gates: configure, update, show
 ar evidence     portable integrity-only evidence bundles: pack, verify, import
+ar relocate     move oversized inbox evidence into the findings lane, rewriting every recorded pointer
 ar workspace    inspect or archive an abandoned workspace slot
 ar session      persistent worktree sessions for hand-driven work: create, destroy, prune
 ```
@@ -339,6 +340,16 @@ default) keeps the full fabrication net, and the net reads a second evidence
 pool: the `run_detail` legs a settled external report retains, so a scratch
 bench's confirmed summary must still trace every figure to evidence the
 record holds (pvfast-stwo-simd H10/H11).
+
+**Oversized inbox evidence moves with its pointers.** `ar validate` warns on
+every inbox file past 64 KiB that terminal evidence belongs in
+`data/artifacts/`; a bare `mv` dangles the memos and sources that cite it.
+`ar relocate inbox/<file>` performs the whole surgery: every refusal checked
+up front (destination exists, destination still inside the inbox, source
+outside the inbox, destination outside the domain root, missing reason),
+then the move, then every recorded pointer rewritten — including closed
+entries' `result.memo` — through the atomic record save with a history
+event, then the views re-rendered, so `validate` follows clean (QSB H32).
 
 **The installed core is part of the environment the records trust.** A copied
 (non-editable) install lags its checkout silently, and a stale install
