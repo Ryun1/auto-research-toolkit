@@ -301,3 +301,47 @@ def test_an_unparsable_file_raises_on_every_call_and_is_never_cached(store, sand
         store.all()
     (sandbox.paths.entries / "Q2.yaml").unlink()
     assert [e.id for e in store.all()] == ["Q1"]
+
+
+# -- evidence classes (pvfast-stwo-simd H10) ---------------------------------
+
+
+def test_an_unknown_evidence_class_is_refused_at_the_record():
+    with pytest.raises(SchemaError, match="evidence_class"):
+        result(evidence_class="vibes")
+
+
+def test_evidence_class_defaults_to_ledger():
+    assert result().evidence_class == "ledger"
+
+
+def test_set_evidence_class_records_the_reclassification(store, sandbox):
+    """The escape hatch is one writer with one typed field: the verdict is
+    untouched, the reason is mandatory, and the change lands in history."""
+    entry = make_entry(store, "Q1")
+    entry.result = result()
+    entry.status = "confirmed"
+    store.save(entry)
+
+    loaded = store.load("Q1")
+    loaded.set_evidence_class("official", who="s", why="evaluator-owned numbers")
+    store.save(loaded)
+
+    reread = store.load("Q1")
+    assert reread.result.evidence_class == "official"
+    assert reread.result.verdict == "confirmed"
+    event = reread.history[-1]
+    assert event.kind == "evidence-class"
+    assert "ledger -> official" in event.detail
+    assert "evaluator-owned" in event.detail
+
+
+def test_set_evidence_class_refuses_without_a_result_or_a_reason(store):
+    entry = make_entry(store, "Q1")
+    with pytest.raises(TransitionError, match="no result"):
+        entry.set_evidence_class("census", who="s", why="because")
+    entry.result = result()
+    with pytest.raises(TransitionError, match="reason"):
+        entry.set_evidence_class("census", who="s", why="  ")
+    with pytest.raises(TransitionError, match="not in"):
+        entry.set_evidence_class("vibes", who="s", why="why not")

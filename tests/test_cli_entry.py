@@ -92,3 +92,38 @@ def test_list_json_honours_the_filters(sandbox, store, capsys):
                "--status", "in-progress") == 0
     rows = json.loads(capsys.readouterr().out)
     assert [r["id"] for r in rows] == ["Q2"]
+
+
+def test_amend_declares_the_evidence_class(sandbox, store, capsys):
+    """The out-of-band path for closures accepted before the strictness
+    landed: one command, one typed field, --why mandatory, views re-rendered
+    so validate follows without a manual render (the H32-class hygiene)."""
+    entry = close(sandbox, store, make_entry(store, "Q1"))
+    assert entry.result.evidence_class == "ledger"
+
+    assert _ar(sandbox, "entry", "amend", "Q1",
+               "--evidence-class", "official") == 2
+    assert "reason" in capsys.readouterr().err
+
+    assert _ar(sandbox, "entry", "amend", "Q1",
+               "--evidence-class", "official",
+               "--why", "evaluator-owned numbers") == 0
+    reread = store.load("Q1")
+    assert reread.result.evidence_class == "official"
+    assert reread.history[-1].kind == "evidence-class"
+
+
+def test_amend_refuses_a_reclassification_combined_with_field_edits(sandbox,
+                                                                    store,
+                                                                    capsys):
+    """A silent-ignore that ran only one of two requested changes reads as
+    success (the H135 shape): combining --evidence-class with a field edit is
+    refused, so neither half applies by accident."""
+    close(sandbox, store, make_entry(store, "Q1"))
+    assert _ar(sandbox, "entry", "amend", "Q1",
+               "--evidence-class", "census", "--why", "a census",
+               "--title", "renamed") == 2
+    assert "pass it alone" in capsys.readouterr().err
+    entry = store.load("Q1")
+    assert entry.result.evidence_class == "ledger"
+    assert entry.title != "renamed"

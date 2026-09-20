@@ -153,6 +153,54 @@ def records(config):
     return [_cached_row(path) for path in sorted(live)]
 
 
+# Numbers retained in a settled external report's run_detail legs. Same shape
+# the faithfulness scan reads out of a summary: decimals only -- bare integers
+# (dates, counts of tests, log sizes) are census noise, not measurements.
+_DETAIL_NUMBER = re.compile(r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+\.\d+")
+
+
+def detail_anchors_by_entry(config) -> dict[str, list[float]]:
+    """Retained numeric anchors per entry, from settled external `run_detail`.
+
+    Scratch benches (pvfast-stwo-simd H11) retain their evidence as
+    `run_detail` legs on the completion report -- free-form objects whose
+    `result` field holds the measured outcome -- rather than as ledger rows,
+    because there is no generic run-row recorder for a bench outside the
+    domain's measure command. The mechanical faithfulness check reads the
+    SAME numbers here that it reads from the ledger, so a confirmed summary
+    still cannot say a figure its retained evidence nowhere contains; it just
+    has a second place the figures may live.
+
+    One pass over the attempt ledger (cached), tolerant of unreadable rows --
+    this feeds a check, not a meter; an invalid record is `problems()`' job
+    to report and `ar attempt reconcile`'s to fix. Only the leg's `result`
+    field is parsed: `what` is dense in incidental numbers (log sizes, test
+    counts) that would dilute the fabrication net.
+    """
+    out: dict[str, list[float]] = {}
+    for path in sorted(directory(config).glob("*/record.json")):
+        row = _cached_row(path)
+        if (not isinstance(row, dict) or row.get("kind") != "external"
+                or row.get("status") != "completed"):
+            continue
+        report = row.get("report")
+        legs = report.get("run_detail") if isinstance(report, dict) else None
+        if not isinstance(legs, list) or not legs:
+            continue
+        entry = row.get("entry")
+        if not isinstance(entry, str) or not entry:
+            continue
+        anchors = out.setdefault(entry, [])
+        for leg in legs:
+            if not isinstance(leg, dict):
+                continue
+            result = leg.get("result")
+            if not isinstance(result, str):
+                continue
+            anchors.extend(float(m) for m in _DETAIL_NUMBER.findall(result))
+    return {k: v for k, v in out.items() if v}
+
+
 TOMBSTONE_SCHEMA = "ar-attempt-tombstone-1"
 
 

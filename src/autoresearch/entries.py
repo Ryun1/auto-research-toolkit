@@ -116,6 +116,21 @@ def parse_context(text: str) -> Applicability:
 
 ID_RE = re.compile(r"^([A-Z]+)(\d+)$")
 
+#: The evidence class a terminal result carries. The default is the full
+#: fabrication net: a confirmed experiment's typed summary must trace to the
+#: run ledger (`runs.faithfulness_problems`). The other two classes exist
+#: because two field corpora (pvfast-stwo-simd H10/H11) legitimately hold
+#: evidence no local ledger row can or should back:
+#:   official -- evaluator/host-owned numbers measured on an external pinned
+#:               machine (a hosted submission's official ratios);
+#:   census   -- deliberately measurement-free work (differential tests, asm
+#:               censuses, policy readings; evidence retained as memos).
+#: A result marked official/census is not un-evidenced: its memo still must
+#: exist (the close gate enforces that regardless of class). What changes is
+#: only which mechanical checks apply -- the class is declared, typed, and
+#: visible in the record, so a second-class verdict is a stated verdict.
+EVIDENCE_CLASSES = ("ledger", "official", "census")
+
 
 def _now() -> str:
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
@@ -154,6 +169,11 @@ class Result:
     disposition: str = "experiment"
     #: Snapshot the tested premises so later entry amendments cannot extend them.
     mechanisms: list[str] | None = None
+    #: Which evidence class backs this result; see EVIDENCE_CLASSES. Default
+    #: `ledger` keeps the full mechanical faithfulness net; `official` and
+    #: `census` are declared, record-visible scopes for evidence no local run
+    #: row can back (pvfast-stwo-simd H10/H11).
+    evidence_class: str = "ledger"
 
     def __post_init__(self):
         if isinstance(self.applicability, dict):
@@ -167,6 +187,10 @@ class Result:
         if self.mechanisms is not None and (not isinstance(self.mechanisms, list)
                 or any(not isinstance(m, str) or not m.strip() for m in self.mechanisms)):
             raise SchemaError("result.mechanisms must be a list of non-empty strings")
+        if self.evidence_class not in EVIDENCE_CLASSES:
+            raise SchemaError(
+                f"result.evidence_class must be one of {EVIDENCE_CLASSES}, "
+                f"got {self.evidence_class!r}")
 
 
 @dataclass
@@ -419,6 +443,30 @@ class Entry:
             raise TransitionError("relabelling requires a reason")
         old, self.result.closure_kind = self.result.closure_kind, kind
         self.history.append(Event(_now(), "relabel", who, f"{old} -> {kind}: {why}"))
+        self.updated = _now()
+
+    def set_evidence_class(self, value: str, who: str, why: str) -> None:
+        """Declare which evidence class backs an existing result.
+
+        The escape hatch the field corpora asked for (pvfast-stwo-simd H10:
+        closures accepted before the faithfulness strictness landed, and
+        closures whose evidence is evaluator-owned or measurement-free by
+        design, had no writer that could say so -- hand-editing the YAML is
+        the move H8 exists to forbid). Like `relabel`: one field, the verdict
+        untouched, the reason mandatory, the change appended to history.
+        """
+        if self.result is None:
+            raise TransitionError(f"{self.id} has no result to classify")
+        if value not in EVIDENCE_CLASSES:
+            raise TransitionError(
+                f"evidence class {value!r} not in {sorted(EVIDENCE_CLASSES)}")
+        if not why.strip():
+            raise TransitionError(
+                f"{self.id}: setting an evidence class without a reason is an "
+                "unchecked reclassification; pass --why")
+        old, self.result.evidence_class = self.result.evidence_class, value
+        self.history.append(Event(
+            _now(), "evidence-class", who, f"{old} -> {value}: {why}"))
         self.updated = _now()
 
     # -- derived ----------------------------------------------------------

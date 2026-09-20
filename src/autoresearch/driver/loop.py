@@ -47,6 +47,7 @@ import time
 from dataclasses import dataclass, field
 
 from .. import attempts, preflight, render, scoring
+from .. import attempts as attempts_mod
 from .. import budget as budget_mod
 from .. import challenge as challenge_mod
 from .. import entries as entries_mod
@@ -1175,14 +1176,19 @@ class Coordinator:
 
         try:
             applicability = report.get("applicability")
+            evidence_class = str(report.get("evidence_class") or "ledger")
             # Replication gate: a `confirmed` experiment closure must leave
             # coordinator.confirm_runs valid rows in the ledger. Harvest
             # retains the worker's rows BEFORE this runs, so the evidence is
             # on disk by the time it is asked for; a verdict with too few rows
             # is refused and the claim goes back to the queue, runs cost
-            # already charged -- the worker adds rows on the next pass.
+            # already charged -- the worker adds rows on the next pass. An
+            # official/census evidence class (pvfast-stwo-simd H10) is
+            # deliberately measurement-free or externally owned, so demanding
+            # ledger rows would refuse honest work.
             if (verdict == "confirmed"
                     and str(report.get("disposition", "experiment")) == "experiment"
+                    and evidence_class not in ("official", "census")
                     and self.config.confirm_runs > 1):
                 evidence = runs_mod.closure_evidence(
                     runs_mod.read_all(self.config.paths.runs),
@@ -1197,7 +1203,8 @@ class Coordinator:
                 verification=verification,
                 applicability=(Applicability.from_dict(applicability)
                                if applicability is not None else None),
-                disposition=report.get("disposition", "experiment"))
+                disposition=report.get("disposition", "experiment"),
+                evidence_class=evidence_class)
             entry.apply(machine, verdict, who=self.session,
                         why=result.summary, result=result,
                         memo_exists=lambda m: (self.config.paths.root / m).exists())
@@ -1450,6 +1457,9 @@ class Coordinator:
         # One ledger read for every closed entry's faithfulness check, not one
         # per entry: a read inside the loop is O(closed x rows).
         all_runs = runs_mod.read_all(self.config.paths.runs)
+        # One attempt-ledger pass for every closed entry's run_detail anchors
+        # (scratch-bench evidence, pvfast-stwo-simd H11) -- same reasoning.
+        detail_anchors = attempts_mod.detail_anchors_by_entry(self.config)
         for entry in entries:
             machine = self.config.track_for(entry.id).machine
             status = machine.status(entry.status)
@@ -1470,7 +1480,8 @@ class Coordinator:
             # 9,453.
             if status.terminal:
                 problems += runs_mod.faithfulness_problems(
-                    all_runs, entry, self.config.goal)
+                    all_runs, entry, self.config.goal,
+                    detail_anchors.get(entry.id, ()))
         # Nothing dispatched this iteration may still be held: a claim that
         # outlives its iteration is the squat H78/H125 describe.
         for entry_id in it.shortlist:

@@ -27,6 +27,12 @@ OUTPUT_CONTRACT = {
     "closure_kind": "mechanism|slope|cell (refutations)",
     "reopen_condition": "required for slope/cell",
     "disposition": "optional experiment|superseded|already-shipped; default experiment",
+    "evidence_class": "optional ledger|official|census; default ledger -- official "
+                      "(evaluator-owned numbers) and census (measurement-free work) "
+                      "skip the ledger-row replication and faithfulness checks",
+    "run_detail": "optional list of retained evidence legs (run, what, result, "
+                  "loadavg_1m); a confirmed summary may trace its numbers to the "
+                  "figures retained here",
     "applicability": "optional context object: baseline, source_revision, workload, hardware, parameters",
     "runs": "nonnegative integer; retained measurement evidence required",
     "gpu_hours": "finite nonnegative measured usage",

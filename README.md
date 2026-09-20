@@ -326,6 +326,20 @@ on an open entry with the same writer (and the same H140 guard) the loop's
 curator phase uses, because a hand-driven curator pass once had no path
 except editing the YAML.
 
+**A closure names its evidence class.** The mechanical faithfulness check — a
+confirmed experiment's typed summary must trace to the run ledger — assumes
+the evidence is a local measurement. Two legitimate kinds are not: `official`
+results carry evaluator-owned numbers measured on an external pinned host,
+and `census` results are deliberately measurement-free (differential tests,
+asm censuses, policy readings). `ar close --evidence-class census` declares
+the class at closure, and `ar entry amend --evidence-class` reclassifies a
+closure the strictness predates — one typed field, the verdict untouched,
+`--why` mandatory, the change appended to history. A `ledger` closure (the
+default) keeps the full fabrication net, and the net reads a second evidence
+pool: the `run_detail` legs a settled external report retains, so a scratch
+bench's confirmed summary must still trace every figure to evidence the
+record holds (pvfast-stwo-simd H10/H11).
+
 **The installed core is part of the environment the records trust.** A copied
 (non-editable) install lags its checkout silently, and a stale install
 resurrects fixed defects — the first field domain verified its install by

@@ -158,7 +158,7 @@ def closure_evidence(records, entry_id: str, min_ok: int) -> list[str]:
             "lower coordinator.confirm_runs if one row really is enough"]
 
 
-def faithfulness_problems(records, entry, goal) -> list[str]:
+def faithfulness_problems(records, entry, goal, detail_anchors=()) -> list[str]:
     """Mechanical memo-vs-ledger faithfulness for a closed experiment entry.
 
     The failure this names is documented, not hypothetical: AgentRxiv's agents
@@ -174,28 +174,45 @@ def faithfulness_problems(records, entry, goal) -> list[str]:
     measured but failed its validity gates still decided the bar (the source
     corpus's Tier-2 finding: three outcomes, not two) -- so demanding `ok`
     rows for a `no` would cry wolf.
-    1. the entry has at least one valid run row in the ledger;
-    2. every non-trivial number in `result.summary` traces to the ledger --
+    1. the entry has at least one valid run row in the ledger, OR retained
+       `run_detail` legs on a settled external report (scratch benches whose
+       evidence lives in retained artifacts, pvfast-stwo-simd H11);
+    2. every non-trivial number in `result.summary` traces to an anchor --
        a metric value of one of the entry's rows, that row's objective value,
-       the row count, or arithmetic (difference/ratio) over two matched
-       values. A number matching nothing is named.
+       the row count, a number retained in a settled `run_detail` leg, or
+       arithmetic (difference/ratio) over two matched values. A number
+       matching nothing is named.
+
+    Scoping by `result.evidence_class` (pvfast-stwo-simd H10): `official`
+    results carry evaluator-owned numbers measured on an external pinned host
+    -- no local row can or should back them -- and `census` results are
+    deliberately measurement-free. Both skip the mechanical checks entirely
+    (their memo still had to exist to close); `ledger`, the default, is
+    everything above.
     """
     if (entry.result is None or entry.result.disposition != "experiment"
             or entry.result.verdict != "confirmed"):
         return []
+    if entry.result.evidence_class in ("official", "census"):
+        return []
     rows = [r for r in records if r.entry == entry.id and r.status == OK]
-    if not rows:
+    anchors = [a for a in detail_anchors if isinstance(a, float) or isinstance(a, int)]
+    if not rows and not anchors:
         return [f"{entry.id}: verdict closed with no valid run row in the "
-                "ledger -- a summary nothing measured backs is not evidence"]
+                "ledger and no settled external run_detail -- a summary "
+                "nothing measured backs is not evidence"]
     out: list[str] = []
     anchor: set[float] = set()
+    for a in anchors:
+        anchor.add(abs(float(a)))
     for row in rows:
         anchor.update(abs(float(v)) for v in row.metrics.values())
         try:
             anchor.add(abs(goal.objective_value(row.metrics)))
         except Exception:
             pass
-    anchor.add(float(len(rows)))
+    if rows:
+        anchor.add(float(len(rows)))
     for token in re.findall(r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+\.\d+",
                             entry.result.summary):
         value = abs(float(token))
@@ -217,8 +234,9 @@ def faithfulness_problems(records, entry, goal) -> list[str]:
             continue
         out.append(
             f"{entry.id}: summary number {token} matches no retained run row "
-            f"metric, objective value, or arithmetic over them "
-            f"({len(rows)} row(s) retained)")
+            f"metric, objective value, settled run_detail figure, or "
+            f"arithmetic over them ({len(rows)} row(s), "
+            f"{len(anchors)} run_detail figure(s) retained)")
     return out
 
 

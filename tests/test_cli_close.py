@@ -50,3 +50,26 @@ def test_a_close_leaves_the_views_valid_so_validate_passes(sandbox, capsys):
                      "--memo", memo(sandbox, "inbox/Q1.md")]) == 0
     assert cli.main([*root, "validate"]) == 0
     assert "problem" not in capsys.readouterr().out
+
+
+def test_a_census_close_bypasses_the_replication_gate(sandbox, store, capsys):
+    """The replication gate demands ledger rows of a `confirmed` close; a
+    census or official closure is deliberately measurement-free or carries
+    evaluator-owned numbers, so the same close with a declared class goes
+    through where the ledger default is refused (pvfast-stwo-simd H10)."""
+    # cmd_close loads its own config from disk: the gate must be a real
+    # config value, not a test-only attribute mutation.
+    toml = sandbox.paths.root / "domain.toml"
+    toml.write_text(toml.read_text().replace(
+        "[coordinator]", "[coordinator]\nconfirm_runs = 2"))
+    memo(sandbox, "inbox/Q1.md")
+    make_entry(store, "Q1")
+    code = _claim_and_close(sandbox, "Q1", "confirmed", "--memo", "inbox/Q1.md")
+    assert code == 2
+    assert "valid run row" in capsys.readouterr().err
+
+    make_entry(store, "Q2")
+    code = _claim_and_close(sandbox, "Q2", "confirmed", "--memo", "inbox/Q1.md",
+                            "--evidence-class", "census")
+    assert code == 0
+    assert store.load("Q2").result.evidence_class == "census"

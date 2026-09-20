@@ -319,3 +319,98 @@ IDLE = {
     "curator": lambda b: {"reprice": [], "notes": []},
     "qc": lambda b: {"problems": [], "harness_debt": [], "verdict": "clean"},
 }
+
+
+# -- evidence classes and run_detail anchors (pvfast-stwo-simd H10/H11) ------
+
+
+def test_official_and_census_results_skip_the_ledger_checks(sandbox, store):
+    """Evaluator-owned numbers and measurement-free censuses are legitimate
+    evidence no local row can back; a strictness that permanently flags them
+    is a permanently-red QC phase where real regressions hide (H10). The
+    class is declared on the result, so the skip is visible, not silent."""
+    close(sandbox, store, make_entry(store, "Q1"),
+          summary="officially 1.6469x on the pinned host, decisive")
+    entry = store.load("Q1")
+    entry.set_evidence_class("official", who="test", why="evaluator-owned numbers")
+    store.save(entry)
+    assert runs_mod.faithfulness_problems([], store.load("Q1"), sandbox.goal) == []
+
+    close(sandbox, store, make_entry(store, "Q2"),
+          summary="census: 17 of 18 sites match, a 0.123 loose end")
+    entry = store.load("Q2")
+    entry.set_evidence_class("census", who="test", why="differential census")
+    store.save(entry)
+    assert runs_mod.faithfulness_problems([], store.load("Q2"), sandbox.goal) == []
+
+
+def test_the_ledger_default_keeps_the_fabrication_net(sandbox, store):
+    """The off-switch test: without a declared class the strictness is
+    unchanged -- a summary number matching nothing is still named."""
+    close(sandbox, store, make_entry(store, "Q1"),
+          summary="T measured at 0.417, decisive")
+    _confirm_rows(sandbox, 1)
+    entry = store.load("Q1")
+    assert entry.result.evidence_class == "ledger"
+    problems = runs_mod.faithfulness_problems(
+        runs_mod.read_all(sandbox.paths.runs), entry, sandbox.goal)
+    assert problems and "0.417" in problems[0]
+
+
+def test_settled_run_detail_anchors_waive_the_no_row_problem(sandbox, store):
+    """A scratch bench retains its evidence as run_detail legs on the settled
+    external report, not as ledger rows (H11): the no-row problem must be
+    waived by retained legs, and summary numbers must trace to the figures
+    those legs retain."""
+    close(sandbox, store, make_entry(store, "Q1"),
+          summary="pack stage 5.49x faster, end to end 45.3%")
+    assert runs_mod.faithfulness_problems(
+        [], store.load("Q1"), sandbox.goal,
+        detail_anchors=[5.49, 45.3]) == []
+
+
+def test_a_summary_number_outside_the_run_detail_anchors_is_named(sandbox, store):
+    """The anchors are a second evidence pool, not an amnesty: a figure the
+    settled legs nowhere retain is still named."""
+    close(sandbox, store, make_entry(store, "Q1"),
+          summary="pack stage 7.77x faster")
+    problems = runs_mod.faithfulness_problems(
+        [], store.load("Q1"), sandbox.goal, detail_anchors=[5.49])
+    assert problems and "7.77" in problems[0]
+    assert "run_detail" in problems[0]
+
+
+def test_no_rows_and_no_legs_is_still_named(sandbox, store):
+    close(sandbox, store, make_entry(store, "Q1"), summary="held")
+    problems = runs_mod.faithfulness_problems([], store.load("Q1"), sandbox.goal)
+    assert problems and "no valid run row" in problems[0]
+    assert "run_detail" in problems[0]
+
+
+def test_detail_anchors_read_from_settled_external_reports(sandbox):
+    """Anchors come from settled external completions only: an assigned row's
+    prepared report is not evidence yet, and legs without a retained result
+    string contribute nothing. Only the leg's `result` field is parsed."""
+    import json
+    import uuid
+
+    from autoresearch import attempts as attempts_mod
+
+    def record(status, entry="Q1", legs=None):
+        d = attempts_mod.directory(sandbox) / uuid.uuid4().hex
+        d.mkdir(parents=True)
+        report = {"run_detail": legs} if legs is not None else {}
+        (d / "record.json").write_text(json.dumps(
+            {"schema": "ar-attempt-1", "id": d.name, "kind": "external",
+             "status": status, "entry": entry, "session": "s",
+             "report": report}))
+
+    record("completed", legs=[
+        {"run": "pack", "what": "tiled pack at 2^20, 7/7 cycles",
+         "result": "5.49x vs pristine, byte-identical roots"},
+        {"run": "identity", "result": "no number retained"}])
+    record("assigned", legs=[{"result": "9.99x prepared, not settled"}])
+    record("completed", entry="Q2", legs=[{"result": "0.0498 s baseline"}])
+
+    assert attempts_mod.detail_anchors_by_entry(sandbox) == {
+        "Q1": [5.49], "Q2": [0.0498]}

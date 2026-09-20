@@ -45,7 +45,7 @@ from . import usage as usage_mod
 from . import validate as validate_mod
 from .claims import Claims
 from .config import DomainConfig, discover
-from .entries import Entry, Event, Result, Store
+from .entries import EVIDENCE_CLASSES, Entry, Event, Result, Store
 from .errors import AutoresearchError
 from .states import CLOSURE_KINDS
 
@@ -456,6 +456,20 @@ def cmd_entry_amend(args):
         ("core", args.core), ("repro", args.repro),
         ("observed", args.observed), ("expected", args.expected))
         if value is not None}
+    if args.evidence_class is not None:
+        # One writer for the class declaration, mirroring `close --relabel`:
+        # the result is untouched apart from the typed field, and the reason
+        # is mandatory (entries.set_evidence_class refuses without one).
+        if changes:
+            raise AutoresearchError(
+                "--evidence-class is a reclassification, not a field edit; "
+                "pass it alone or run the two amends separately")
+        entry.set_evidence_class(args.evidence_class, who=args.session,
+                                 why=args.why or "")
+        store.save(entry)
+        _render_views(config)
+        print(f"{entry.id} evidence class set to {args.evidence_class}")
+        return 0
     if not changes:
         raise AutoresearchError(
             "amend needs at least one field to change; nothing was written")
@@ -692,11 +706,15 @@ def cmd_close(args):
     result = Result(
         verdict=args.status, memo=args.memo or "", at=_iso(), session=args.session,
         summary=args.summary or "", closure_kind=args.closure,
-        reopen_condition=args.reopen_condition or "")
+        reopen_condition=args.reopen_condition or "",
+        evidence_class=args.evidence_class)
     # Same replication gate the coordinator applies: a close path that
     # bypassed it would make the loop's guard vacuous (invariant 3 -- a guard
-    # that only refuses on one path is not a guard).
+    # that only refuses on one path is not a guard). An official/census
+    # evidence class is deliberately measurement-free or externally owned;
+    # demanding ledger rows of it would refuse honest work (pvfast H10).
     if (args.status == "confirmed"
+            and args.evidence_class not in ("official", "census")
             and config.confirm_runs > 1):
         evidence = runs_mod.closure_evidence(
             runs_mod.read_all(config.paths.runs), args.id, config.confirm_runs)
@@ -1530,6 +1548,15 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     amend.add_argument("--repro", help="command or path that demonstrates it")
     amend.add_argument("--observed", help="what actually happened")
     amend.add_argument("--expected", help="what should have happened instead")
+    amend.add_argument("--evidence-class", dest="evidence_class",
+                       choices=sorted(EVIDENCE_CLASSES),
+                       help="declare which evidence class backs the result "
+                            "(ledger = run-ledger backed, official = "
+                            "evaluator-owned numbers, census = "
+                            "measurement-free work); requires --why")
+    amend.add_argument("--why",
+                       help="required when --evidence-class names the "
+                            "reclassification reason")
     amend.set_defaults(func=cmd_entry_amend)
     reprice = esub.add_parser(
         "reprice", help="correct confidence/impact/cost on an open entry")
@@ -1617,6 +1644,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     close.add_argument("--why")
     close.add_argument("--reopen", action="store_true")
     close.add_argument("--relabel", choices=sorted(CLOSURE_KINDS))
+    close.add_argument("--evidence-class", dest="evidence_class",
+                       choices=sorted(EVIDENCE_CLASSES), default="ledger",
+                       help="which evidence class backs this closure (default "
+                            "ledger: the run-ledger faithfulness net applies)")
     close.set_defaults(func=cmd_close)
 
     meas = sub.add_parser("measure", help="run the domain's measurement, record the row")
