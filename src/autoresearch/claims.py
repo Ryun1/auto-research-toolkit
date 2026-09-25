@@ -128,6 +128,27 @@ class Lock:
         return False
 
 
+
+def claim_state_problems(entry, machine) -> list[str]:
+    """Report active-work records that no session can currently own."""
+    if entry.status != "in-progress" or entry.claim is not None:
+        return []
+
+    detail = ""
+    lifecycle = [event for event in entry.history
+                 if "->" in event.kind or event.kind in (
+                     "released", "reaped", "orphan-repaired")]
+    if lifecycle:
+        event = max(lifecycle, key=lambda item: item.at)
+        settled = (event.kind in ("released", "reaped", "orphan-repaired")
+                   or event.kind.endswith(f"->{machine.initial}"))
+        if settled:
+            detail = (f"; history records {event.kind} by {event.who!r} at "
+                      f"{event.at}, so status and history disagree")
+    return [f"{entry.id}: in-progress with no live claim{detail}; repair with "
+            f"`ar reap {entry.id}`"]
+
+
 class Claims:
     """Claim, release and reap, over an entry store."""
 
@@ -231,35 +252,49 @@ class Claims:
     # -- freeing abandoned work --------------------------------------------
 
     def reapable(self, ttl_hours=None) -> list:
-        """Claims whose holder has been silent past the TTL.
+        """Orphaned active records, plus claims whose holder exceeded TTL.
 
-        Note this is a **death test**, and it is deliberately not the same
-        predicate as any settling window. H107 found those two numbers living
-        8x apart in two files, read as one thing; they are both in config here
-        and neither is derived from the other.
+        The second predicate is a **death test**, and it is deliberately not
+        the same predicate as any settling window. H107 found those two numbers
+        living 8x apart in two files, read as one thing; they are both in config
+        here and neither is derived from the other. Orphan age is ``None``:
+        there is no holder whose silence can be measured.
         """
         ttl = float(ttl_hours if ttl_hours is not None
                     else self.config.budgets.get("claim_ttl_hours", 6))
         out = []
         for entry in self.store.all():
             track = self.config.track_for(entry.id)
-            if (entry.claim and not track.machine.status(entry.status).terminal
-                    and _age_hours(entry.claim.at) > ttl):
+            if not entry.claim and entry.status == "in-progress":
+                out.append((entry, None))
+            elif (entry.claim and not track.machine.status(entry.status).terminal
+                  and _age_hours(entry.claim.at) > ttl):
                 out.append((entry, _age_hours(entry.claim.at)))
         return out
 
     def reap(self, entry_id: str, ttl_hours=None, why: str = ""):
-        """Free ONE abandoned claim.
+        """Repair an unowned active record, or free ONE abandoned claim.
 
-        H83: reaping was all-or-nothing, so freeing one dead session's claim
-        released every other claim past the same TTL, including live ones whose
-        holders simply had not committed lately.
+        Returns ``(entry, former, age)``. ``former`` is ``None`` for an orphan;
+        an actual holder is still governed by the TTL and is never inferred
+        dead from missing liveness data. H83 keeps reaping targeted to one
+        claim; H67 adds the structurally distinct, claim-less active record.
         """
         with self._lock():
             entry = self.store.load(entry_id)
             track = self.config.track_for(entry_id)
             if not entry.claim:
-                raise ClaimError(f"{entry_id} holds no claim to reap")
+                if entry.status != "in-progress":
+                    raise ClaimError(f"{entry_id} holds no claim to reap")
+                reason = why or (
+                    "repaired orphan: in-progress status had no live claim")
+                entry.apply(track.machine, track.machine.initial,
+                            who=self.session, why=reason)
+                entry.history.append(Event(
+                    _now_iso(), "orphan-repaired", self.session, reason))
+                entry.claim = None
+                self.store.save(entry)
+                return entry, None, 0.0
             age = _age_hours(entry.claim.at)
             ttl = float(ttl_hours if ttl_hours is not None
                         else self.config.budgets.get("claim_ttl_hours", 6))

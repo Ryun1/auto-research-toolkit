@@ -251,7 +251,7 @@ ar entry       file, show, amend, reprice and list entries
                (entry graph: the hypothesis tree as a mermaid diagram)
 ar claim       take one entry (serialised, always with a ceiling)
 ar release     hand a claim back, with a reason
-ar reap        free ONE abandoned claim past the TTL
+ar reap        free an expired claim or repair an in-progress orphan
 ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
 ar research    spin up targeted research agents; their ideas land in the record
@@ -272,6 +272,11 @@ ar relocate     move oversized inbox evidence into the findings lane, rewriting 
 ar workspace    inspect or archive an abandoned workspace slot
 ar session      persistent worktree sessions for hand-driven work: create, destroy, prune
 ```
+
+`ar validate` reports an `in-progress` entry with no live claim and names
+`ar reap ID` as the repair. Reap appends the normal return transition plus an
+`orphan-repaired` event; it never bypasses the holder/TTL checks for a real
+claim.
 
 The installed `autoresearch` command avoids the system `ar` archiver name
 collision. New domains also receive `bin/autoresearch`, bound to the Python
