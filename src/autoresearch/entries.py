@@ -187,6 +187,27 @@ class Result:
         if self.mechanisms is not None and (not isinstance(self.mechanisms, list)
                 or any(not isinstance(m, str) or not m.strip() for m in self.mechanisms)):
             raise SchemaError("result.mechanisms must be a list of non-empty strings")
+        # ABSENCE is tolerated; WRONGS is not.
+        #
+        # This module validates on READ, so a terminal entry whose result lacks
+        # evidence_class cannot be opened at all -- which takes down every command
+        # that scans the store, not just validate. Observed in qsb-research on
+        # 2026-09-27: 29 terminal entries carried `evidence_class: null`, and
+        # `ar board`, `ar render`, `ar validate`, `ar entry list`, `ar entry new`,
+        # `ar rank` and `ar budget` all failed for every session at once. The
+        # field is required at close time, so the null only ever arrives from a
+        # merge that drops it -- and a terminal result block may be immutable on
+        # the consuming repository's remote, which leaves no way to repair the
+        # data. The only place the store can be rescued is here, in the reader.
+        #
+        # The default is `census`, the WEAKEST of the three classes, so tolerating
+        # absence never over-claims: a closure whose evidence has been lost is
+        # recorded as the least strong thing it could be. A value that is present
+        # but wrong still raises, so this does not weaken the gate -- it only stops
+        # a missing key from being fatal.
+        if self.evidence_class is None or (
+                isinstance(self.evidence_class, str) and not self.evidence_class.strip()):
+            self.evidence_class = "census"
         if self.evidence_class not in EVIDENCE_CLASSES:
             raise SchemaError(
                 f"result.evidence_class must be one of {EVIDENCE_CLASSES}, "

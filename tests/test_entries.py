@@ -345,3 +345,37 @@ def test_set_evidence_class_refuses_without_a_result_or_a_reason(store):
         entry.set_evidence_class("census", who="s", why="  ")
     with pytest.raises(TransitionError, match="not in"):
         entry.set_evidence_class("vibes", who="s", why="why not")
+
+
+def test_a_missing_evidence_class_reads_as_census_rather_than_raising():
+    """ABSENCE is tolerated; WRONGS is not.
+
+    This module validates on READ, so a terminal entry whose result lacks
+    evidence_class cannot be opened at all, and that takes down every command
+    that scans the store rather than just `validate`. Seen in qsb-research on
+    2026-09-27: 29 terminal entries carried `evidence_class: null` and `ar board`,
+    `ar render`, `ar validate`, `ar entry new` and the rest all failed at once.
+    The field is required at close, so the null only ever arrives from a merge
+    that drops it -- and where the consuming repository makes a terminal result
+    block immutable, the data cannot be repaired at all. The reader is the only
+    place left to rescue it.
+
+    `census` is the weakest of the three classes, so this never over-claims.
+    """
+    assert result(evidence_class=None).evidence_class == "census"
+    assert result(evidence_class="   ").evidence_class == "census"
+
+
+def test_a_present_but_wrong_evidence_class_is_still_refused():
+    """The tolerance is for a MISSING key, not for a wrong one. If this stopped
+    raising, a closure that claimed `official` provenance with none would load
+    silently and the gate would be decorative."""
+    for bad in ("bogus", "Census", "ledger,official", " census "):
+        with pytest.raises(SchemaError, match="evidence_class"):
+            result(evidence_class=bad)
+
+
+def test_a_valid_evidence_class_passes_through_unchanged():
+    """The default must not downgrade a closure that DID record its class."""
+    for good in ("census", "ledger", "official"):
+        assert result(evidence_class=good).evidence_class == good
