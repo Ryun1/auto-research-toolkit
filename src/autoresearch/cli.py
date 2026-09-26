@@ -44,7 +44,7 @@ from . import skills as skills_mod
 from . import upstream as upstream_mod
 from . import usage as usage_mod
 from . import validate as validate_mod
-from .claims import Claims
+from .claims import Claims, claim_state_problems
 from .config import DomainConfig, discover
 from .entries import EVIDENCE_CLASSES, Entry, Event, Result, Store
 from .errors import AutoresearchError
@@ -672,12 +672,18 @@ def cmd_reap(args):
     if args.id:
         entry, former, age = claims.reap(args.id, ttl_hours=args.ttl_hours)
         _render_views(config)
-        print(f"{entry.id} reaped from {former} (silent {age:.1f} h)")
+        if former is None:
+            print(f"{entry.id} orphan repaired to {entry.status} (no live claim)")
+        else:
+            print(f"{entry.id} reaped from {former} (silent {age:.1f} h)")
         return 0
     candidates = claims.reapable(ttl_hours=args.ttl_hours)
-    print(f"{len(candidates)} reapable claim(s)")
+    print(f"{len(candidates)} reapable record(s)")
     for entry, age in candidates:
-        print(f"  {entry.id:6} {entry.claim.session:24} silent {age:.1f} h")
+        if age is None:
+            print(f"  {entry.id:6} {'orphan':24} no live claim")
+        else:
+            print(f"  {entry.id:6} {entry.claim.session:24} silent {age:.1f} h")
     return 0
 
 
@@ -1087,6 +1093,7 @@ def cmd_validate(args):
                 f"{track.id!r}")
             continue
         status = machine.status(entry.status)
+        problems += claim_state_problems(entry, machine)
         if status.terminal and entry.result is None:
             problems.append(f"{entry.id}: {entry.status} with no result recorded")
         elif status.terminal and status.requires_evidence:
@@ -1628,7 +1635,9 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     rel.add_argument("--why", required=True)
     rel.set_defaults(func=cmd_release)
 
-    reap = sub.add_parser("reap", help="free ONE abandoned claim past the TTL")
+    reap = sub.add_parser(
+        "reap",
+        help="repair an unowned in-progress record, or free ONE expired claim")
     reap.add_argument("id", nargs="?")
     reap.add_argument("--ttl-hours", type=float, dest="ttl_hours")
     reap.set_defaults(func=cmd_reap)

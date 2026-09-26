@@ -627,12 +627,16 @@ class Coordinator:
                 phase.detail.append(
                     "challenge: no cached snapshot; `ar challenge pull` "
                     "would fetch one")
-        # Free any claim whose holder has gone silent. Targeted, one at a time,
-        # never all-or-nothing (H83).
+        # Free expired claims and repair active records with no holder.
+        # Targeted, one at a time, never all-or-nothing (H83/H67).
         for entry, age in self.claims.reapable():
             try:
                 _, former, _ = self.claims.reap(entry.id)
-                phase.detail.append(f"reaped {entry.id} from {former} ({age:.1f}h)")
+                if former is None:
+                    phase.detail.append(f"repaired orphan {entry.id} (no live claim)")
+                else:
+                    phase.detail.append(
+                        f"reaped {entry.id} from {former} ({age:.1f}h)")
             except AutoresearchError:
                 pass
         phase.seconds = time.time() - start

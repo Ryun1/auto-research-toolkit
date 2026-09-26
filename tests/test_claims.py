@@ -3,6 +3,7 @@ import time
 import pytest
 
 from autoresearch.claims import Claims, Lock
+from autoresearch.entries import Event
 from autoresearch.errors import ClaimError
 from conftest import make_entry
 
@@ -64,6 +65,57 @@ def test_reap_refuses_a_live_claim(sandbox, store):
     Claims(store, sandbox, "a").claim("Q1")
     with pytest.raises(ClaimError, match="presumed alive"):
         Claims(store, sandbox, "reaper").reap("Q1")
+
+
+def test_reap_repairs_an_orphan_without_touching_live_claims(sandbox, store):
+    make_entry(store, "Q1")
+    make_entry(store, "Q2")
+    orphan = store.load("Q1")
+    orphan.status = "in-progress"
+    orphan.history.append(Event(
+        "2026-09-25T12:00:00+00:00", "released", "old-session", "settled"))
+    store.save(orphan)
+    Claims(store, sandbox, "b").claim("Q2")
+    reaper = Claims(store, sandbox, "reaper")
+
+    candidates = dict((entry.id, age) for entry, age in
+                      reaper.reapable(ttl_hours=0))
+    assert candidates["Q1"] is None and candidates["Q2"] > 0
+    before = [event.kind for event in orphan.history]
+    _, former, _ = reaper.reap("Q1", ttl_hours=0)
+
+    assert former is None
+    repaired = store.load("Q1")
+    assert repaired.status == "queued" and repaired.claim is None
+    assert [event.kind for event in repaired.history[:len(before)]] == before
+    repair = repaired.history[-1]
+    assert repair.kind == "orphan-repaired" and repair.who == "reaper"
+    assert "no live claim" in repair.detail
+    live = store.load("Q2")
+    assert live.status == "in-progress" and live.claim.session == "b"
+    with pytest.raises(ClaimError, match="presumed alive"):
+        reaper.reap("Q2")
+
+
+def test_reap_cli_lists_and_repairs_an_orphan(sandbox, store, capsys):
+    from autoresearch import cli, render
+    from autoresearch.entries import Event
+
+    make_entry(store, status="in-progress", history=[Event(
+        "2026-09-25T12:00:00+00:00", "released", "old-session", "settled")])
+    render.write_views(sandbox, store.all())
+
+    assert cli.main(["--domain", str(sandbox.paths.root), "reap"]) == 0
+    output = capsys.readouterr().out
+    assert "1 reapable record(s)" in output
+    assert "orphan" in output and "no live claim" in output
+    assert cli.main(["--domain", str(sandbox.paths.root), "reap", "Q1"]) == 0
+    assert "orphan repaired to queued" in capsys.readouterr().out
+    repaired = store.load("Q1")
+    assert repaired.status == "queued" and repaired.claim is None
+    assert [event.kind for event in repaired.history][-2:] == [
+        "in-progress->queued", "orphan-repaired"]
+    assert "no live claim" in repaired.history[-1].detail
 
 
 def test_reap_frees_one_claim_only(sandbox, store):
