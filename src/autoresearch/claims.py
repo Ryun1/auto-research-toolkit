@@ -283,6 +283,24 @@ class Claims:
         with self._lock():
             entry = self.store.load(entry_id)
             track = self.config.track_for(entry_id)
+            # A TERMINAL entry is never reapable, and `reapable()` already says so.
+            # This method did not, so a direct `ar reap <id>` on a closed entry ran
+            # the transition below, moved it to the track's initial status, and
+            # DISCARDED ITS RESULT: observed 2026-09-27 in qsb-research, where
+            # reaping two claims held by a dead session on Q2074 (confirmed) and
+            # Q2346 (refuted) silently reduced both to `queued` with result, memo
+            # and summary all gone. The gate that reports the leak
+            # (`test_no_terminal_entry_still_carries_a_claim`) therefore cannot be
+            # satisfied: clearing the claim destroys the closure, and restoring the
+            # closure is a terminal-result write that the consuming repository's
+            # remote refuses. Refusing here is what makes the state reachable at all.
+            if track.machine.status(entry.status).terminal:
+                raise ClaimError(
+                    f"{entry_id} is {entry.status!r}, a terminal status, and holds a "
+                    f"stale claim by {getattr(entry.claim, 'session', None)!r}. A "
+                    "terminal entry is never reaped: reaping would move it back to "
+                    f"{track.machine.initial!r} and discard its result. Clear the "
+                    "claim on the record instead, or settle the entry deliberately.")
             if not entry.claim:
                 if entry.status != "in-progress":
                     raise ClaimError(f"{entry_id} holds no claim to reap")

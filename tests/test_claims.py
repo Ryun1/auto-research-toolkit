@@ -3,7 +3,7 @@ import time
 import pytest
 
 from autoresearch.claims import Claims, Lock
-from autoresearch.entries import Event
+from autoresearch.entries import Event, Result
 from autoresearch.errors import ClaimError
 from conftest import make_entry
 
@@ -184,3 +184,45 @@ def test_failed_gate_change_leaves_persisted_record_untouched(sandbox, store):
             "Q1", "gate-updated", "bad evidence",
             lambda e: update(e, "correctness", "passed", []))
     assert store.path("Q1").read_bytes() == before
+
+
+def test_reap_refuses_a_terminal_entry_rather_than_discarding_its_result(sandbox, store):
+    """A closed entry must never be reaped.
+
+    `reapable()` already excludes terminal entries, but `reap()` did not re-check,
+    so a direct `ar reap <id>` on a closed entry transitioned it to the track's
+    initial status and took its result with it. Seen 2026-09-27 in qsb-research:
+    reaping two stale claims on Q2074 (confirmed) and Q2346 (refuted) left both as
+    `queued` with result, memo and summary gone, and unrecoverable, because
+    restoring a terminal result is a write that repository's remote refuses.
+
+    So the guard is not cosmetic: without it, a stale claim on a closed entry is a
+    state that can be entered but not left.
+    """
+    make_entry(store, "Q1")
+    Claims(store, sandbox, "dead").claim("Q1")
+    entry = store.load("Q1")
+    entry.status = "refuted"
+    entry.result = Result(verdict="refuted", memo="inbox/m.md",
+                          at="2026-08-31T00:00:00+00:00", session="dead")
+    store.save(entry)
+    assert Claims(store, sandbox, "reaper").reapable(ttl_hours=0) == []
+
+    with pytest.raises(ClaimError, match="terminal"):
+        Claims(store, sandbox, "reaper").reap("Q1", ttl_hours=0)
+
+    after = store.load("Q1")
+    assert after.status == "refuted"
+    assert after.result is not None and after.result.verdict == "refuted"
+
+
+def test_reap_still_frees_a_stale_claim_on_an_active_entry(sandbox, store):
+    """The guard must not break the case reap exists for: a dead holder on work
+    that is still open. Without this, 'refuse terminal' could be satisfied by
+    refusing everything."""
+    make_entry(store, "Q1")
+    Claims(store, sandbox, "dead").claim("Q1")
+    reaped, former, _age = Claims(store, sandbox, "reaper").reap("Q1", ttl_hours=0)
+    assert former == "dead"
+    assert reaped.claim is None
+    assert reaped.status == "queued"
