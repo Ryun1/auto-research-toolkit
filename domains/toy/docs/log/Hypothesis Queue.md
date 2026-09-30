@@ -4,7 +4,7 @@
 
 > Leads on the score. Nothing here is about the harness.
 
-Statuses: blocked | confirmed | in-progress | queued | refuted. Initial: `queued`.
+Statuses: blocked | confirmed | in-progress | queued | refuted | superseded. Initial: `queued`.
 
 **0 entries read: 0 open, 0 closed.**
 

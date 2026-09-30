@@ -35,6 +35,7 @@ from . import escalate as escalate_mod
 from . import external as external_mod
 from . import gates as gates_mod
 from . import hardware as hw
+from . import merge as merge_mod
 from . import plugins as plugins_mod
 from . import rank as rank_mod
 from . import relocate as relocate_mod
@@ -436,6 +437,17 @@ def cmd_entry_new(args):
             f"{entry.id} already exists at {store.path(entry.id)}. Ids are "
             "filenames, so a collision is loud here rather than a silent "
             "renumber after every citation was written (H79).")
+    if track.requires_defect_evidence:
+        # The track already declares this rule; before H15 only `harness
+        # export` and `ar validate` read it, so a defect could sit in the
+        # queue for a whole session with nothing a stranger could reproduce.
+        # Refused here, before the record is written: the id this filing
+        # computed is never reserved, so the next filing takes the same number
+        # and a refused defect costs no id.
+        from . import defects
+        problems = defects.evidence_problems(entry, track)
+        if problems:
+            raise AutoresearchError("; ".join(problems))
     print(store.save(entry))
     _render_views(config)
     return 0
@@ -452,16 +464,74 @@ def cmd_entry_amend(args):
     config = _load(args)
     store = _store(config)
     entry = store.load(args.id)
+    # getattr, not attribute access: the loop and older callers hand this a
+    # namespace built from their own field list, and a correction surface
+    # that only works for the CLI's parser is a correction surface with a
+    # second, silent way to fail.
     changes = {name: value for name, value in (
-        ("title", args.title), ("hypothesis", args.hypothesis),
-        ("core", args.core), ("repro", args.repro),
-        ("observed", args.observed), ("expected", args.expected))
+        (name, getattr(args, name, None)) for name in (
+            "title", "hypothesis", "core", "repro", "observed", "expected",
+            "parent", "kind"))
         if value is not None}
+    if changes.get("parent") is not None:
+        # Re-parenting runs the same gate the filing path runs: a parent that
+        # does not exist, or one on another track, is a broken lineage, and
+        # `--kind`/`--parent` must move together (a kind on a parentless entry
+        # is refused by the same rule).
+        from . import tree
+        tree.check_branch(config, store, changes["parent"],
+                          changes.get("kind") or entry.kind,
+                          config.track_for(entry.id).id)
+    # `sources` and `mechanisms` are typed fields (the exclusion vocabulary
+    # and the record's citations), and a blind full-value write on a list is
+    # how one session's list silently drops another's. So they get explicit
+    # writers in both directions: `--source`/`--mechanism` add, and
+    # `--drop-source`/`--drop-mechanism` remove. Either act on something that
+    # is not there is a no-op the caller should hear about, not a silent
+    # success that looks like a correction.
+    added: dict[str, list[str]] = {}
+    dropped: dict[str, list[str]] = {}
+    for name, add_flag, drop_flag in (
+            ("sources", "source", "drop_source"),
+            ("mechanisms", "mechanism", "drop_mechanism")):
+        current = list(getattr(entry, name))
+        for value in getattr(args, drop_flag, None) or []:
+            if value not in current:
+                raise AutoresearchError(
+                    f"{entry.id}: {value!r} is not in {name}; nothing to drop")
+            current.remove(value)
+            dropped.setdefault(name, []).append(value)
+        for value in getattr(args, add_flag, None) or []:
+            # Checked against the post-drop list, so a rename (drop the old,
+            # add the new) in one amend is legal while a pure duplicate is
+            # refused rather than silently succeeding.
+            if value in current:
+                raise AutoresearchError(
+                    f"{entry.id}: {value!r} is already recorded in {name}; "
+                    "nothing to add")
+            current.append(value)
+            added.setdefault(name, []).append(value)
+        if added.get(name) or dropped.get(name):
+            setattr(entry, name, current)
+    if args.summary is not None or args.reopen_condition is not None:
+        # Correcting a closure's own text is a different act from editing an
+        # open entry's fields: it is legal on a terminal entry, it leaves the
+        # status and the verdict alone, and it demands a reason (QSB H82).
+        if changes or added or dropped:
+            raise AutoresearchError(
+                "--summary/--reopen-condition correct a closure's text; pass "
+                "them alone or run the two amends separately")
+        entry.correct_result_text(args.summary, args.reopen_condition,
+                                  who=args.session, why=args.why or "")
+        store.save(entry)
+        _render_views(config)
+        print(f"{entry.id} closure text corrected")
+        return 0
     if args.evidence_class is not None:
         # One writer for the class declaration, mirroring `close --relabel`:
         # the result is untouched apart from the typed field, and the reason
         # is mandatory (entries.set_evidence_class refuses without one).
-        if changes:
+        if changes or added or dropped:
             raise AutoresearchError(
                 "--evidence-class is a reclassification, not a field edit; "
                 "pass it alone or run the two amends separately")
@@ -471,18 +541,27 @@ def cmd_entry_amend(args):
         _render_views(config)
         print(f"{entry.id} evidence class set to {args.evidence_class}")
         return 0
-    if not changes:
+    if not changes and not added and not dropped:
         raise AutoresearchError(
             "amend needs at least one field to change; nothing was written")
+    # The previous value rides along in the event: an amend is a blind
+    # full-value write, so two sessions correcting the same field inside a
+    # minute can lose one text silently (H15). The record then carries enough
+    # to see the collision and merge, which is what the loss needed.
+    previous = {name: getattr(entry, name) for name in changes}
     for name, value in changes.items():
         setattr(entry, name, value)
-    entry.history.append(Event(
-        _iso(), "amend", args.session,
-        "set " + ", ".join(f"{name}={changes[name]!r}" for name in sorted(changes))))
+    entry.history.append(Event(_iso(), "amend", args.session, "set " + ", ".join(
+        [f"{name}={changes[name]!r} (was {previous[name]!r})"
+         for name in sorted(changes)]
+        + [f"{name} += {added[name]!r}" for name in sorted(added)]
+        + [f"{name} -= {dropped[name]!r}" for name in sorted(dropped)])))
     entry.updated = _iso()
     store.save(entry)
     _render_views(config)
-    print(f"{entry.id} amended: {', '.join(sorted(changes))}")
+    touched = list(dict.fromkeys([*sorted(changes), *sorted(added),
+                                  *sorted(dropped)]))
+    print(f"{entry.id} amended: {', '.join(touched)}")
     return 0
 
 
@@ -709,12 +788,41 @@ def cmd_close(args):
         print(f"{entry.id} reopened to {entry.status}")
         return 0
 
+    # After the relabel/reopen returns: `--reopen` and `--relabel` carry no
+    # destination, so a `superseded` closure rule must not fire on them.
+    replacement = None
+    superseded_by = getattr(args, "superseded_by", None)
+    if superseded_by:
+        if args.status != "superseded":
+            raise AutoresearchError(
+                "--superseded-by belongs to `close <id> superseded`; a "
+                f"closure as {args.status or '(none)'!r} names no replacement")
+        if superseded_by == args.id:
+            raise AutoresearchError("an entry cannot supersede itself")
+        try:
+            replacement = store.load(superseded_by)
+        except Exception as exc:
+            raise AutoresearchError(
+                f"cannot retire {args.id} as superseded: no entry "
+                f"{superseded_by!r}") from exc
+    if args.status == "superseded" and replacement is None:
+        raise AutoresearchError(
+            "closing as superseded requires --superseded-by: a retirement "
+            "that does not name its replacement is how a duplicate outlives "
+            "the entry it duplicated (H15)")
+
     memo_root = config.paths.root
     result = Result(
         verdict=args.status, memo=args.memo or "", at=_iso(), session=args.session,
         summary=args.summary or "", closure_kind=args.closure,
         reopen_condition=args.reopen_condition or "",
-        evidence_class=args.evidence_class)
+        evidence_class=args.evidence_class,
+        # `superseded` is already a disposition (entries.DISPOSITIONS), and a
+        # retired entry was not an experiment: ranking and the stagnation
+        # counters read disposition, so a retirement left as `experiment`
+        # would count as evidence in a sibling tally it never belonged to.
+        disposition=("superseded" if args.status == "superseded"
+                     else "experiment"))
     # Same replication gate the coordinator applies: a close path that
     # bypassed it would make the loop's guard vacuous (invariant 3 -- a guard
     # that only refuses on one path is not a guard). An official/census
@@ -730,11 +838,23 @@ def cmd_close(args):
     entry.apply(track.machine, args.status, who=args.session, why=args.why or "",
                 result=result,
                 memo_exists=lambda m: (memo_root / m).exists())
+    if replacement is not None:
+        # The relation lands on the replacement's own typed field, so the
+        # graph, the render and the next agent all see which entry absorbed
+        # this one -- and the retired entry's own history says who replaced it.
+        if entry.id not in replacement.supersedes:
+            replacement.supersedes.append(entry.id)
+        replacement.history.append(Event(
+            _iso(), "superseded", args.session,
+            f"{entry.id} retired as superseded by this entry"))
+        replacement.updated = _iso()
+        store.save(replacement)
     entry.claim = None
     store.save(entry)
     _render_views(config)
     print(f"{entry.id} closed {args.status}"
           + (f" ({args.closure})" if args.closure else "")
+          + (f" — superseded by {replacement.id}" if replacement else "")
           + f" — evidence: {result.memo}")
     if not track.machine.status(entry.status).terminal:
         # Which statuses are terminal is per-track machine config (a defect
@@ -1076,8 +1196,22 @@ def cmd_migrate(args):
 
 def cmd_validate(args):
     config = _load(args)
-    store = _store(config)
     problems = list(config.check())
+    # Read the merge residue before the entry store parses, and stop here. An
+    # unfinished merge leaves no unmerged path for git to report, and the only
+    # symptom downstream is a scanner error naming the wrong file (H83);
+    # naming the cause, in every file at once, is the whole point.
+    residue = merge_mod.residue_problems(config)
+    if residue:
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "problems": residue, "skipped_runs": 0},
+                             indent=2))
+        else:
+            print(f"\n{len(residue)} problem(s):")
+            for p in residue:
+                print(f"  - {p}")
+        return 1
+    store = _store(config)
     entries = store.all()
     problems += [f"duplicate entry id: {d}" for d in store.duplicates()]
     problems += render.check_views(config, entries)
@@ -1520,7 +1654,13 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     esub = entry.add_subparsers(dest="entry_cmd", required=True)
     new = esub.add_parser("new", help="file a new entry")
     new.add_argument("title")
-    new.add_argument("--track", default="research")
+    # No default: a filing that forgot --track used to land on the research
+    # track, where a harness defect reads to the next agent as a lead on the
+    # score (H15). The track is a decision; make it one at the filing.
+    new.add_argument("--track", required=True,
+                     help="which queue this entry belongs to; no default, "
+                          "because a forgotten track misfiles scaffolding as "
+                          "research (H15)")
     new.add_argument("--id")
     new.add_argument("--hypothesis")
     new.add_argument("--prediction")
@@ -1556,6 +1696,30 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     amend.add_argument("--repro", help="command or path that demonstrates it")
     amend.add_argument("--observed", help="what actually happened")
     amend.add_argument("--expected", help="what should have happened instead")
+    amend.add_argument("--parent", dest="parent",
+                       help="correct the parent this entry branches from "
+                            "(H15: a mis-parented entry had no writer but "
+                            "prose)")
+    amend.add_argument("--source", dest="source", action="append",
+                       help="add a source; repeatable, and never drops one "
+                            "already recorded (H15)")
+    amend.add_argument("--mechanism", dest="mechanism", action="append",
+                       help="add a mechanism tag; repeatable, additive (H15)")
+    amend.add_argument("--drop-source", dest="drop_source", action="append",
+                       help="remove a source that is recorded but wrong "
+                            "(repeatable; a value that is not there is "
+                            "refused, not ignored)")
+    amend.add_argument("--drop-mechanism", dest="drop_mechanism",
+                       action="append",
+                       help="remove a mechanism tag (repeatable; refused if "
+                            "it is not there)")
+    amend.add_argument("--summary", dest="summary",
+                       help="correct a CLOSED entry's result.summary in place; "
+                            "the status and the verdict are untouched and "
+                            "--why is required (QSB H82)")
+    amend.add_argument("--reopen-condition", dest="reopen_condition",
+                       help="correct a CLOSED entry's reopen condition in "
+                            "place; --why is required (QSB H82)")
     amend.add_argument("--evidence-class", dest="evidence_class",
                        choices=sorted(EVIDENCE_CLASSES),
                        help="declare which evidence class backs the result "
@@ -1646,6 +1810,11 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     close.add_argument("id")
     close.add_argument("status", nargs="?", help="terminal status for this track")
     close.add_argument("--memo", help="path to the evidence memo; must exist")
+    close.add_argument("--superseded-by", dest="superseded_by",
+                       help="required when closing `superseded`: the entry "
+                            "that covers this one. The relation is recorded "
+                            "in that entry's `supersedes`, so retirement "
+                            "always names its replacement (H15)")
     close.add_argument("--summary")
     close.add_argument("--closure", choices=sorted(CLOSURE_KINDS),
                        help="how far a refutation reaches")
@@ -1655,9 +1824,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     close.add_argument("--reopen", action="store_true")
     close.add_argument("--relabel", choices=sorted(CLOSURE_KINDS))
     close.add_argument("--evidence-class", dest="evidence_class",
-                       choices=sorted(EVIDENCE_CLASSES), default="ledger",
-                       help="which evidence class backs this closure (default "
-                            "ledger: the run-ledger faithfulness net applies)")
+                       choices=sorted(EVIDENCE_CLASSES),
+                       help="which evidence class backs this closure. No "
+                            "default: an unlabelled closure is recorded as "
+                            "unlabelled rather than stamped with the "
+                            "run-ledger net it never got (QSB H87). Only an "
+                            "explicit official/census opts out of that net")
     close.set_defaults(func=cmd_close)
 
     meas = sub.add_parser("measure", help="run the domain's measurement, record the row")

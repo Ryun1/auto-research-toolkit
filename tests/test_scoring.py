@@ -348,6 +348,7 @@ def test_entry_new_files_a_branch_through_the_same_gate(sandbox, store, capsys):
     from autoresearch import cli
     make_entry(store, "Q1")
     assert cli.main(["--domain", str(sandbox.paths.root), "entry", "new",
+                     "--track", "research",
                      "a human-filed branch", "--parent", "Q1",
                      "--kind", "debug", "--confidence", "0.5",
                      "--impact", "0.1", "--cost", "1",
@@ -359,6 +360,7 @@ def test_entry_new_files_a_branch_through_the_same_gate(sandbox, store, capsys):
 def test_entry_new_refuses_an_unknown_parent(sandbox, store, capsys):
     from autoresearch import cli
     assert cli.main(["--domain", str(sandbox.paths.root), "entry", "new",
+                     "--track", "research",
                      "a branch of nothing", "--parent", "Q99",
                      "--confidence", "0.5", "--impact", "0.1",
                      "--cost", "1", "--mechanism", "m"]) == 2

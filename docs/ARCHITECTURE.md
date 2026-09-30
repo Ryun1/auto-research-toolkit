@@ -221,6 +221,8 @@ stateDiagram-v2
 
     confirmed --> queued: ar close --reopen (why)
     refuted --> queued: ar close --reopen (why)
+    in_progress --> superseded: ar close (memo + --superseded-by)
+    superseded --> queued: ar close --reopen (why)
 
     note right of refuted
       closure_kind decides reach:
@@ -237,7 +239,11 @@ This is the research track's machine. A track declares its own terminal set and
 nothing else about the shape changes — the harness-debt track the toy domain
 ships uses `fixed`/`wontfix`/`refuted` in place of `confirmed`/`refuted`, and
 gets the same reopen edge on each, because `default_machine` takes the terminal
-set as its only parameter.
+set as its only parameter. `superseded` is the one status no track has to
+declare: retirement is not a claim about a hypothesis and not a statement that
+the scaffolding broke, so it belongs to every queue. `ar close --superseded-by`
+is its only writer, and the relation lands in the replacement's own
+`supersedes`, so a retired entry always names what absorbed it (H15).
 
 ## 5. Dispatch and the worker pool
 

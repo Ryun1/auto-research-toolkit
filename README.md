@@ -332,6 +332,25 @@ on an open entry with the same writer (and the same H140 guard) the loop's
 curator phase uses, because a hand-driven curator pass once had no path
 except editing the YAML.
 
+One terminal status is not per-track: `superseded` retires an entry because a
+sibling covers it, which is neither a claim about a hypothesis nor a statement
+that the scaffolding broke. Without it the only honest-looking move was to
+refute an entry that was never tested, or to leave it actionable forever;
+`ar close <id> superseded --superseded-by <other>` is the writer, and the
+relation is recorded in the replacement's own `supersedes` (H15).
+
+**The record is correctable in place.** `ar entry amend` reaches the fields
+that make a record a record, not only its prose: `--parent` (through the same
+`tree.py` gate a filing runs), `--kind`, and `--source`/`--mechanism`, which
+*add* rather than replace, because a blind full-value write on a list is how
+one session's sources silently lose another's. Every amendment records the
+value it replaced, so a concurrent correction is visible in history instead of
+only in a session's notes. `ar entry new` has no default `--track`: a filing
+that forgot it used to land on the research track, where a harness defect
+reads to the next agent as a lead on the score. A track declaring
+`requires_defect_evidence` is now enforced at filing, not only at export and
+validate, and a refused filing costs no id (H15).
+
 **A closure names its evidence class.** The mechanical faithfulness check — a
 confirmed experiment's typed summary must trace to the run ledger — assumes
 the evidence is a local measurement. Two legitimate kinds are not: `official`
@@ -447,11 +466,12 @@ rentable classes declared: 2
 Three things make this more than a `uname` wrapper:
 
 - **Capacity is a refusal, not a truncation.** A domain declares what an
-  experiment class needs (`base_memory_gb`, `gb_per_unit`, `needs_gpu`), and an
-  entry naming a class the host fails is excluded from ranking *before* it is
-  claimed. A run that silently caps its concurrency reports a throughput for a
-  configuration nobody chose — and a figure produced that way was published and
-  later retired in the corpus this came from.
+  experiment class needs (`base_memory_gb`, `gb_per_unit`, `needs_gpu`,
+  `target_arch`, `target_features`), and an entry naming a class the host fails
+  is excluded from ranking *before* it is claimed. A run that silently caps its
+  concurrency reports a throughput for a configuration nobody chose — and a
+  figure produced that way was published and later retired in the corpus this
+  came from.
 - **A rate is never a property of hardware alone.** `Throughput` cannot be
   constructed without naming its machine *and* its concurrency, and
   `ratio_to()` refuses to divide two figures taken at different concurrencies

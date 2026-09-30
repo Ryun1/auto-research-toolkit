@@ -174,6 +174,21 @@ class StateMachine:
                    transitions=transitions)
 
 
+#: Every track's terminal set carries one more state than the domain declares:
+#: `superseded`. An entry retired because a sibling covers it was never tested,
+#: so `refuted` would be a false claim about the hypothesis and `fixed` a false
+#: claim about the scaffolding -- but with no honest terminal state it stayed
+#: actionable forever and was re-ranked every iteration (H15). It is terminal
+#: and evidence-backed like any other closure, and `ar close --superseded-by`
+#: is the only writer, so retirement always names what replaced the entry.
+RETIREMENT = {
+    "superseded": {
+        "requires_evidence": True,
+        "description": "retired: another entry covers it, so it was never tested",
+    },
+}
+
+
 def default_machine(terminal: dict[str, dict] | None = None) -> StateMachine:
     """The shape both of the original harness's queues share, as a starting
     point a domain can override. Research used confirmed/refuted; harness debt
@@ -188,7 +203,9 @@ def default_machine(terminal: dict[str, dict] | None = None) -> StateMachine:
         "in-progress": Status("in-progress", description="claimed; work started"),
         "blocked": Status("blocked", description="waiting on a named condition"),
     }
-    for name, spec in terminal.items():
+    # A domain's own terminal set wins where it overlaps, so a domain that
+    # declares `superseded` with different evidence rules keeps them.
+    for name, spec in {**RETIREMENT, **terminal}.items():
         statuses[name] = Status(name, terminal=True, **spec)
 
     transitions = [
@@ -201,7 +218,7 @@ def default_machine(terminal: dict[str, dict] | None = None) -> StateMachine:
         # `blocked` permanent by construction.
         Transition("blocked", "queued", "ar close --reopen", reason_required=True),
     ]
-    for name in terminal:
+    for name in [*RETIREMENT, *terminal]:
         transitions.append(Transition("in-progress", name, "ar close"))
         # Every terminal status keeps a reopen edge: a discharged premise must
         # have a supported route back, or `wontfix` becomes a hand edit.

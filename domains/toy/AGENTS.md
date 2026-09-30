@@ -41,7 +41,7 @@ names a `[brain]`**: scouts are model asks behind the brain seam, and the
 command refuses without one. The same goes for `bin/ar skill distil`. In a
 hand-driven domain without a brain, file ideas yourself instead:
 
-    bin/ar entry new "title" --hypothesis ... --prediction ...
+    bin/ar entry new --track research "title" --hypothesis ... --prediction ...
 
 and let the next `ar rank` price them.
 

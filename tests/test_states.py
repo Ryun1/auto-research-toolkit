@@ -68,4 +68,8 @@ def test_harness_shaped_terminal_set():
     m = default_machine({"fixed": {"requires_evidence": True},
                          "wontfix": {"requires_evidence": True}})
     m.check_total()
-    assert m.terminal_names == {"fixed", "wontfix"}
+    # The defect track's own vocabulary, plus the one status every track gets:
+    # an entry retired because a sibling covers it is neither a fixed defect
+    # nor a refuted claim, and with no terminal state it stayed actionable
+    # and kept being re-ranked (H15).
+    assert m.terminal_names == {"fixed", "wontfix", "superseded"}

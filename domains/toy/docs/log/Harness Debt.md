@@ -4,7 +4,7 @@
 
 > The scaffolding's own defects. Kept separate so an agent booting into research never reads harness debt as a lead on the score.
 
-Statuses: blocked | fixed | in-progress | queued | refuted | wontfix. Initial: `queued`.
+Statuses: blocked | fixed | in-progress | queued | refuted | superseded | wontfix. Initial: `queued`.
 
 **0 entries read: 0 open, 0 closed.**
 

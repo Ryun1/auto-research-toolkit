@@ -10,8 +10,13 @@ def test_toy_domain_loads_and_validates(toy):
 
 
 def test_tracks_have_their_own_terminal_sets(toy):
-    assert toy.tracks["research"].machine.terminal_names == {"confirmed", "refuted"}
-    assert toy.tracks["harness"].machine.terminal_names == {"fixed", "wontfix", "refuted"}
+    # Each track keeps its own verdict vocabulary. `superseded` is the one
+    # status every track carries: retirement is not a claim about a
+    # hypothesis, and without it a retired entry stayed actionable (H15).
+    assert toy.tracks["research"].machine.terminal_names == {
+        "confirmed", "refuted", "superseded"}
+    assert toy.tracks["harness"].machine.terminal_names == {
+        "fixed", "wontfix", "refuted", "superseded"}
 
 
 def test_track_for_id(toy):
