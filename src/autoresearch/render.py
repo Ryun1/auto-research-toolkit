@@ -657,6 +657,56 @@ def write_views(config, entries) -> list[pathlib.Path]:
     return written
 
 
+def view_paths(config) -> list[str]:
+    """Every generated view, relative to the domain root."""
+    out = []
+    for track in config.tracks.values():
+        out.append(track.view)
+        if track.graph_view:
+            out.append(track.graph_view)
+    memos = config.paths.memos / MEMOS_INDEX
+    if memos.is_relative_to(config.paths.root):
+        out.append(str(memos.relative_to(config.paths.root)))
+    return out
+
+
+MERGE_DRIVER = "ar-view"
+
+
+def install_merge_driver(config) -> list[str]:
+    """Mark every generated view `merge=ar-view`, a driver that keeps the
+    current side (#24). Two sessions' branches both re-render the views, so
+    a text merge of them conflicts on files nobody edits -- and once wrote
+    conflict markers into a queue view. Kept-ours, a view is merely stale
+    after the merge, which `ar render` fixes and `ar validate` names.
+
+    `.gitattributes` is committed and shared; the driver definition is git
+    config, local to each clone, so every clone runs this once. A clone
+    without it falls back to an ordinary text merge."""
+    import subprocess
+    root = config.paths.root
+    probe = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        from .errors import AutoresearchError
+        raise AutoresearchError("the merge driver is git configuration; this "
+                                "domain is not in a git checkout")
+    for key, value in (("name", "ar generated view: keep current side, re-render"),
+                       ("driver", "true")):
+        subprocess.run(["git", "config", f"merge.{MERGE_DRIVER}.{key}", value],
+                       cwd=root, check=True, capture_output=True)
+    attributes = root / ".gitattributes"
+    existing = attributes.read_text().splitlines() if attributes.exists() else []
+    added = []
+    for path in view_paths(config):
+        line = f"{path.replace(' ', '[[:space:]]')} merge={MERGE_DRIVER}"
+        if line not in existing:
+            existing.append(line)
+            added.append(path)
+    attributes.write_text("\n".join(existing) + "\n")
+    return added
+
+
 def check_views(config, entries) -> list[str]:
     """Views that differ from what the records render.
 

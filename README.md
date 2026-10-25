@@ -309,7 +309,8 @@ ar research    spin up targeted research agents; their ideas land in the record
 ar harness     check for and pull the latest core; export defects upstream
 ar doctor      which core answered, and whether it meets the domain's floor
 ar migrate     convert an existing prose corpus into records (one way)
-ar render      write the generated queue views
+ar render      write the generated queue views (--install-merge-driver: merges
+               keep the current side of each view; re-render after)
 ar validate    check records, views, runs and policy
 ar policy      show the never-rules and prove each refuses something
 ar exec         reserve and run one bounded local command under a live claim

@@ -575,6 +575,13 @@ def _epoch_line(epoch) -> str:
 
 def cmd_render(args):
     config = _load(args)
+    if getattr(args, "install_merge_driver", False):
+        added = render.install_merge_driver(config)
+        print(f"merge driver `{render.MERGE_DRIVER}` set in this clone's git "
+              f"config; .gitattributes marks {len(render.view_paths(config))} "
+              f"view(s) ({len(added)} new). Commit .gitattributes; run this "
+              f"once in every other clone, and `ar render` after a merge.")
+        return 0
     for path in render.write_views(config, _store(config).all()):
         print(f"wrote {path.relative_to(config.paths.root)}")
     return 0
@@ -1801,7 +1808,14 @@ def cmd_validate(args):
     entries, read_problems = store.read_all()
     problems += read_problems
     problems += [f"duplicate entry id: {d}" for d in store.duplicates()]
-    problems += render.check_views(config, entries)
+    # A stale generated view fails validate (invariant 1) unless the domain
+    # has said its tree is multi-session and takes it as a warning (#24).
+    stale_views = render.check_views(config, entries)
+    if config.stale_views == "warning":
+        view_warnings = [f"{p} (stale_views = \"warning\")" for p in stale_views]
+    else:
+        view_warnings = []
+        problems += stale_views
     found, skill_problems = skills_mod.read_all(config)
     problems += skill_problems
     problems += skills_mod.check(config, found, entries, skills_mod.best_measurements(config))
@@ -1848,7 +1862,7 @@ def cmd_validate(args):
                          for p in record.problems(config.goal)]
     except AutoresearchError as exc:
         problems.append(str(exc))
-    warnings = (validate_mod.inbox_warnings(config)
+    warnings = (view_warnings + validate_mod.inbox_warnings(config)
                 + validate_mod.core_warnings(config)
                 + validate_mod.closure_warnings(config)
                 + validate_mod.output_warnings(config)
@@ -2244,8 +2258,11 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     sub.add_parser("epochs", help="the ledger's measurement epochs, and closures "
                                   "pinned to a superseded one"
                    ).set_defaults(func=cmd_epochs)
-    sub.add_parser("render", help="write the generated queue views"
-                   ).set_defaults(func=cmd_render)
+    renderp = sub.add_parser("render", help="write the generated queue views")
+    renderp.add_argument("--install-merge-driver", action="store_true",
+                         help="make merges keep the current side of every "
+                              "generated view instead of conflicting on it (#24)")
+    renderp.set_defaults(func=cmd_render)
     validatep = sub.add_parser("validate", help="check records, views, runs and policy")
     validatep.add_argument("--json", action="store_true",
                            help="print {ok, problems} as JSON and nothing else")

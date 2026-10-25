@@ -52,7 +52,7 @@ DISTIL_EVERY = 5
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
               "skills", "upstream", "brain", "plugins", "session",
-              "challenge", "evaluator", "holdout"}
+              "challenge", "evaluator", "holdout", "render"}
 
 #: Option keys a `[brain]` table may carry for the built-in TypeSafe brain
 #: (`value = "typesafe"`), beyond `default` / role names / `authorize_spend`.
@@ -351,6 +351,10 @@ class DomainConfig:
     evaluator_files: tuple[str, ...] | None = None
     #: `[holdout]`: the held-out check a win must pass (#38); see holdout.py.
     holdout: object = None
+    #: `[render] stale_views`: whether a generated view behind its records
+    #: fails `ar validate` ("problem", the default -- invariant 1) or is a
+    #: warning `ar render` fixes ("warning", for multi-session trees, #24)
+    stale_views: str = "problem"
     description: str = ""
 
     # -- lookup -----------------------------------------------------------
@@ -550,7 +554,20 @@ class DomainConfig:
             upstream=Upstream.from_dict(dict(data.get("upstream") or {})),
             challenge=Challenge.from_dict(dict(data.get("challenge") or {})),
             evaluator_files=_evaluator_files(data.get("evaluator") or {}),
-            holdout=_holdout(data.get("holdout") or {}))
+            holdout=_holdout(data.get("holdout") or {}),
+            stale_views=_stale_views(data.get("render") or {}))
+
+
+def _stale_views(spec) -> str:
+    unknown = set(spec) - {"stale_views"}
+    if unknown:
+        raise ConfigError(f"[render] has unknown key(s) {sorted(unknown)}; "
+                          "known: ['stale_views']")
+    value = spec.get("stale_views", "problem")
+    if value not in ("problem", "warning"):
+        raise ConfigError(f"[render] stale_views must be \"problem\" or "
+                          f"\"warning\", got {value!r}")
+    return value
 
 
 def _holdout(spec):
