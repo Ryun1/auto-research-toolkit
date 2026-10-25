@@ -177,7 +177,39 @@ def doctor(config) -> tuple[list[str], list[str]]:
         problem = min_core_problem(config, inst)
         if problem:
             problems.append(problem)
+        problems += editable_problems(inst)
     return lines, problems
+
+
+def editable_problems(inst: Install) -> list[str]:
+    """Why an editable core is not a fixed thing this domain can name.
+
+    Several domains ran one editable checkout while other sessions edited it:
+    every `bin/ar` call failed mid-pass on a SyntaxError in a half-written
+    file, and `min_core = "0.9.0"` pinned nothing because 0.9.0 was what the
+    *uncommitted* tree reported (provably.fast, sig.golf). A record produced
+    on such a core cannot say which code produced it.
+    """
+    if not inst.editable or not (inst.url or "").startswith("file://"):
+        return []
+    root = inst.url.removeprefix("file://")
+    try:
+        dirty = _git(["-C", root, "status", "--porcelain", "--", "src",
+                      "pyproject.toml"]).strip()
+        tags = set(_git(["-C", root, "tag", "--list"]).split())
+    except AutoresearchError:
+        return []        # not a git checkout: nothing to say about its state
+    out = []
+    if dirty:
+        out.append(f"editable core at {root} has uncommitted changes in src/ "
+                   f"({len(dirty.splitlines())} path(s)): another session may "
+                   "be mid-edit, and records made now name no commit -- "
+                   "commit there, or install a tagged release")
+    if f"v{inst.version}" not in tags:
+        out.append(f"editable core declares {inst.version}, which no tag "
+                   f"v{inst.version} names: a min_core pin on it pins nothing "
+                   "-- tag the release, or install one")
+    return out
 
 
 def upstream_url(config, ref: str | None = None) -> tuple[str, str]:

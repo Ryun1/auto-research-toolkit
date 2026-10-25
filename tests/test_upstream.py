@@ -504,3 +504,27 @@ def test_an_editable_checkout_without_a_pyproject_falls_back(tmp_path,
         "0.1.0", json.dumps({"url": f"file://{tmp_path}/gone",
                              "dir_info": {"editable": True}})))
     assert up.installed().version == "0.1.0"
+
+
+def test_doctor_refuses_a_dirty_or_untagged_editable_core(tmp_path):
+    """Sessions crashed on a half-edited shared core, and a min_core of 0.9.0
+    pinned nothing because only the uncommitted tree said 0.9.0."""
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True,
+                       capture_output=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "pyproject.toml").write_text('version = "1.2.0"\n')
+    (tmp_path / "src" / "m.py").write_text("x = 1\n")
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "init",
+        "--allow-empty")
+    git("add", "-A")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c")
+    inst = Install(version="1.2.0", url=f"file://{tmp_path}", editable=True)
+    assert [p for p in up.editable_problems(inst) if "no tag" in p]
+    git("tag", "v1.2.0")
+    assert up.editable_problems(inst) == []
+    (tmp_path / "src" / "m.py").write_text("x = (\n")
+    assert [p for p in up.editable_problems(inst) if "uncommitted" in p]
+    # a copied install is not this check's business
+    assert up.editable_problems(Install(version="1.2.0")) == []
