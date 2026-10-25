@@ -354,6 +354,25 @@ def record_floor_warnings(config) -> list[str]:
             + (f" (declared: {floor})" if floor else "")]
 
 
+def lineage_warnings(config, limit: int = 15) -> list[str]:
+    """Entries whose `parent` or `derived_from` names no entry (#48): the
+    graph drops the edge and ranking reads the entry as a root, so lineage
+    lost to a deletion or a typo is silent everywhere else."""
+    from .entries import Store
+    entries = Store(config.paths.entries).read_all()[0]
+    ids = {e.id for e in entries}
+    dangling = [f"{e.id} -> {field} {target}"
+                for e in entries
+                for field, target in (("parent", e.parent),
+                                      ("derived_from", e.derived_from))
+                if target and target not in ids]
+    if not dangling:
+        return []
+    shown = ", ".join(dangling[:limit]) + (" ..." if len(dangling) > limit else "")
+    return [f"{len(dangling)} lineage link(s) name no entry ({shown}); fix them "
+            f"with `ar entry amend ID --parent ...`"]
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.

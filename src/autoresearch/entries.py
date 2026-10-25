@@ -342,6 +342,13 @@ class Entry:
                 f"{type(self.scaffold).__name__}")
         if self.result is not None:
             self.result.__post_init__()
+        if not isinstance(self.derived_from, str) or (
+                self.derived_from and not ID_RE.match(self.derived_from)):
+            # An id, exactly: a hand-edited `x/../Q1` passed the filing check
+            # and then silently drew no edge (#48).
+            raise SchemaError(
+                f"entry.derived_from must be an entry id like Q12, got "
+                f"{self.derived_from!r}")
         if self.kind:
             if self.kind not in KINDS:
                 raise SchemaError(
@@ -762,6 +769,15 @@ class Store:
         # this process read has been written by somebody else in between, and
         # the write is refused rather than silently merged away.
         cached = _ENTRY_CACHE.get(str(self.dir.resolve()), {}).get(path.name)
+        if not force and cached is None and path.exists():
+            # A save over a file this process never read is a blind write:
+            # it replaced an entry another session (or `create`) had just
+            # filed under the same id (#48).
+            raise SchemaError(
+                f"{path}: exists, but this session never read it -- a save "
+                f"here would replace another session's entry unseen. Load it "
+                f"first (`store.load`), or pass force=True to overwrite "
+                f"deliberately")
         if (not force and cached is not None and path.exists()
                 and cached[0] != _signature(path)):
             raise SchemaError(
@@ -795,6 +811,14 @@ class Store:
             raise SchemaError(f"{path}: write reported success but the file on "
                               f"disk does not match what was written")
         return path
+
+    def filing_lock(self, holder: str):
+        """One store-wide lock around check-and-create (#48): a sibling cap
+        or a dedupe read before filing must still hold when the entry lands.
+        Short-held, like the per-entry write lock."""
+        from .claims import Lock
+        return Lock(self.dir.parent / ".locks" / "filing.lock", holder=holder,
+                    timeout=30.0, stale_after=120.0)
 
     def create(self, entry: Entry, renumber: bool = False) -> pathlib.Path:
         """File a new entry: write it only where no entry exists yet.

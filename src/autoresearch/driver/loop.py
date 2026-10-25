@@ -770,40 +770,42 @@ class Coordinator:
         # the two filing paths cannot diverge.
         parent = str(proposal.get("parent", "") or "")
         kind = str(proposal.get("kind", "") or "")
-        from .. import tree
-        derived_from = str(proposal.get("derived_from", "") or "")
-        tree.check_derived(self.store, derived_from, parent, track.id)
-        tree.check_branch(self.config, self.store, parent, kind, track.id)
-        entry = Entry(
-            id=self.store.next_id(track.prefix), track=track.id,
-            title=str(proposal["title"])[:200],
-            status=track.machine.initial,
-            parent=parent,
-            kind=kind,
-            derived_from=derived_from,
-            hypothesis=str(proposal.get("hypothesis", "")),
-            prediction=str(proposal.get("prediction", "")),
-            bar=str(proposal.get("bar", "")),
-            why_filed=str(proposal.get("why_filed", "")),
-            confidence=float(proposal.get("confidence", 0.5)),
-            impact=float(proposal.get("impact", 0.0)),
-            cost=float(proposal.get("cost", 1.0)),
-            mechanisms=[str(m) for m in proposal.get("mechanisms", [])],
-            sources=[str(s) for s in proposal.get("sources", [])],
-            repro=str(proposal.get("repro", "")),
-            observed=str(proposal.get("observed", "")),
-            expected=str(proposal.get("expected", "")),
-            # Core stamps itself on a defect entry: the reporter is the one
-            # place the running version is known for certain, and a defect
-            # report without it cannot be reproduced upstream. An entry on an
-            # ordinary track stays unstamped -- run provenance deliberately
-            # omits the core version, and so does the entry unless it IS the
-            # defect report.
-            core=str(proposal.get("core", ""))
-            or (core_version() if track.requires_defect_evidence else ""))
-        entry.gates = [dataclasses.replace(gate) for gate in track.gates]
-        self.store.create(entry, renumber=True)
-        return entry
+        # Check and create under one filing lock (#48), as `ar entry new` does.
+        with self.store.filing_lock(f"loop generate ({self.session})"):
+            from .. import tree
+            derived_from = str(proposal.get("derived_from", "") or "")
+            tree.check_derived(self.store, derived_from, parent, track.id)
+            tree.check_branch(self.config, self.store, parent, kind, track.id)
+            entry = Entry(
+                id=self.store.next_id(track.prefix), track=track.id,
+                title=str(proposal["title"])[:200],
+                status=track.machine.initial,
+                parent=parent,
+                kind=kind,
+                derived_from=derived_from,
+                hypothesis=str(proposal.get("hypothesis", "")),
+                prediction=str(proposal.get("prediction", "")),
+                bar=str(proposal.get("bar", "")),
+                why_filed=str(proposal.get("why_filed", "")),
+                confidence=float(proposal.get("confidence", 0.5)),
+                impact=float(proposal.get("impact", 0.0)),
+                cost=float(proposal.get("cost", 1.0)),
+                mechanisms=[str(m) for m in proposal.get("mechanisms", [])],
+                sources=[str(s) for s in proposal.get("sources", [])],
+                repro=str(proposal.get("repro", "")),
+                observed=str(proposal.get("observed", "")),
+                expected=str(proposal.get("expected", "")),
+                # Core stamps itself on a defect entry: the reporter is the one
+                # place the running version is known for certain, and a defect
+                # report without it cannot be reproduced upstream. An entry on an
+                # ordinary track stays unstamped -- run provenance deliberately
+                # omits the core version, and so does the entry unless it IS the
+                # defect report.
+                core=str(proposal.get("core", ""))
+                or (core_version() if track.requires_defect_evidence else ""))
+            entry.gates = [dataclasses.replace(gate) for gate in track.gates]
+            self.store.create(entry, renumber=True)
+            return entry
 
     def rank(self, it: Iteration, budget) -> tuple[Phase, list]:
         phase = it.phase("rank")

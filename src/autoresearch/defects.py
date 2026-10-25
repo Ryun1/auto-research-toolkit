@@ -150,37 +150,40 @@ def ingest_bundle(bundle: dict, store, *, track: Track,
             "refusing to guess at an unknown shape")
     project = str((bundle.get("project") or {}).get("name") or "unknown-project")
 
-    seen_tags = {tag for entry in store.all() for tag in entry.tags}
-    filed: list[Entry] = []
-    skipped: list[tuple[str, str]] = []
-    for defect in bundle.get("defects") or []:
-        if not isinstance(defect, dict) or not defect.get("id"):
-            skipped.append(("<no id>", "defect carries no id; cannot be cited"))
-            continue
-        defect_id = str(defect["id"])
-        tag = f"from:{project}/{defect_id}"
-        if tag in seen_tags:
-            skipped.append((defect_id, f"already ingested ({tag})"))
-            continue
-        missing = [name for name in REQUIRED_FIELDS if not str(defect.get(name) or "")]
-        if missing:
-            skipped.append((defect_id,
-                            f"incomplete: missing {', '.join(sorted(missing))}; "
-                            "export upstream should have refused it"))
-            continue
-        entry = Entry(
-            id=store.next_id(track.prefix), track=track.id,
-            status=track.machine.initial,
-            title=str(defect.get("title") or "")[:200] or f"field defect {defect_id}",
-            hypothesis=str(defect.get("hypothesis") or ""),
-            observed=str(defect.get("observed") or ""),
-            expected=str(defect.get("expected") or ""),
-            repro=str(defect.get("repro") or ""),
-            core=str(defect.get("core") or ""),
-            why_filed=f"field defect from {project}",
-            tags=[tag])
-        entry.gates = [dataclasses.replace(gate) for gate in track.gates]
-        store.create(entry, renumber=True)
-        seen_tags.add(tag)
-        filed.append(entry)
+    # Dedupe and file under one filing lock (#48): two concurrent ingests
+    # of one bundle both passed the tag check before either wrote.
+    with store.filing_lock("defect ingest"):
+        seen_tags = {tag for entry in store.all() for tag in entry.tags}
+        filed: list[Entry] = []
+        skipped: list[tuple[str, str]] = []
+        for defect in bundle.get("defects") or []:
+            if not isinstance(defect, dict) or not defect.get("id"):
+                skipped.append(("<no id>", "defect carries no id; cannot be cited"))
+                continue
+            defect_id = str(defect["id"])
+            tag = f"from:{project}/{defect_id}"
+            if tag in seen_tags:
+                skipped.append((defect_id, f"already ingested ({tag})"))
+                continue
+            missing = [name for name in REQUIRED_FIELDS if not str(defect.get(name) or "")]
+            if missing:
+                skipped.append((defect_id,
+                                f"incomplete: missing {', '.join(sorted(missing))}; "
+                                "export upstream should have refused it"))
+                continue
+            entry = Entry(
+                id=store.next_id(track.prefix), track=track.id,
+                status=track.machine.initial,
+                title=str(defect.get("title") or "")[:200] or f"field defect {defect_id}",
+                hypothesis=str(defect.get("hypothesis") or ""),
+                observed=str(defect.get("observed") or ""),
+                expected=str(defect.get("expected") or ""),
+                repro=str(defect.get("repro") or ""),
+                core=str(defect.get("core") or ""),
+                why_filed=f"field defect from {project}",
+                tags=[tag])
+            entry.gates = [dataclasses.replace(gate) for gate in track.gates]
+            store.create(entry, renumber=True)
+            seen_tags.add(tag)
+            filed.append(entry)
     return filed, skipped

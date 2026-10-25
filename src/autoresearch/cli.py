@@ -724,43 +724,47 @@ def cmd_entry_new(args):
     # The same gate the coordinator's generate phase runs: a human or a
     # native-dispatch agent files through the identical tree rules, so the
     # CLI path and the loop path cannot diverge into different trees.
-    tree.check_derived(store, getattr(args, "derived_from", None) or "",
-                       args.parent or "", track.id)
-    tree.check_branch(config, store, args.parent or "", args.kind or "",
-                      track.id)
-    entry = Entry(
-        id=args.id or store.next_id(track.prefix),
-        track=track.id, title=args.title,
-        status=track.machine.initial,
-        parent=args.parent or "", kind=args.kind or "",
-        derived_from=getattr(args, "derived_from", None) or "",
-        hypothesis=args.hypothesis or "", prediction=args.prediction or "",
-        bar=args.bar or "", why_filed=args.why or "",
-        confidence=args.confidence, impact=args.impact, cost=args.cost,
-        mechanisms=args.mechanism or [], sources=args.source or [],
-        gate=args.gate or "", scaffold=bool(args.scaffold),
-        core=_core_version(args.core), repro=args.repro or "",
-        observed=args.observed or "", expected=args.expected or "")
-    if track.gates:
-        # Filed with the track's declared gates attached, so `ar gates update`
-        # works on a fresh entry without a `gates configure` first (#20).
-        from .gates import configure as configure_gates
-        configure_gates(entry, track.gates)
-    if track.requires_defect_evidence:
-        # The track already declares this rule; before H15 only `harness
-        # export` and `ar validate` read it, so a defect could sit in the
-        # queue for a whole session with nothing a stranger could reproduce.
-        # Refused here, before the record is written: the id this filing
-        # computed is never reserved, so the next filing takes the same number
-        # and a refused defect costs no id.
-        from . import defects
-        problems = defects.evidence_problems(entry, track)
-        if problems:
-            raise AutoresearchError("; ".join(problems))
-    # Exclusive (#21): a number another session filed after this one read
-    # the store is skipped rather than overwritten. A `--id` the caller chose
-    # is never moved -- a taken one is refused (H79).
-    print(store.create(entry, renumber=not args.id))
+    # Check and create under one filing lock (#48): the sibling cap read
+    # here must still hold when the entry lands, or two concurrent branch
+    # filings both pass it.
+    with store.filing_lock(f"entry new ({args.session})"):
+        tree.check_derived(store, getattr(args, "derived_from", None) or "",
+                           args.parent or "", track.id)
+        tree.check_branch(config, store, args.parent or "", args.kind or "",
+                          track.id)
+        entry = Entry(
+            id=args.id or store.next_id(track.prefix),
+            track=track.id, title=args.title,
+            status=track.machine.initial,
+            parent=args.parent or "", kind=args.kind or "",
+            derived_from=getattr(args, "derived_from", None) or "",
+            hypothesis=args.hypothesis or "", prediction=args.prediction or "",
+            bar=args.bar or "", why_filed=args.why or "",
+            confidence=args.confidence, impact=args.impact, cost=args.cost,
+            mechanisms=args.mechanism or [], sources=args.source or [],
+            gate=args.gate or "", scaffold=bool(args.scaffold),
+            core=_core_version(args.core), repro=args.repro or "",
+            observed=args.observed or "", expected=args.expected or "")
+        if track.gates:
+            # Filed with the track's declared gates attached, so `ar gates update`
+            # works on a fresh entry without a `gates configure` first (#20).
+            from .gates import configure as configure_gates
+            configure_gates(entry, track.gates)
+        if track.requires_defect_evidence:
+            # The track already declares this rule; before H15 only `harness
+            # export` and `ar validate` read it, so a defect could sit in the
+            # queue for a whole session with nothing a stranger could reproduce.
+            # Refused here, before the record is written: the id this filing
+            # computed is never reserved, so the next filing takes the same number
+            # and a refused defect costs no id.
+            from . import defects
+            problems = defects.evidence_problems(entry, track)
+            if problems:
+                raise AutoresearchError("; ".join(problems))
+        # Exclusive (#21): a number another session filed after this one read
+        # the store is skipped rather than overwritten. A `--id` the caller chose
+        # is never moved -- a taken one is refused (H79).
+        print(store.create(entry, renumber=not args.id))
     _render_views(config)
     return 0
 
@@ -1942,6 +1946,7 @@ def cmd_validate(args):
                 + validate_mod.holdout_warnings(config)
                 + validate_mod.evaluator_warnings(config)
                 + validate_mod.record_floor_warnings(config)
+                + validate_mod.lineage_warnings(config)
                 + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):
