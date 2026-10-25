@@ -1397,7 +1397,8 @@ def cmd_validate(args):
     warnings = (validate_mod.inbox_warnings(config)
                 + validate_mod.core_warnings(config)
                 + validate_mod.closure_warnings(config)
-                + validate_mod.output_warnings(config))
+                + validate_mod.output_warnings(config)
+                + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):
         # Only the document: warnings and the read-counts summary are prose

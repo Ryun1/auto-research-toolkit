@@ -128,3 +128,46 @@ def core_warnings(config) -> list[str]:
     problem = min_core_problem(config)
     return [problem + " (run `ar doctor` for the full diagnosis)"] \
         if problem else []
+
+
+def citation_warnings(config, limit: int = 20) -> list[str]:
+    """Run ids cited in memos and entries that have no row in the ledger.
+
+    A phantom id travelled memo -> entry history -> another entry's hypothesis
+    with nothing checking it (eip8200 H16/H22/H23, ecdsa H167). Prose has no
+    citation syntax, so this reads the ledger's own id shape: when every row id
+    is fixed-width hex, a token of that shape within a line's reach of the word
+    "run" is a citation.
+    """
+    import re
+    ids = set()
+    for path in pathlib.Path(config.paths.runs).glob("**/*.jsonl"):
+        ids.update(re.findall(r'"id":\s*"([^"]+)"', path.read_text(errors="replace")))
+    widths = {len(i) for i in ids}
+    # ponytail: shape heuristic; a domain with non-hex or mixed-width ids gets
+    # no check until runs carry a citation syntax
+    if not ids or len(widths) != 1 or not all(re.fullmatch(r"[0-9a-f]+", i) for i in ids):
+        return []
+    width = widths.pop()
+    if width < 8:
+        return []
+    # the id(s) directly after "run"/"runs", as a list: `runs X and Y`, `run
+    # `X`` -- not any hex later on the line (a patch sha is not a run)
+    hexid = rf"`?[0-9a-f]{{{width}}}\b`?"
+    cite = re.compile(rf"\bruns?\b(?:\s+ids?)?[\s:(]*{hexid}"
+                      rf"(?:\s*(?:,|and|/|&)\s*{hexid})*")
+    token = re.compile(rf"\b[0-9a-f]{{{width}}}\b")
+    out = []
+    sources = [*pathlib.Path(config.paths.memos).rglob("*.md"),
+               *pathlib.Path(config.paths.entries).glob("*.yaml")]
+    for path in sorted(p for p in sources if p.is_file()):
+        text = path.read_text(errors="replace")
+        missing = sorted({t for m in cite.finditer(text)
+                          for t in token.findall(m.group()) if t not in ids})
+        if missing:
+            out.append(f"{path.relative_to(config.paths.root)} cites run(s) "
+                       f"{', '.join(missing)} with no row in "
+                       f"{pathlib.Path(config.paths.runs).relative_to(config.paths.root)}")
+    if len(out) > limit:
+        out = out[:limit] + [f"... and {len(out) - limit} more file(s) citing unrecorded runs"]
+    return out

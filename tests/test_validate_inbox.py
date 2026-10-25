@@ -167,3 +167,20 @@ def test_evidence_declared_outside_the_tree_is_named(sandbox, store, tmp_path):
     assert len(warnings) == 2
     assert all("outside the domain tree" in w and "escaped" in w for w in warnings)
     assert "kept-outside.bin" in warnings[0] and "also-outside.bin" in warnings[1]
+
+
+def test_a_cited_run_with_no_ledger_row_warns(sandbox, store):
+    """eip8200 H22/H23: a run id cited in a memo and an entry had no row in
+    data/runs, and nothing noticed."""
+    from autoresearch.validate import citation_warnings
+    sandbox.paths.runs.mkdir(parents=True, exist_ok=True)
+    (sandbox.paths.runs / "s.jsonl").write_text(
+        '{"id": "aaaaaaaaaaaa"}\n{"id": "bbbbbbbbbbbb"}\n')
+    memo(sandbox, "inbox/q1.md",
+         "recorded run aaaaaaaaaaaa and runs bbbbbbbbbbbb, 9a746c2956e2\n"
+         "commit 0123456789ab is not a run citation")
+    make_entry(store, "Q1", hypothesis="per run 9a746c2956e2")
+    warnings = citation_warnings(sandbox)
+    assert len(warnings) == 2, warnings
+    assert all("9a746c2956e2" in w for w in warnings)
+    assert not any("0123456789ab" in w for w in warnings)
