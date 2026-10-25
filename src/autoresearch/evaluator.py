@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 
 from .errors import AutoresearchError, ConfigError
 
@@ -98,11 +99,32 @@ def _row_digest(record) -> str:
                           .encode()).hexdigest()
 
 
+#: A run id names its receipt file, and the run id is written by the measure
+#: script -- worker-controlled bytes. `../workspaces/<slot>/x` would read a
+#: receipt from inside the slot, one the worker forged. One path component,
+#: no dots-only names.
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _receipt_path(directory, run_id) -> pathlib.Path | None:
+    directory = pathlib.Path(directory)
+    if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
+        return None
+    path = directory / f"{run_id}.json"
+    if not path.resolve().is_relative_to(directory.resolve()):
+        return None
+    return path
+
+
 def write_receipt(directory, record, candidate_path) -> pathlib.Path:
     """One file per row, created exclusively: a run id is receipted once."""
     directory = pathlib.Path(directory)
+    path = _receipt_path(directory, record.id)
+    if path is None:
+        raise AutoresearchError(
+            f"run id {record.id!r} is not a plain name (letters, digits, "
+            "`.`, `_`, `-`); it cannot be receipted")
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{record.id}.json"
     body = json.dumps({"run": record.id, "digest": _row_digest(record),
                        "session": record.session,
                        "candidate": str(candidate_path)}, sort_keys=True)
@@ -114,7 +136,10 @@ def write_receipt(directory, record, candidate_path) -> pathlib.Path:
 
 def receipt_problem(directory, record) -> str | None:
     """Why `record` is not a row `ar measure` recorded, or None if it is."""
-    path = pathlib.Path(directory) / f"{record.id}.json"
+    path = _receipt_path(directory, record.id)
+    if path is None:
+        return (f"run id {record.id!r} is not a plain name, so it names no "
+                "receipt; a row like this was not recorded by `ar measure`")
     try:
         receipt = json.loads(path.read_text())
     except (OSError, ValueError):

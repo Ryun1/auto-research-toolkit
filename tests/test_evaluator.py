@@ -299,3 +299,28 @@ def test_a_measure_script_that_reuses_a_run_id_is_refused(sandbox, slot, capsys)
     assert _ar(sandbox.paths.root, "measure", "--candidate", str(slot)) == 2
     assert "already recorded" in capsys.readouterr().err
     assert [r.id for r in _slot_rows(sandbox, slot)] == ["fabricated"]
+
+
+def test_a_run_id_cannot_point_harvest_at_a_receipt_the_slot_wrote(sandbox, slot):
+    """The run id names the receipt file, and the worker writes the run id. An
+    id that climbs out of the receipts directory would read a receipt from
+    inside the slot -- one the worker forged with a matching digest."""
+    relative = sandbox.paths.runs.relative_to(sandbox.paths.root)
+    before = runs_mod.snapshot(slot / relative)
+    forged_id = str(pathlib.Path("..") / "workspaces" / slot.name / "forged")
+    row = RunRecord(id=forged_id, metrics={"ops": 1.0, "peak": 1.0},
+                    session="it1-Q1", entry="Q1", provenance={"host": "local"})
+    append(slot / relative / "it1-Q1.jsonl", row)
+    (slot / "forged.json").write_text(json.dumps(
+        {"run": forged_id, "digest": evaluator._row_digest(row)}))
+    result = _harvest(sandbox, slot, before)
+    assert result.records == []
+    assert any("run id" in p for p in result.problems)
+
+
+def test_a_receipt_is_never_written_outside_the_receipts_directory(sandbox, tmp_path):
+    row = RunRecord(id="../../escaped", metrics={"ops": 1.0, "peak": 1.0},
+                    session="s")
+    with pytest.raises(Exception, match="run id"):
+        evaluator.write_receipt(sandbox.paths.receipts, row, tmp_path)
+    assert not (sandbox.paths.root / "escaped.json").exists()
