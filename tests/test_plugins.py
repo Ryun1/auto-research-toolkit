@@ -82,3 +82,18 @@ def test_empty_names_returns_zero_without_importing(tmp_path, monkeypatch):
     monkeypatch.setattr(importlib, "import_module", fail)
     ap, sub = _make_parser()
     assert plugins.register(sub, [], tmp_path, config=None) == 0
+
+
+def test_a_plugin_value_error_is_not_mistaken_for_a_reregister(tmp_path):
+    """Python 3.14 reports a duplicate subcommand as a bare ValueError, so the
+    re-register skip reads ValueError too -- but only argparse's conflict, not
+    any ValueError a plugin raises that happens to mention a command name."""
+    _write_plugin(tmp_path, "stubplug", _stub_package_source())
+    _write_plugin(tmp_path, "badplug", '''
+        def register_cli(subparsers, config):
+            raise ValueError("hello is misconfigured")
+    ''')
+    ap, sub = _make_parser()
+    plugins.register(sub, ["stubplug"], tmp_path, config=None)
+    with pytest.raises(ValueError, match="misconfigured"):
+        plugins.register(sub, ["badplug"], tmp_path, config=None)

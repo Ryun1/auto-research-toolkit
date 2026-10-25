@@ -58,10 +58,14 @@ def register(subparsers, names, root, config) -> int:
     for module in load(names, root):
         try:
             module.register_cli(subparsers, config)
-        except argparse.ArgumentError as exc:
+        except (argparse.ArgumentError, ValueError) as exc:
             # Re-register safety: the parent rebuilds the parser after domain
             # discovery and re-parses argv, so a command name already present
-            # on the action is skipped rather than fatal.
-            if not any(name in exc.message for name in before):
+            # on the action is skipped rather than fatal. Python 3.14 raises a
+            # bare ValueError("conflicting subparser: ...") where 3.11-3.13
+            # raised ArgumentError, so both are read the same way.
+            message = str(exc)
+            if ("conflicting subparser" not in message
+                    or not any(name in message for name in before)):
                 raise
     return len(set(subparsers.choices) - before)
