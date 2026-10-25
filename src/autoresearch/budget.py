@@ -99,8 +99,13 @@ class Budget:
         return self[name].spend(amount, note)
 
     def exhausted(self) -> list[str]:
+        # A money ceiling of 0 with nothing spent means "no paid compute":
+        # `require_money` still refuses spend, but free work is not a stop
+        # (starks H1 -- every session booted into a false `money` stop).
         return [n for n, m in self.meters.items()
-                if not m.unlimited and m.remaining() <= 0]
+                if not m.unlimited and m.remaining() <= 0
+                and not (n == "money" and m.ceiling == 0 and m.spent == 0
+                         and not m.unknown)]
 
     def report(self) -> str:
         lines = [f"budget: {self.label}"]

@@ -143,3 +143,15 @@ def test_retained_run_overlap_never_discounts_missing_or_repeated_rows(sandbox):
     usage = recorded_usage(sandbox)
     assert len(records) + usage["runs"] - recorded_run_overlap(sandbox, records) == 9
     assert usage["runs"] == 8  # Consumers without a ledger still see full usage.
+
+
+def test_a_zero_money_ceiling_with_nothing_spent_is_not_a_stop():
+    """starks H1: `spend_ceiling = 0` (no paid compute) read as an exhausted
+    meter, so every session saw a `money` stop it had not earned. Spending is
+    still refused; only the stop goes."""
+    free = Budget("domain", {"money": Meter("money", 0.0)})
+    assert free.exhausted() == []
+    with pytest.raises(BudgetExceeded):
+        free.spend("money", 0.01)
+    assert Budget("d", {"money": Meter("money", 0.0, unknown=True)}).exhausted() == ["money"]
+    assert Budget("d", {"runs": Meter("runs", 0.0)}).exhausted() == ["runs"]
