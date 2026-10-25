@@ -379,3 +379,19 @@ def test_core_auto_records_this_cores_version(sandbox, store):
     stored = store.load("H1").core
     assert stored and stored != "auto"
     assert stored == up_mod.installed().version
+
+
+def test_an_ingested_defect_carries_its_tracks_gates(sandbox):
+    """#20: every filing path attaches the receiving track's declared gates,
+    so `ar gates update` works on an ingested defect without a configure."""
+    config_path = sandbox.paths.root / "domain.toml"
+    config_path.write_text(config_path.read_text() + '\n[[tracks]]\n'
+                           'id = "field"\nprefix = "F"\n\n'
+                           '[[tracks.gates]]\nname = "reproduced"\n')
+    receiving = DomainConfig.load(sandbox.paths.root)
+    target = Store(receiving.paths.entries)
+    bundle = make_bundle({"id": "H1", "title": "the judge brief drops marks",
+                          "core": "0.1.0", "repro": "ar rank",
+                          "observed": "unlabelled reserve"})
+    defects_mod.ingest_bundle(bundle, target, track=receiving.tracks["field"])
+    assert [g.name for g in target.load("F1").gates] == ["reproduced"]

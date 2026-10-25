@@ -24,6 +24,7 @@ other irreversible outward-facing action takes.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 
 from .config import Track
@@ -178,6 +179,7 @@ def ingest_bundle(bundle: dict, store, *, track: Track,
             core=str(defect.get("core") or ""),
             why_filed=f"field defect from {project}",
             tags=[tag])
+        entry.gates = [dataclasses.replace(gate) for gate in track.gates]
         store.save(entry)
         seen_tags.add(tag)
         filed.append(entry)

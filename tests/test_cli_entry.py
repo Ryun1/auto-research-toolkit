@@ -250,3 +250,23 @@ def test_entry_new_accepts_an_id_its_track_owns(sandbox, store):
     assert _ar(sandbox, "entry", "new", "x", "--track", "research",
                "--id", "Q7") == 0
     assert store.load("Q7").track == "research"
+
+
+def test_entry_new_attaches_the_tracks_gates(sandbox, store, capsys):
+    """#20: the loop's filing path copied the track's [[tracks.gates]] onto
+    the entry and `ar entry new` did not, so `ar gates update` refused a
+    freshly filed entry until someone ran `ar gates configure` by hand."""
+    toml = sandbox.paths.root / "domain.toml"
+    toml.write_text(toml.read_text().replace(
+        '[[tracks]]\nid     = "harness"',
+        '[[tracks.gates]]\nname = "kernel-proof"\n\n'
+        '[[tracks.gates]]\nname = "review"\nrequired = false\n\n'
+        '[[tracks]]\nid     = "harness"', 1))
+    assert _ar(sandbox, "entry", "new", "t", "--track", "research",
+               "--why", "x") == 0
+    entry = store.load("Q1")
+    assert [(g.name, g.state, g.required) for g in entry.gates] == [
+        ("kernel-proof", "pending", True), ("review", "pending", False)]
+    assert _ar(sandbox, "--session", "s", "claim", "Q1", "--why", "x") == 0
+    assert _ar(sandbox, "--session", "s", "gates", "update", "Q1",
+               "kernel-proof", "--state", "blocked", "--why", "x") == 0
