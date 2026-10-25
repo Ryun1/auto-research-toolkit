@@ -341,3 +341,21 @@ def test_the_scan_reads_paths_whatever_the_users_diff_prefix(sandbox, store, cap
         (sandbox.paths.root / "bin/measure").read_text() + "\n# tuned\n")
     hunks = tamper.scan_tree(sandbox, sandbox.paths.root)
     assert ("evaluator", "bin/measure") in {(h.kind, h.path) for h in hunks}
+
+
+# -- #47 --------------------------------------------------------------------
+
+def test_a_declared_first_step_cap_holds_an_implausible_first_win(store):
+    rows = [_row("a", 1000, "a", started=1), _row("b", 20, "b", started=2)]
+    best, excluded = runs.frontier(store, rows,
+                                   _goal(suspect={"k": 10, "first_step_max": 0.5}))
+    assert best[1].id == "a" and "first improvement" in excluded[2]
+    rows = [_row("a", 1000, "a", started=1), _row("b", 700, "b", started=2)]
+    best, _ = runs.frontier(store, rows,
+                            _goal(suspect={"k": 10, "first_step_max": 0.5}))
+    assert best[1].id == "b"
+
+
+def test_first_step_max_must_be_positive():
+    with pytest.raises(GoalError, match="first_step_max"):
+        _goal(suspect={"first_step_max": 0})

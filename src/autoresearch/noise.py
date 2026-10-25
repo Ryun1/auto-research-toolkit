@@ -104,6 +104,10 @@ class Suspect:
     off, the default; a declared block without `k` takes a conservative 10.
     """
     k: float | None = None
+    #: with no floor and no earlier step to compare against, the share of
+    #: the incumbent's own value a first improvement may gain before it is
+    #: held (#47). None leaves the first step unjudged.
+    first_step_max: float | None = None
 
     @classmethod
     def from_dict(cls, raw, gid) -> Suspect:
@@ -111,17 +115,21 @@ class Suspect:
             return cls()
         if not isinstance(raw, dict):
             raise GoalError(f"goal {gid!r}: suspect must be a mapping like {{k: 10}}")
-        unknown = set(raw) - {"k"}
+        unknown = set(raw) - {"k", "first_step_max"}
         if unknown:
             raise GoalError(f"goal {gid!r}: suspect has unknown key(s) "
-                            f"{sorted(unknown)}; known: ['k']")
+                            f"{sorted(unknown)}; known: ['first_step_max', 'k']")
         try:
             k = float(raw.get("k", 10.0))
+            first = raw.get("first_step_max")
+            first = float(first) if first is not None else None
         except (TypeError, ValueError) as exc:
-            raise GoalError(f"goal {gid!r}: suspect.k: {exc}") from exc
+            raise GoalError(f"goal {gid!r}: suspect: {exc}") from exc
         if k <= 1:
             raise GoalError(f"goal {gid!r}: suspect.k must be above 1")
-        return cls(k)
+        if first is not None and first <= 0:
+            raise GoalError(f"goal {gid!r}: suspect.first_step_max must be positive")
+        return cls(k, first)
 
 
 def config_digest(record) -> str:
@@ -232,11 +240,13 @@ def _floor(goal, all_groups) -> float | None:
     return None
 
 
-def _suspicion(goal, gain, steps, all_groups) -> str | None:
+def _suspicion(goal, gain, steps, all_groups, beaten=None) -> str | None:
     """Why a gain is too large to take on one execution's word, or None."""
     k = goal.suspect.k
-    if k is None:
+    first_max = goal.suspect.first_step_max
+    if k is None and first_max is None:
         return None
+    k = k if k is not None else 10.0
     floor = _floor(goal, all_groups)
     if floor:
         if gain > k * floor:
@@ -246,6 +256,11 @@ def _suspicion(goal, gain, steps, all_groups) -> str | None:
     if steps and gain > k * max(steps):
         return (f"suspect: gain {gain:.6g} is over {k:g}x the largest accepted "
                 f"step {max(steps):.6g}")
+    if not steps and first_max is not None and beaten:
+        if gain > first_max * abs(beaten):
+            return (f"suspect: first improvement gains {gain:.6g}, over "
+                    f"first_step_max {first_max:g} of the incumbent's "
+                    f"{abs(beaten):.6g}")
     return None
 
 
@@ -298,13 +313,39 @@ def admit(goal, scored, promoted=frozenset()):
                                      all_groups).admitted is False:
             continue
         gain = _gain(goal, beaten, value)
-        why = _suspicion(goal, gain, steps, all_groups)
+        why = _suspicion(goal, gain, steps, all_groups, beaten)
         if why and not _released(goal, unit, beaten, by_config, promoted):
             suspects.append((unit, why + "; held until another session "
                                          "re-measures this config, or `ar promote`"))
             continue
         steps.append(gain)
         incumbent = unit
+    if not rows_mode and incumbent is not None:
+        # Settle (#47): a comparison under the bootstrap is not transitive, so
+        # a group held against an early incumbent is judged again against
+        # the one that won, until no held group clears the floor against it.
+        held_out = {id(unit) for unit, _ in suspects}
+        for _ in range(len(all_groups)):
+            top = incumbent.representative(goal)[0]
+            better = sorted(
+                (g for g in all_groups if g is not incumbent
+                 and id(g) not in held_out
+                 and goal.better(g.representative(goal)[0], top)
+                 and compare(goal, incumbent, g, all_groups).admitted is True),
+                key=lambda g: g.representative(goal)[0],
+                reverse=goal.direction != "minimise")
+            if not better:
+                break
+            unit = better[0]
+            gain = _gain(goal, top, unit.representative(goal)[0])
+            why = _suspicion(goal, gain, steps, all_groups, top)
+            if why and not _released(goal, unit, top, by_config, promoted):
+                suspects.append((unit, why + "; held until another session "
+                                             "re-measures this config, or `ar promote`"))
+                held_out.add(id(unit))
+                continue
+            steps.append(gain)
+            incumbent = unit
     held = []
     if incumbent is not None and not rows_mode:
         top = incumbent.representative(goal)

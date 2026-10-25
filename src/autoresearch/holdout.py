@@ -135,6 +135,18 @@ def _verdict(record) -> Verdict:
                    else "the holdout does not confirm it")
 
 
+def _scope(row) -> list:
+    """What one verdict covers (#47): the config at a clean source revision.
+    Keyed by config alone, two candidates with the same knobs and different
+    code shared one verdict; without a clean revision to name the code, the
+    entry stands in for it."""
+    provenance = row.provenance if isinstance(row.provenance, dict) else {}
+    revision = str(provenance.get("source_revision") or "")
+    if revision and provenance.get("source_dirty") is False:
+        return ["revision", revision]
+    return ["entry", revision, row.entry or ""]
+
+
 def cached(config, row, target) -> Verdict | None:
     """This epoch's last verdict on `row`'s config against `target`, without
     consulting. A pass is a pass against a target, so a moving target is
@@ -143,7 +155,8 @@ def cached(config, row, target) -> Verdict | None:
     epoch, digest = _epoch(config), config_digest(row)
     for record in reversed(_records(config)):
         if (record["epoch"] == epoch and record["digest"] == digest
-                and record.get("target") == target):
+                and record.get("target") == target
+                and record.get("scope") == _scope(row)):
             return _verdict(record)
     return None
 
@@ -154,6 +167,7 @@ def _record(config, judged, target, session, **fields) -> None:
     with _ledger(config).open("a") as fh:
         fh.write(json.dumps({"epoch": _epoch(config), "digest": config_digest(judged),
                              "judged": judged.id, "target": target,
+                             "scope": _scope(judged),
                              "session": session, **fields},
                             sort_keys=True) + "\n")
 

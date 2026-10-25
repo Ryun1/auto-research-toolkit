@@ -151,7 +151,10 @@ goal:
   # confirmed close also lists tamper-shaped diff hunks (evaluator files,
   # tests, timing calls, __eq__/__hash__, monkey-patching) for QC and a
   # person to read; they decide nothing.
-  suspect: {k: 10}
+  # first_step_max (optional): with no floor and no earlier step to compare
+  # against, a first improvement gaining more than this share of the
+  # incumbent's value is held too -- otherwise a 50x first win stands.
+  suspect: {k: 10, first_step_max: 0.5}
 ```
 
 A domain can also declare a **holdout** the search never sees (`domain.toml`):

@@ -345,3 +345,39 @@ def test_validate_warns_when_the_holdout_is_committed(sandbox):
                        capture_output=True)
     [warning] = validate.holdout_warnings(config)
     assert "holdout/factor" in warning and "gitignore" in warning
+
+
+def _row_at(config, run_id, revision, entry=None, dirty=False):
+    row = RunRecord(id=run_id, metrics={"ops": 500.0, "peak": 1.0}, session="w",
+                    entry=entry, config={"knobs": {"u": 4}},
+                    provenance={"host": "local", "source_revision": revision,
+                                "source_dirty": dirty})
+    append(config.paths.runs / "w.jsonl", row)
+    return row
+
+
+def test_a_verdict_is_scoped_to_the_code_it_judged(sandbox):
+    """#47: keyed by config alone, two candidates with the same knobs and
+    different code shared one verdict."""
+    config = _domain(sandbox)
+    first = _row_at(config, "r1", "aaaa")
+    second = _row_at(config, "r2", "bbbb")
+    holdout.consult(config, first, 1000, "w")
+    assert holdout.cached(config, second, 1000) is None
+    holdout.consult(config, second, 1000, "w")
+    assert holdout.consults(config) == 2
+
+
+def test_the_same_clean_revision_shares_its_verdict(sandbox):
+    config = _domain(sandbox)
+    holdout.consult(config, _row_at(config, "r1", "aaaa", entry="Q1"), 1000, "w")
+    assert holdout.cached(config, _row_at(config, "r2", "aaaa", entry="Q2"),
+                          1000) is not None
+
+
+def test_without_a_clean_revision_the_entry_scopes_the_verdict(sandbox):
+    config = _domain(sandbox)
+    holdout.consult(config, _row_at(config, "r1", "aaaa", entry="Q1", dirty=True),
+                    1000, "w")
+    assert holdout.cached(config, _row_at(config, "r2", "aaaa", entry="Q2",
+                                          dirty=True), 1000) is None

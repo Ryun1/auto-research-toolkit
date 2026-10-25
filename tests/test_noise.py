@@ -254,3 +254,21 @@ def test_config_digest_ignores_key_order():
     a = _row("x", 1, {"u": 1, "w": 2})
     b = _row("y", 1, {"w": 2, "u": 1})
     assert noise.config_digest(a) == noise.config_digest(b)
+
+
+def test_admission_settles_against_the_final_incumbent(store, monkeypatch):
+    """#47: a comparison is not transitive under the bootstrap. A group held
+    against an early incumbent is judged again against the one that won."""
+    goal = _goal(method="bootstrap")
+    rows = _rows([("a", [1000, 1001]), ("b", [900, 901]), ("c", [950, 951])])
+    verdicts = {("a", "b"): False, ("a", "c"): True, ("c", "b"): True}
+
+    def name(group):
+        return group.scored[0][1].config["knobs"]
+
+    def table(goal, incumbent, candidate, all_groups):
+        return noise.Verdict(verdicts[(name(incumbent), name(candidate))], "table")
+
+    monkeypatch.setattr(noise, "compare", table)
+    best, excluded = runs.frontier(store, rows, goal)
+    assert best[1].config["knobs"] == "b" and excluded is None
