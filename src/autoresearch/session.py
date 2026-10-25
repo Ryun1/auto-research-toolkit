@@ -224,7 +224,7 @@ def create(config, name) -> dict:
 
 
 def destroy(config, name, *, harvest: bool = False,
-            accept_drift: bool = False) -> dict:
+            accept_drift: bool = False, discard_unreceipted: bool = False) -> dict:
     """Destroy a session worktree, archiving its record. Never destroys
     silently: every check names what it found before anything is removed.
 
@@ -267,11 +267,29 @@ def destroy(config, name, *, harvest: bool = False,
         problems.append(
             f"memo {item} diverges from the primary; memos are never "
             "auto-harvested -- fold it into the primary by hand, then destroy")
-    if harvest and scan["runs"]:
+    # Only measured rows are harvested (#41): a row with no receipt from
+    # `ar --domain <primary> measure --candidate <worktree>` is a line
+    # somebody wrote. The native and external harvests already refuse one.
+    from . import evaluator
+    unreceipted = []
+    for item in scan["runs"]:
+        for row in item["records"]:
+            why = evaluator.receipt_problem(config.paths.receipts, row, worktree)
+            if why:
+                unreceipted.append((item["file"], row, why))
+    if harvest and unreceipted and not discard_unreceipted:
+        for file, _, why in unreceipted:
+            problems.append(
+                f"{file}: {why}. Measure with `ar --domain {root} measure "
+                f"--candidate {worktree}`; or pass --discard-unreceipted to "
+                "archive such rows beside the session record, out of the ledger")
+    if harvest and not problems:
+        dropped = {row.id for _, row, _ in unreceipted}
         for item in scan["runs"]:
             target = root / item["file"]     # the same lane, in the primary
             for row in item["records"]:
-                runs.append(target, row)     # append-only, deduped by id upstream
+                if row.id not in dropped:
+                    runs.append(target, row)  # append-only, deduped by id upstream
     if not harvest:
         for item in scan["runs"]:
             problems.append(
@@ -309,14 +327,25 @@ def destroy(config, name, *, harvest: bool = False,
     archived_path = archived_dir / f"{name}.{stamp}.json"
     archived_path.write_text(json.dumps(archived, indent=2, sort_keys=True) + "\n")
     record_path.unlink()
+    unreceipted_archive = None
+    if harvest and unreceipted:
+        # Archived, never deleted: the rows are kept, outside the ledger.
+        unreceipted_archive = archived_dir / f"{name}.{stamp}.unreceipted.jsonl"
+        unreceipted_archive.write_text("".join(
+            json.dumps(row.to_dict(), sort_keys=True) + "\n"
+            for _, row, _ in unreceipted))
 
     return {
         "name": name,
         "destroyed": True,
         "worktree": str(worktree),
         "worktree_present": worktree_was_present,
-        "harvested_runs": [{"file": item["file"], "rows": item["rows"]}
-                           for item in scan["runs"] if harvest],
+        "harvested_runs": [
+            {"file": item["file"],
+             "rows": sum(1 for r in item["records"]
+                         if r.id not in {row.id for _, row, _ in unreceipted})}
+            for item in scan["runs"] if harvest],
+        "unreceipted_archive": str(unreceipted_archive) if unreceipted_archive else None,
         "harvested_entries": list(scan["entries_absent"]),
         "archived": str(archived_path),
     }

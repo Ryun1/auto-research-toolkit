@@ -98,8 +98,10 @@ subagents, use that instead of working entries one at a time:
 ## Worktree isolation when the harness has none
 
 One worktree per terminal or agent: `bin/ar session create NAME`, work inside
-it, then `bin/ar session destroy NAME --harvest` when done -- the harvest
-appends run rows to the primary record, deduped by run id. Destroy refuses on
+it, measuring from the primary with `bin/ar measure --candidate WORKTREE` (run
+in the primary), then `bin/ar session destroy NAME --harvest` when done -- the
+harvest appends the receipted run rows to the primary record, deduped by run
+id; a row nobody measured that way is refused. Destroy refuses on
 drifted configuration or diverged entries; `bin/ar session prune` proposes
 idle sessions and nothing is destroyed without those guards. If your harness
 already isolates each subagent (its own checkout or worktree), that counts --

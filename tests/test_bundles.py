@@ -205,3 +205,13 @@ def test_absolute_inputs_do_not_hide_descendant_symlinks(tmp_path, linked):
     with pytest.raises(SchemaError, match="symlink"):
         pack(source, [source / "linked"], archive)
     assert not archive.exists()
+
+
+def test_evidence_import_protects_the_evaluator_receipts_and_holdout(sandbox):
+    """#41: the import's protected set named the record directories but not
+    the files that score a run or prove a row was measured."""
+    from autoresearch.bundles import protected_paths
+    protected = {str(p) for p in protected_paths(sandbox)}
+    for path in (sandbox.paths.receipts, sandbox.paths.holdout,
+                 sandbox.paths.root / "bin/measure"):
+        assert str(path) in protected

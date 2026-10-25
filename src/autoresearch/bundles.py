@@ -360,12 +360,23 @@ def _verify_command(args):
     return 0
 
 
+def protected_paths(config) -> tuple:
+    """What an evidence import may never write: the record, and the files
+    that score a run or prove it was measured (#41) -- the same set harvest
+    protects."""
+    from . import evaluator, holdout
+    paths = config.paths
+    return (paths.entries, paths.claims, paths.runs, paths.iterations,
+            paths.workspaces, paths.receipts, paths.holdout,
+            *(paths.root / name for name in evaluator.files(config)),
+            *(paths.root / name for name in holdout.files(config)))
+
+
 def _import_command(args):
     config = _load(args)
     paths = config.paths
     result = import_bundle(args.archive, paths.root, args.into, config.lanes,
-                           protected=(paths.entries, paths.claims, paths.runs,
-                                      paths.iterations, paths.workspaces),
+                           protected=protected_paths(config),
                            session=args.session, lock_path=paths.claims / "evidence.lock")
     print(json.dumps(result, sort_keys=True))
     return 0

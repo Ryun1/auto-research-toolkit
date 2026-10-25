@@ -103,15 +103,44 @@ def command(config) -> list[str]:
 
 
 def candidate(config, path) -> pathlib.Path:
-    """A candidate tree is a workspace this domain's pool holds; anywhere else
-    is a directory the coordinator never handed out."""
+    """A candidate tree is a workspace this domain's pool holds, or a live
+    `ar session` worktree (#41); anywhere else is a directory nobody handed
+    out. And the measuring domain must be the primary: a slot's own
+    domain.toml can point `[state] receipts` anywhere, including at the
+    primary's receipts directory."""
+    root = config.paths.root.resolve()
+    marker = root.parent / f"{root.name}.json"
+    if marker.is_file():
+        try:
+            is_slot = "holder" in json.loads(marker.read_text())
+        except (OSError, ValueError):
+            is_slot = False
+        if is_slot:
+            raise AutoresearchError(
+                f"{root} is itself a workspace slot; a candidate is measured "
+                "from the primary checkout (`ar --domain <primary> measure "
+                "--candidate <slot>`)")
     path = pathlib.Path(path).resolve()
     pool = config.paths.workspaces.resolve()
-    if not path.is_dir() or not path.is_relative_to(pool) or path == pool:
-        raise AutoresearchError(
-            f"--candidate {path} is not a workspace under {pool}; a candidate "
-            "is a slot the coordinator handed out")
-    return path
+    if path.is_dir() and path.is_relative_to(pool) and path != pool:
+        return path
+    if path.is_dir() and path in _session_worktrees(config):
+        return path
+    raise AutoresearchError(
+        f"--candidate {path} is not a workspace under {pool} or a live `ar "
+        "session` worktree; a candidate is a tree the coordinator or "
+        "`ar session create` handed out")
+
+
+def _session_worktrees(config) -> set[pathlib.Path]:
+    sessions = config.paths.root / ".ar" / "sessions"
+    out = set()
+    for record in sessions.glob("*.json") if sessions.is_dir() else []:
+        try:
+            out.add(pathlib.Path(json.loads(record.read_text())["path"]).resolve())
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return out
 
 
 def _row_digest(record) -> str:

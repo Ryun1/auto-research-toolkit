@@ -62,6 +62,14 @@ def a_row(session, cost=3.0):
                      provenance={"who": "test"})
 
 
+def measured(domain, wt, path, row):
+    """A row as `ar --domain <primary> measure --candidate <worktree>` leaves
+    it: appended in the worktree, receipted in the primary (#41)."""
+    from autoresearch import evaluator
+    runs.append(path, row)
+    evaluator.write_receipt(domain.paths.receipts, row, wt)
+
+
 def worktree_of(domain, name):
     return pathlib.Path(json.loads(
         (domain.paths.root / ".ar" / "sessions" / f"{name}.json").read_text()
@@ -158,7 +166,7 @@ def test_destroy_refuses_unharvested_rows_then_harvests_them(domain):
     session_mod.create(domain, "loop-a")
     wt = worktree_of(domain, "loop-a")
     row = a_row("loop-a")
-    runs.append(wt / "data" / "runs" / "loop-a.jsonl", row)
+    measured(domain, wt, wt / "data" / "runs" / "loop-a.jsonl", row)
     with pytest.raises(ConfigError) as refused:
         session_mod.destroy(domain, "loop-a")
     message = str(refused.value)
@@ -288,3 +296,62 @@ def test_prune_destroy_destroys_an_eligible_session(domain):
     archived = list((domain.paths.root / ".ar" / "sessions" / "archived").glob(
         "old.*.json"))
     assert len(archived) == 1
+
+
+# -- destroy: receipts (#41) -------------------------------------------------
+
+def test_a_session_worktree_is_a_candidate_measured_from_the_primary(domain):
+    from autoresearch import cli
+    session_mod.create(domain, "loop-a")
+    wt = worktree_of(domain, "loop-a")
+    assert cli.main(["--domain", str(domain.paths.root), "--session", "loop-a",
+                     "measure", "--candidate", str(wt)]) == 0
+    out = session_mod.destroy(domain, "loop-a", harvest=True)
+    assert out["harvested_runs"][0]["rows"] == 1
+    assert len(runs.read_all(domain.paths.runs)) == 1
+
+
+def test_harvest_refuses_a_row_nobody_measured(domain):
+    session_mod.create(domain, "loop-a")
+    wt = worktree_of(domain, "loop-a")
+    runs.append(wt / "data" / "runs" / "loop-a.jsonl", a_row("loop-a"))
+    with pytest.raises(ConfigError, match="no measurement receipt"):
+        session_mod.destroy(domain, "loop-a", harvest=True)
+    assert runs.read_all(domain.paths.runs) == []
+    assert wt.exists()
+
+
+def test_unreceipted_rows_can_be_archived_instead_of_harvested(domain):
+    session_mod.create(domain, "loop-a")
+    wt = worktree_of(domain, "loop-a")
+    row = a_row("loop-a")
+    runs.append(wt / "data" / "runs" / "loop-a.jsonl", row)
+    out = session_mod.destroy(domain, "loop-a", harvest=True,
+                              discard_unreceipted=True)
+    assert runs.read_all(domain.paths.runs) == []
+    archived = pathlib.Path(out["unreceipted_archive"])
+    assert row.id in archived.read_text()
+    assert not wt.exists()
+
+
+def test_a_receipt_from_another_worktree_does_not_harvest(domain):
+    session_mod.create(domain, "loop-a")
+    session_mod.create(domain, "loop-b")
+    a, b = worktree_of(domain, "loop-a"), worktree_of(domain, "loop-b")
+    row = a_row("loop-a")
+    measured(domain, a, a / "data" / "runs" / "loop-a.jsonl", row)
+    runs.append(b / "data" / "runs" / "loop-a.jsonl", row)
+    with pytest.raises(ConfigError, match="another workspace"):
+        session_mod.destroy(domain, "loop-b", harvest=True)
+
+
+def test_a_slot_cannot_measure_a_candidate_as_if_it_were_the_primary(domain, capsys):
+    """A slot's own domain.toml could point `[state] receipts` at the
+    primary's directory; measuring from a slot is refused outright."""
+    from autoresearch import cli
+    from autoresearch.workspaces import Pool
+    with Pool(domain, "t") as pool:
+        slot = pool.acquire("w1").path
+        rc = cli.main(["--domain", str(slot), "measure", "--candidate", str(slot)])
+    assert rc == 2
+    assert "is itself a workspace slot" in capsys.readouterr().err

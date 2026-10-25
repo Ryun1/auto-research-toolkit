@@ -2180,7 +2180,9 @@ def cmd_session(args):
         result = session_mod.create(config, args.name)
     elif args.session_action == "destroy":
         result = session_mod.destroy(config, args.name, harvest=args.harvest,
-                                     accept_drift=args.accept_drift)
+                                     accept_drift=args.accept_drift,
+                                     discard_unreceipted=getattr(
+                                         args, "discard_unreceipted", False))
     else:
         result = session_mod.prune(config)
         if getattr(args, "destroy", False):
@@ -2658,6 +2660,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     ssn_destroy.add_argument(
         "--harvest", action="store_true",
         help="copy worktree-only run rows and entries into the primary before removing")
+    ssn_destroy.add_argument(
+        "--discard-unreceipted", action="store_true",
+        help="with --harvest: archive run rows no `ar measure --candidate` "
+             "receipted beside the session record, instead of refusing (#41)")
     ssn_destroy.add_argument(
         "--accept-drift", action="store_true",
         help="proceed even though domain.toml changed since the session was cut")

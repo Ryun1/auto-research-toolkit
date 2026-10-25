@@ -105,7 +105,8 @@ after a vanished worktree took run rows with it:
 
 ```
 ar session create fixes       # git worktree at <parent>/<root>-session-fixes
-... work in the worktree ...
+... work in the worktree; measure from the primary:
+ar --domain <primary> measure --candidate <worktree> -- ...
 ar session destroy fixes --harvest
 ```
 
@@ -115,7 +116,9 @@ ar session destroy fixes --harvest
   config drift (the session was cut from a different configuration — the
   hr-iter lesson: drifted config split one ledger across two run paths),
   unharvested run rows (`--harvest` appends them to the primary's lanes,
-  deduped by run id), and entries that diverge on both sides (named and
+  deduped by run id -- only rows `ar measure --candidate` receipted;
+  `--discard-unreceipted` archives the rest beside the session record), and
+  entries that diverge on both sides (named and
   refused — reconcile with `ar entry amend`; the core never overwrites a
   primary entry).
 - **prune proposes, destroy disposes.** `ar session prune` reports idle,
