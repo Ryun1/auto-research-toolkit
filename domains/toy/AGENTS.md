@@ -23,8 +23,8 @@ a hand-maintained map would.
 
 - **A claim is the only write ticket.** `bin/ar claim ID --why "..." --max-runs N`
   before you work on an entry; `bin/ar release ID --why "..."` to hand it back.
-  `claim` prints a `token`: keep it (export `AR_CLAIM_TOKEN`, or pass
-  `--claim-token`) -- releasing, updating, reopening or running `exec` /
+  `claim` prints a `token`: keep it (add it to `AR_CLAIM_TOKEN`, comma-separated
+  when you hold several, or pass `--claim-token`) -- releasing, updating, reopening or running `exec` /
   `external assign` under the claim needs it, under any session name. A verdict applied without a claim is exactly the race the
   claim lock exists to prevent.
 - **Run experiments through `bin/ar measure`**, never around it: it writes the

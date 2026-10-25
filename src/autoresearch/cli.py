@@ -1102,8 +1102,10 @@ def cmd_claim(args):
           f"(ceiling: {entry.claim.max_runs} runs / {entry.claim.max_hours} h)")
     # Printed once and stored nowhere but its hash (#33): the token is what
     # proves this claim is yours, under any session name.
-    print(f"token {claims.issued[entry.id]}  (pass --claim-token or export "
-          f"AR_CLAIM_TOKEN to release or update this claim)")
+    token = claims.issued[entry.id]
+    print(f"token {token}  (pass --claim-token, or add it to AR_CLAIM_TOKEN to "
+          f"release or update this claim; several tokens are comma-separated)")
+    print(f'  export AR_CLAIM_TOKEN="${{AR_CLAIM_TOKEN:+$AR_CLAIM_TOKEN,}}{token}"')
     return 0
 
 

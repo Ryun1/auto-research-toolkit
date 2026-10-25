@@ -126,3 +126,35 @@ def test_gates_updates_honour_the_token(sandbox, store, capsys):
                "--why", "x") == 2
     assert _ar(sandbox, "--session", "a", "--claim-token", token, "gates",
                "configure", "Q1", "--why", "x") == 0
+
+
+# -- several claims, several tokens (#44) ------------------------------------
+
+def test_one_session_holds_two_claims_with_both_tokens_exported(
+        sandbox, store, capsys, monkeypatch):
+    make_entry(store, "Q1")
+    make_entry(store, "Q2")
+    assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0
+    first = _token(capsys)
+    assert _ar(sandbox, "--session", "a", "claim", "Q2", "--why", "t") == 0
+    second = _token(capsys)
+    monkeypatch.setenv("AR_CLAIM_TOKEN", f"{first},{second}")
+    assert _ar(sandbox, "--session", "a", "release", "Q2", "--why", "x") == 0
+    assert _ar(sandbox, "--session", "a", "release", "Q1", "--why", "x") == 0
+
+
+def test_the_claim_output_shows_how_to_add_the_token(sandbox, store, capsys):
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0
+    out = capsys.readouterr().out
+    assert 'AR_CLAIM_TOKEN="${AR_CLAIM_TOKEN:+$AR_CLAIM_TOKEN,}' in out
+
+
+def test_no_matching_token_names_the_entry_and_the_count(sandbox, store, capsys):
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0
+    capsys.readouterr()
+    assert _ar(sandbox, "--session", "a", "--claim-token", "0" * 32 + "," + "1" * 32,
+               "release", "Q1", "--why", "x") == 2
+    err = capsys.readouterr().err
+    assert "none of the 2 claim tokens presented" in err and "Q1" in err

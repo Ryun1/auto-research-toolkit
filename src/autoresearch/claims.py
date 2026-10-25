@@ -242,15 +242,22 @@ class Claims:
         claim = entry.claim
         if not claim:
             raise ClaimError(f"{entry.id} holds no claim; nothing to act on")
-        presented = self.token or self.issued.get(entry.id)
+        # Several tokens may be presented, comma-separated (#44): a session
+        # holding two claims exports both, and the one that matches decides.
+        presented = [t.strip() for t in (self.token or "").split(",") if t.strip()]
+        if entry.id in self.issued:
+            presented.append(self.issued[entry.id])
         # A pin proves only the claim it pinned: an assignment recorded
         # against an earlier claim of the same entry proves nothing now.
         pinned = (expected_claim_at or self.pinned.get(entry.id)) == claim.at
         if claim.token_sha and presented:
-            if _token_sha(presented) != claim.token_sha:
+            if claim.token_sha not in {_token_sha(t) for t in presented}:
                 raise ClaimError(
                     f"{entry.id}: the claim token presented does not match the "
-                    f"claim {claim.session!r} holds")
+                    f"claim {claim.session!r} holds" if len(presented) == 1 else
+                    f"{entry.id}: none of the {len(presented)} claim tokens "
+                    f"presented matches the claim {claim.session!r} holds -- "
+                    f"add {entry.id}'s token (printed by `ar claim {entry.id}`)")
         elif claim.session != self.session:
             raise ClaimError(self._not_yours(entry))
         elif (claim.token_sha and not pinned
