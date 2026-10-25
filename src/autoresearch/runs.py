@@ -378,8 +378,9 @@ def frontier(store, records, goal):
     as a frontier that did not move.
     """
     findings, left_out, why = [], [], {}
+    entries = entry_index(store)
     for record in records:
-        reason = exclusion_reason(store, record, goal)
+        reason = exclusion_reason(store, record, goal, entries)
         if reason:
             why[id(record)] = reason
             left_out.append(record)
@@ -431,7 +432,9 @@ def confirmation_rows(store, records, goal) -> list[RunRecord]:
     """The rows `independent_confirmation` may read: frontier-eligible, and
     not held as suspect (#39) -- a row the frontier will not believe is not
     a second measurement of anything."""
-    eligible = [r for r in records if exclusion_reason(store, r, goal) is None]
+    entries = entry_index(store)
+    eligible = [r for r in records
+                if exclusion_reason(store, r, goal, entries) is None]
     if goal.suspect.k is None:
         return eligible
     from . import noise
@@ -453,7 +456,18 @@ def scored_rows(records, goal) -> list[tuple[float, RunRecord]]:
     return out
 
 
-def exclusion_reason(store, record, goal) -> str | None:
+def entry_index(store) -> dict | None:
+    """Every readable entry by id, read once (#46). `exclusion_reason` loaded
+    the owning entry from disk per row -- 13,000 YAML parses, about 50 s, on
+    a qsb-sized ledger for every frontier read. An unreadable file is simply
+    absent, which is what a failed load meant there too."""
+    read_all = getattr(store, "read_all", None)
+    if read_all is None:
+        return None              # a load-only store: fall back to per-row loads
+    return {entry.id: entry for entry in read_all()[0]}
+
+
+def exclusion_reason(store, record, goal, entries=None) -> str | None:
     """Why a row may not stand on the frontier, or None if it may.
 
     Three ways, each named on the board: its entry is scaffold (sig.golf H4);
@@ -462,7 +476,9 @@ def exclusion_reason(store, record, goal) -> str | None:
     size cap, a reduced-width toy (falcon H2, ecdsa H168; #9).
     """
     entry = None
-    if record.entry:
+    if record.entry and entries is not None:
+        entry = entries.get(record.entry)
+    elif record.entry:
         try:
             entry = store.load(record.entry)
         except Exception:        # unreadable evidence is no evidence
@@ -759,8 +775,9 @@ def noise_problems(config, store, records, entry_id) -> list[str]:
     if goal.noise.method == "none":
         return []
     from . import epochs, noise
+    entries = entry_index(store)
     rows = [r for r in epochs.current_rows(config, records)
-            if exclusion_reason(store, r, goal) is None]
+            if exclusion_reason(store, r, goal, entries) is None]
     return noise.confirmation_problems(goal, scored_rows(rows, goal), entry_id)
 
 

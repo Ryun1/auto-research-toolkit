@@ -55,12 +55,48 @@ def _run(config, name, cwd) -> str:
     return proc.stdout.strip()
 
 
+#: In-process `benchmark_revision` values by domain root: `(value, read at)`.
+_REVISIONS: dict = {}
+#: How long one reading of the benchmark revision stands (#46). Every board,
+#: budget, close and loop read asks; a benchmark moves in days.
+REVISION_TTL_SECONDS = 60.0
+
+
 def benchmark_revision(config) -> str:
     """`[commands] benchmark_revision`, run in the domain root; empty when the
-    domain declares none -- the evaluator hash alone then keys the epoch."""
+    domain declares none -- the evaluator hash alone then keys the epoch.
+
+    Read at most once a minute per process (#46). A command that fails falls
+    back to the last value it gave, said on stderr, so a flaky probe does not
+    take `ar board` and the loop down with it; with no last value it is still
+    an error -- an epoch is never guessed."""
     if "benchmark_revision" not in config.commands:
         return ""
-    return _run(config, "benchmark_revision", config.paths.root)
+    import json
+    import sys
+    import time
+    key = str(config.paths.root)
+    hit = _REVISIONS.get(key)
+    if hit and time.monotonic() - hit[1] < REVISION_TTL_SECONDS:
+        return hit[0]
+    last = config.paths.root / ".ar" / "benchmark-revision.json"
+    try:
+        value = _run(config, "benchmark_revision", config.paths.root)
+    except AutoresearchError as exc:
+        try:
+            value = json.loads(last.read_text())["value"]
+        except (OSError, ValueError, KeyError, TypeError):
+            raise exc from None
+        print(f"ar: {exc}; using the last known benchmark revision {value!r}",
+              file=sys.stderr)
+        return value
+    _REVISIONS[key] = (value, time.monotonic())
+    try:
+        last.parent.mkdir(parents=True, exist_ok=True)
+        last.write_text(json.dumps({"value": value}) + "\n")
+    except OSError:
+        pass
+    return value
 
 
 def source_revision(config, tree) -> tuple[str, bool | None]:

@@ -31,6 +31,7 @@ That is a known limit; a held-out evaluation (#38) is the structural answer.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import random
@@ -217,14 +218,9 @@ def compare(goal, incumbent: Group, candidate: Group, all_groups) -> Verdict:
         if short:
             return Verdict(None, f"the bootstrap needs {short} more run(s) "
                                  f"(two per config compared)", short)
-        seed = int(hashlib.sha256((incumbent.digest + candidate.digest)
-                                  .encode()).hexdigest()[:12], 16)
-        rng = random.Random(seed)
-        a, b = incumbent.values, candidate.values
-        diffs = sorted(_gain(goal, statistics.fmean(rng.choices(a, k=len(a))),
-                             statistics.fmean(rng.choices(b, k=len(b))))
-                       for _ in range(noise.resamples))
-        lower = diffs[int(noise.alpha * len(diffs))]
+        lower = _bootstrap_lower(incumbent.digest + candidate.digest,
+                                 tuple(incumbent.values), tuple(candidate.values),
+                                 goal.direction, noise.resamples, noise.alpha)
         return Verdict(lower > 0, f"bootstrap lower bound {lower:.6g}")
     raise AutoresearchError(f"no noise comparison for method {noise.method!r}")
 
@@ -279,6 +275,19 @@ def _released(goal, unit, beaten, by_config, promoted) -> bool:
     # unclaimed row is nobody's second measurement.
     sources = {source_of(r) for v, r in rows if goal.better(v, beaten)}
     return len(sources - {None}) >= 2
+
+
+@functools.lru_cache(maxsize=4096)
+def _bootstrap_lower(seed_text, a, b, direction, resamples, alpha) -> float:
+    """The `alpha` lower bound of the gain of `b` over `a`. Pure in its
+    arguments, so memoised (#46): admission and its settle pass compare the
+    same pairs again, and every frontier read repeats the whole pass."""
+    rng = random.Random(int(hashlib.sha256(seed_text.encode()).hexdigest()[:12], 16))
+    sign = 1.0 if direction == "minimise" else -1.0
+    diffs = sorted(sign * (statistics.fmean(rng.choices(a, k=len(a)))
+                           - statistics.fmean(rng.choices(b, k=len(b))))
+                   for _ in range(resamples))
+    return diffs[int(alpha * len(diffs))]
 
 
 def admit(goal, scored, promoted=frozenset()):

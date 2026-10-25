@@ -331,30 +331,44 @@ class Claims:
         if claim.session in self.ANONYMOUS:
             return _age_hours(claim.at), "the claim itself (a shared default name)"
         cache = _cache if _cache is not None else {}
-        if claim.session not in cache:
-            cache[claim.session] = self._signs_of_life(claim.session, claim.at)
+        index = cache.setdefault("_index", None) or self._activity_index()
+        cache["_index"] = index
         best = (_age_hours(claim.at), "the claim itself")
-        for hours, what in cache[claim.session]:
-            if hours < best[0]:
-                best = (hours, what)
+        event = index["events"].get(claim.session)
+        if event and event[0] > claim.at:
+            best = min(best, (_age_hours(event[0]), event[1]))
+        row = index["runs"].get(claim.session)
+        if row:
+            best = min(best, ((time.time() - row[0]) / 3600.0, row[1]))
+        key = ("git", claim.session, claim.at)
+        if key not in cache:
+            cache[key] = self._commit_naming(claim.session, claim.at)
+        if cache[key]:
+            best = min(best, cache[key])
         return best
 
-    def _signs_of_life(self, session, since) -> list[tuple[float, str]]:
-        import subprocess
-        out = []
+    def _activity_index(self) -> dict:
+        """Each session's latest event and latest run row, in one pass over
+        the store and one over the ledger (#46): per holder, the same scan
+        took ~3 s for 50 stale claims on a qsb-sized corpus."""
+        events, runs_seen = {}, {}
         for other in self.store.all():
             for event in other.history:
-                if event.who == session and event.at > since:
-                    out.append((_age_hours(event.at), f"{event.kind} on {other.id}"))
+                if event.who not in events or event.at > events[event.who][0]:
+                    events[event.who] = (event.at, f"{event.kind} on {other.id}")
         from . import runs as runs_mod
-        now = time.time()
         for row in runs_mod.read_all(self.config.paths.runs):
-            if row.session == session:
-                stamp = row.finished or row.started
-                if isinstance(stamp, (int, float)):
-                    out.append(((now - stamp) / 3600.0, f"run row {row.id}"))
-        # The name as a word, not a substring: `scout` is not `scouting`.
+            stamp = row.finished or row.started
+            if isinstance(stamp, (int, float)) and not isinstance(stamp, bool) and (
+                    row.session not in runs_seen or stamp > runs_seen[row.session][0]):
+                runs_seen[row.session] = (stamp, f"run row {row.id}")
+        return {"events": events, "runs": runs_seen}
+
+    def _commit_naming(self, session, since) -> tuple[float, str] | None:
+        """The latest commit since `since` naming `session` as a word."""
         import re
+        import subprocess
+        # The name as a word, not a substring: `scout` is not `scouting`.
         word = re.sub(r"([.\[\]()*+?{}|^$\\])", r"\\\1", session)
         try:
             proc = subprocess.run(
@@ -363,11 +377,11 @@ class Claims:
                  "-1", "--format=%ct %h"],
                 cwd=self.config.paths.root, capture_output=True, text=True)
         except OSError:                # no git on PATH: no commits to read
-            proc = None
-        if proc is not None and proc.returncode == 0 and proc.stdout.strip():
-            stamp, sha = proc.stdout.split()
-            out.append(((now - int(stamp)) / 3600.0, f"commit {sha} naming it"))
-        return out
+            return None
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return None
+        stamp, sha = proc.stdout.split()
+        return ((time.time() - int(stamp)) / 3600.0, f"commit {sha} naming it")
 
     def reapable(self, ttl_hours=None) -> list:
         """Orphaned active records, plus claims whose holder exceeded TTL.
