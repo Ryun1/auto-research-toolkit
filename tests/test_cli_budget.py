@@ -109,7 +109,8 @@ def test_budget_json_reports_meters_claims_and_stop(sandbox, store, capsys):
     assert cli.main(["--domain", str(sandbox.paths.root),
                      "budget", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
-    assert set(doc) == {"meters", "claims", "stop", "target", "best"}
+    assert set(doc) == {"meters", "claims", "stop", "target", "best",
+                        "excluded_scaffold"}
     assert set(doc["meters"]["runs"]) == {"spent", "remaining", "ceiling"}
     # The iteration meters share names with the domain's, so they are
     # namespaced rather than silently overwriting.

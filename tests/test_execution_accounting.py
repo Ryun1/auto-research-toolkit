@@ -264,6 +264,66 @@ def test_reserve_admits_the_declared_concurrency_when_the_key_is_missing(
     assert first["status"] == second["status"] == "reserved"
 
 
+def _setup_failed(config, row, error="git worktree add exited 128"):
+    """What `external.assign`'s except branch leaves behind: the row stays
+    ACTIVE so the half-built workspace can be cancelled or recovered, and
+    carries the error that stopped it."""
+    path = attempts.directory(config) / row["id"] / "record.json"
+    saved = json.loads(path.read_text())
+    saved["setup_error"] = error
+    path.write_text(json.dumps(saved))
+
+
+def test_a_setup_that_failed_holds_no_concurrency_slot(sandbox, store):
+    """sig.golf H9: one dead setup held a third of a campaign's concurrency
+    for seven hours, because reserve() counted a reservation that executes
+    nothing. Three live reservations plus the dead one still admit a fourth."""
+    for entry_id in ("Q1", "Q2", "Q3", "Q4", "Q5"):
+        claim(sandbox, store, entry_id)
+    dead = attempts.reserve(sandbox, "Q1", "owner", 30, kind="external")
+    _setup_failed(sandbox, dead)
+    for entry_id in ("Q2", "Q3", "Q4"):
+        assert attempts.reserve(sandbox, entry_id, "owner", 30)["status"] \
+            == "reserved"
+    with pytest.raises(AutoresearchError, match="ceiling exhausted") as excinfo:
+        attempts.reserve(sandbox, "Q5", "owner", 30)
+    message = str(excinfo.value)
+    assert dead["id"] not in message, message
+    # the refusal names who holds the slots, so "inspect attempts" is not the
+    # whole instruction
+    assert "Q2" in message and "Q3" in message and "Q4" in message \
+        and "owner" in message
+
+
+def test_a_failed_setup_stays_active_so_its_workspace_is_still_recoverable(
+        sandbox, store):
+    """The fix looks through the row at the ceiling; it does not settle it.
+    `ar external cancel` and workspace recovery read the status, and the
+    evidence of a half-built worktree is the point of keeping it."""
+    claim(sandbox, store)
+    row = attempts.reserve(sandbox, "Q1", "owner", 30, kind="external")
+    _setup_failed(sandbox, row)
+    assert attempts.load(sandbox, row["id"])["status"] == "reserved"
+    assert attempts.load(sandbox, row["id"])["setup_error"]
+
+
+def test_a_malformed_attempt_id_names_the_rule_and_where_to_read_one(sandbox,
+                                                                    store):
+    """sig.golf H13: the two verbs an operator holds when a dispatch went wrong
+    answered a truncated id with "invalid attempt identity" -- three words that
+    named neither the rule nor the way out."""
+    claim(sandbox, store)
+    with pytest.raises(AutoresearchError) as excinfo:
+        attempts.load(sandbox, "nope")
+    message = str(excinfo.value)
+    assert "32 lowercase hex" in message
+    assert "'nope'" in message
+    assert "ar attempt list" in message
+    # the other refusal that carried those words
+    with pytest.raises(AutoresearchError, match="32 lowercase hex"):
+        attempts.reconcile(sandbox, "nope", "owner", 0, "why")
+
+
 def test_the_record_cache_never_hides_a_new_row_a_changed_one_or_a_gone_one(
         sandbox, store):
     """The cache is an accelerator, not a second truth: save() refreshes the

@@ -171,7 +171,9 @@ def test_superseded_closure_names_its_replacement(sandbox, store, capsys):
     assert cli.main([*root_of(sandbox), "claim", "Q2", "--why", "retiring it"]) == 0
     assert cli.main([*root_of(sandbox), "close", "Q2", "superseded",
                      "--superseded-by", "Q1",
-                     "--memo", memo(sandbox, "inbox/Q2.md")]) == 0
+                     "--memo", memo(sandbox, "inbox/Q2.md"),
+                      "--summary", "retired by Q1"]) == 0
+
     assert "superseded by Q1" in capsys.readouterr().out
     retired = store.load("Q2")
     assert retired.status == "superseded"
@@ -223,7 +225,9 @@ def test_a_retired_entry_reopens(sandbox, store, capsys):
     assert cli.main([*root_of(sandbox), "claim", "Q2", "--why", "retiring it"]) == 0
     assert cli.main([*root_of(sandbox), "close", "Q2", "superseded",
                      "--superseded-by", "Q1",
-                     "--memo", memo(sandbox, "inbox/Q2.md")]) == 0
+                     "--memo", memo(sandbox, "inbox/Q2.md"),
+                      "--summary", "retired by Q1"]) == 0
+
     assert cli.main([*root_of(sandbox), "close", "Q2", "--reopen", "--why",
                      "the sibling it deferred to was refuted"]) == 0
     assert store.load("Q2").status == "queued"
@@ -240,6 +244,8 @@ def test_a_retired_sibling_is_not_evidence_against_its_parent(sandbox, store):
     assert cli.main([*root_of(sandbox), "claim", "Q2", "--why", "retiring it"]) == 0
     assert cli.main([*root_of(sandbox), "close", "Q2", "superseded",
                      "--superseded-by", "Q1",
-                     "--memo", memo(sandbox, "inbox/Q2.md")]) == 0
+                     "--memo", memo(sandbox, "inbox/Q2.md"),
+                      "--summary", "retired by Q1"]) == 0
+
     machine_for = lambda entry_id: sandbox.track_for(entry_id).machine  # noqa: E731
     assert rank.stagnant_parents(store.all(), machine_for, threshold=1) == {}

@@ -40,6 +40,82 @@ def inbox_warnings(config) -> list[str]:
     return warnings
 
 
+def closure_warnings(config) -> list[str]:
+    """Terminal entries whose closure states nothing, named with the remedy.
+
+    `ar close` refuses a verdict with no `--summary` (sig.golf H18), so these
+    are closures that predate the gate or came in by a path that never had one.
+    A warning, not a problem, because validate's contract is that a convention
+    nudge never changes the exit code -- and because the remedy exists
+    (`ar entry amend <id> --summary ... --why ...`), so this is work to do, not
+    a broken record.
+    """
+    from .entries import Store
+    out = []
+    for entry in Store(config.paths.entries).all():
+        if entry.result is None:
+            continue
+        if not config.track_for(entry.id).machine.status(
+                entry.result.verdict).terminal:
+            continue
+        if (entry.result.summary or "").strip():
+            continue
+        out.append(
+            f"{entry.id}: closed as {entry.result.verdict} with no summary -- "
+            f"the record states no verdict (renders as a dash, and the "
+            f"fabrication net has nothing to read). Complete it with "
+            f"`ar entry amend {entry.id} --summary ... --why ...`")
+    return out
+
+
+def output_warnings(config) -> list[str]:
+    """Run rows whose declared evidence is not in the tree.
+
+    `RunRecord.outputs` is the only pointer from a number to what produced it,
+    and nothing in core ever read that declaration back: a row whose outputs
+    were never retained, or were deleted afterwards, reads exactly like one
+    whose evidence is present (sig.golf H22 -- a hand-written row declaring two
+    paths that do not exist left `ar validate` clean).
+
+    A warning, never a problem: validate's contract is that a convention nudge
+    does not change the exit code, and a domain that retires scratch outputs
+    would otherwise be unable to validate at all. What core *can* check is
+    whether the declared path is **inside the tree**; whether a retained file is
+    still the bytes that were measured is the domain's own question (it keeps
+    digests for exactly that).
+
+    Containment, not existence: an absolute or `../` declaration resolves to a
+    real file often enough that an existence test passes it, while bytes that
+    live outside the root survive neither a clone, an `ar evidence pack`, a
+    bundle nor an `ar harness update` -- so the evidence a run row points at is
+    not the evidence that travels with the record (sig.golf H26 -- a row
+    declaring `/etc/hosts` validated clean because the file was there).
+    """
+    from .runs import read_all
+    out = []
+    try:
+        records = read_all(config.paths.runs)
+    except Exception as exc:            # the ledger's own check names bricked rows
+        return [f"runs: {exc}"]
+    root = config.paths.root.resolve()
+    for record in records:
+        for name in record.outputs:
+            path = (config.paths.root / name).resolve()
+            if not path.is_relative_to(root):
+                out.append(
+                    f"run {record.id}: declares output {name!r}, which resolves "
+                    f"outside the domain tree -- evidence that does not travel "
+                    f"with the record cannot be the evidence a number rests on "
+                    f"(pack it into the domain, or drop the declaration)")
+            elif not path.exists():
+                out.append(
+                    f"run {record.id}: declares output {name!r}, which is not "
+                    f"in the tree -- the measurement's evidence is gone "
+                    f"(retain it with `ar evidence pack`, or drop the "
+                    f"declaration)")
+    return out
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.

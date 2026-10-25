@@ -63,7 +63,33 @@ def test_arguments_pass_through_to_the_toolkit(root):
     stub(root, ".venv/bin/ar", "venv")
     done = run_shim(root, "--board", "x")
     assert done.returncode == 0
-    assert json.loads(done.stdout) == ["venv", "--board", "x"]
+    argv = json.loads(done.stdout)
+    # the shim's own argument first, then the user's, in order
+    assert argv[:3] == ["venv", "--domain", str(root.resolve())]
+    assert argv[3:] == ["--board", "x"]
+
+
+def test_the_shim_names_the_domain_it_lives_in(root):
+    """A shim knows which domain it belongs to; the toolkit does not. Without
+    `--domain`, running another domain's shim answers for whatever domain the
+    caller is standing in (sig.golf H17)."""
+    stub(root, ".venv/bin/ar", "venv")
+    argv = json.loads(run_shim(root, "board").stdout)
+    assert argv[argv.index("--domain") + 1] == str(root.resolve())
+
+
+def test_a_shim_run_from_elsewhere_still_answers_for_its_own_domain(
+        root, tmp_path):
+    """The reproduction: two scaffolded domains, the shim of one run with the
+    other as the working directory. It used to print the other domain's board."""
+    elsewhere = tmp_path / "elsewhere"
+    init(elsewhere, name="elsewhere")
+    for domain in (root, elsewhere):
+        stub(domain, ".venv/bin/ar", "venv")
+    done = subprocess.run([str(root / "bin" / "ar"), "board"], cwd=elsewhere,
+                         capture_output=True, text=True, timeout=10)
+    assert done.returncode == 0
+    assert json.loads(done.stdout)[2] == str(root.resolve())
 
 
 def test_without_any_toolkit_the_failure_names_the_remedy(root, tmp_path):

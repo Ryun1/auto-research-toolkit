@@ -210,6 +210,20 @@ def read_history(directory) -> list[Iteration]:
     return sorted(out, key=lambda i: i.n)
 
 
+def _proposals(data) -> tuple[list, list]:
+    """A generator's proposals, and anything it said about them.
+
+    A bare list is what the brief asks for. The envelope
+    `{"proposals": [...], "notes": [...]}` carries the one thing a bare list
+    cannot: why an empty one is empty (sig.golf H21 -- a phase that recorded
+    "did 0" with an empty detail could not be told from a brain that is broken).
+    """
+    if isinstance(data, dict):
+        return (list(data.get("proposals") or []),
+                [n for n in (data.get("notes") or []) if str(n).strip()])
+    return list(data or []), []
+
+
 class Coordinator:
     """Runs iterations until the goal is met, a budget runs out, or the queue
     stops repaying the machine time."""
@@ -265,32 +279,24 @@ class Coordinator:
             return None
 
     def _best(self):
-        """`(objective, record)` for the best measurement on disk, or None."""
-        return runs_mod.best_run(runs_mod.read_all(self.config.paths.runs),
-                                 self.config.goal)
+        """`(objective, record)` for the best measurement on disk, or None.
+
+        Scaffold rows are the frontier's business here too: a loop that stopped
+        on a wiring check's number would record a win nobody earned, on the one
+        screen the record exists to keep honest (sig.golf H4)."""
+        best, _excluded = runs_mod.frontier(
+            self.store, runs_mod.read_all(self.config.paths.runs),
+            self.config.goal)
+        return best
 
     def _unmet_required_gates(self, best) -> tuple[str, ...]:
         """Required gate names the best run's owning entry has not passed.
 
-        `best` carries the run record, and the record names its entry; the
-        entry carries the gate outcomes. A run that names no entry, or names
-        one the store cannot produce, counts as every gate unmet: a
-        measurement nobody can trace to its evidence cannot inherit a proof.
-
-        Empty when the goal declares no `required_gates`, so a goal without
-        the linkage stops exactly as before."""
-        required = self.config.goal.required_gates
-        if not required or best is None:
-            return ()
-        record = best[1]
-        if not record.entry:
-            return required
-        try:
-            entry = self.store.load(record.entry)
-        except Exception:            # unreadable evidence is no evidence
-            return required
-        states = {g.name: g.state for g in entry.gates}
-        return tuple(name for name in required if states.get(name) != "passed")
+        The derivation lives in `budget_mod`: `ar budget` asks the same
+        question of the same record, and two copies of it are how the meter
+        view and the loop came to disagree about a win (sig.golf H2)."""
+        return budget_mod.unmet_required_gates(
+            self.config.goal, self.store, best)
 
     @staticmethod
     def _norm_title(title) -> str:
@@ -694,7 +700,16 @@ class Coordinator:
             if not ok:
                 phase.detail.append(f"generator {i} raised {reply!r}")
                 continue
-            for proposal in (reply.data or []):
+            proposals, notes = _proposals(reply.data)
+            if not proposals:
+                # An empty answer is not an answer. The brief asked for
+                # hypotheses this board has not tried; "did 0" with nothing in
+                # the detail is indistinguishable from a brain that is broken,
+                # and a responder that knows why may say so (sig.golf H21).
+                phase.detail.append(
+                    f"generator {i} proposed nothing"
+                    + (f": {'; '.join(str(n) for n in notes)}" if notes else ""))
+            for proposal in proposals:
                 if not isinstance(proposal, dict) or not proposal.get("title"):
                     continue
                 problem = self._proposal_problem(proposal)
@@ -1180,7 +1195,12 @@ class Coordinator:
 
         try:
             applicability = report.get("applicability")
-            evidence_class = str(report.get("evidence_class") or "ledger")
+            # No default: a worker that never declared a class gets an
+            # unlabelled result, and the full net still applies to it because
+            # only an explicit official/census opts out (QSB H87).
+            evidence_class = report.get("evidence_class")
+            if evidence_class is not None:
+                evidence_class = str(evidence_class)
             # Replication gate: a `confirmed` experiment closure must leave
             # coordinator.confirm_runs valid rows in the ledger. Harvest
             # retains the worker's rows BEFORE this runs, so the evidence is
@@ -1322,7 +1342,13 @@ class Coordinator:
                 continue
             reply = value[1]
             self._charge(it, reply)
-            proposals = reply.data if isinstance(reply.data, list) else []
+            proposals, notes = _proposals(reply.data)
+            if not proposals:
+                # Same contract as the generator's (sig.golf H21): an empty
+                # answer says nothing about whether the scout was asked.
+                phase.detail.append(
+                    f"scout {i} proposed nothing"
+                    + (f": {'; '.join(str(n) for n in notes)}" if notes else ""))
             filed = 0
             for proposal in proposals:
                 if not isinstance(proposal, dict) or not proposal.get("title"):

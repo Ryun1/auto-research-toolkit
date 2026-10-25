@@ -218,9 +218,10 @@ def cmd_challenge_show(args):
           + f"  (fetched {snapshot.fetched_at}"
           + (f", published {snapshot.generated_at}" if snapshot.generated_at
              else "") + ")")
-    credit = challenge_mod.SOURCE_CREDIT.get(snapshot.source)
-    if credit:
-        print(f"credit: {credit}")
+    # The page in the credit is the one this campaign fetched, never a page
+    # pinned to the adapter: two challenges on one site are two different
+    # boards, and citing the wrong one is a false attribution (sig.golf H1).
+    print(f"credit: {challenge_mod.credit(snapshot)}")
     if snapshot.truth_label:
         print(f"truth: {snapshot.truth_label}")
     if snapshot.record:
@@ -242,7 +243,8 @@ def cmd_challenge_show(args):
             print(f"{row['rank']:>4}  {row['solver']:<24} {row['value']:>16,} "
                   f"+{row['delta']:>11,}  {row['at']}")
     else:
-        print("\nboard: no rows parsed from this source")
+        print("\nboard: no rows parsed from this source -- "
+              + challenge_mod.unreadable_reason(snapshot.source, snapshot.url))
     if snapshot.policy:
         policy = snapshot.policy
         print(f"\npolicy: {len(policy.get('allowed_paths') or [])} allowed, "
@@ -357,10 +359,13 @@ def cmd_board(args):
     except AutoresearchError as exc:
         print(f"(target unavailable: {exc})", file=sys.stderr)
         target = None
-    best = runs_mod.best_run(all_runs, config.goal)
+    best, excluded = runs_mod.frontier(store, all_runs, config.goal)
     print(render.board(config, entries, all_runs, target,
                        (best[0], best[1].entry or best[1].id) if best else None,
-                       skipped, best_metrics=best[1].metrics if best else None))
+                       skipped, best_metrics=best[1].metrics if best else None,
+                       unmet_required_gates=budget_mod.unmet_required_gates(
+                           config.goal, store, best),
+                       excluded_best=excluded))
     return 0
 
 
@@ -406,6 +411,20 @@ def cmd_entry_graph(args):
     return 0
 
 
+def _core_version(named: str | None) -> str:
+    """`--core auto` names this core, which is what the documented filing
+    command asks for.
+
+    It was never implemented: `auto` was stored verbatim and `harness export`
+    shipped it, so a defect filed the way AGENTS.md says carried no version at
+    all -- and that field exists so upstream can reproduce what the reporter saw
+    (sig.golf H20).
+    """
+    if (named or "").strip().lower() == "auto":
+        return upstream_mod.installed().version
+    return named or ""
+
+
 def cmd_entry_new(args):
     config = _load(args)
     if args.track not in config.tracks:
@@ -429,8 +448,8 @@ def cmd_entry_new(args):
         bar=args.bar or "", why_filed=args.why or "",
         confidence=args.confidence, impact=args.impact, cost=args.cost,
         mechanisms=args.mechanism or [], sources=args.source or [],
-        gate=args.gate or "",
-        core=args.core or "", repro=args.repro or "",
+        gate=args.gate or "", scaffold=bool(args.scaffold),
+        core=_core_version(args.core), repro=args.repro or "",
         observed=args.observed or "", expected=args.expected or "")
     if store.exists(entry.id):
         raise AutoresearchError(
@@ -471,8 +490,21 @@ def cmd_entry_amend(args):
     changes = {name: value for name, value in (
         (name, getattr(args, name, None)) for name in (
             "title", "hypothesis", "core", "repro", "observed", "expected",
-            "parent", "kind"))
+            "parent", "kind", "prediction", "bar", "why_filed", "scaffold"))
         if value is not None}
+    # The three filing-time fields a wrong number hides in. They are corrected
+    # in place like any other field, and like `reprice` and
+    # `correct_result_text` they demand a reason: `prediction` and `bar` are
+    # what the entry promised *before* it ran, so a silent rewrite is
+    # indistinguishable from having predicted it all along (sig.golf H6 --
+    # a Q6 predicted "at most 70,400 instructions" against a measured
+    # 145,952, and the only writer was a hand edit of the YAML).
+    if ({"prediction", "bar", "why_filed"} & set(changes)
+            and not (getattr(args, "why", None) or "").strip()):
+        raise AutoresearchError(
+            "correcting --prediction/--bar/--why-filed changes what the entry "
+            "promised before it ran; pass --why to say why the filed text was "
+            "wrong")
     if changes.get("parent") is not None:
         # Re-parenting runs the same gate the filing path runs: a parent that
         # does not exist, or one on another track, is a broken lineage, and
@@ -626,24 +658,44 @@ def cmd_harness_export(args):
 def cmd_harness_check(args):
     """What core is installed, what upstream has, and what changed between.
 
-    Read-only, and safe to run on a schedule: exit 0 means up to date, 1 means
-    an update is available, and anything else failed loudly rather than
-    reporting a clean comparison it did not make.
+    Read-only, and safe to run on a schedule: exit 1 means an update is
+    available, and anything else failed loudly rather than reporting a clean
+    comparison it did not make. Exit 0 means there is nothing to pull -- which
+    includes a checkout that has diverged from upstream, and the line printed
+    says exactly that instead of claiming it is up to date (sig.golf H15).
     """
     config = _load(args)
     plan = upstream_mod.plan_update(config, ref=args.ref)
     print(plan.summary())
-    if not plan.behind:
-        print("up to date")
-        return 0
-    print("update available")
-    if plan.changelog:
-        print("\nwhat changed:")
-        print(plan.changelog)
-    else:
-        print("\n(what changed could not be fetched; the update is still there)")
-    print("\ntake it with: ar harness update")
-    return 1
+    if plan.behind:
+        print("update available")
+        if plan.changelog:
+            print("\nwhat changed:")
+            print(plan.changelog)
+        else:
+            print("\n(what changed could not be fetched; the update is still "
+                  "there)")
+        print("\ntake it with: ar harness update")
+        return 1
+    print(_relation_note(plan))
+    return 0
+
+
+def _relation_note(plan) -> str:
+    """What the comparison found, for every case with nothing to pull.
+
+    `same` is the only one of the four that is "up to date". A checkout that
+    has diverged, or whose commit upstream has never seen, has nothing to pull
+    -- and printing "up to date" for either is the claim the comparison did not
+    earn, next to two different commits (sig.golf H15).
+    """
+    if plan.relation == "same":
+        return "up to date"
+    what = ("your commit is not in upstream at all -- it was never pushed"
+            if plan.relation == "unpushed"
+            else "your checkout and upstream have diverged")
+    return (f"nothing to pull automatically: {what}. Reconcile by hand "
+            f"(rebase, or reinstall from upstream) if you want their fixes.")
 
 
 def cmd_harness_update(args):
@@ -659,7 +711,7 @@ def cmd_harness_update(args):
     plan = upstream_mod.plan_update(config, ref=args.ref)
     print(plan.summary())
     if not plan.behind:
-        print("up to date; nothing to do")
+        print(_relation_note(plan))
         return 0
     if plan.changelog:
         print("\nwhat changed:")
@@ -713,7 +765,24 @@ def cmd_entry_list(args):
     config = _load(args)
     entries = _store(config).all()
     if args.status:
+        # A typo must not read as an empty queue: "0 entries read" is the same
+        # screen for "nothing is filed" and for "you asked for a status nobody
+        # declares", and a session that reads it stops looking (sig.golf H12).
+        declared = set()
+        for track in config.tracks.values():
+            declared |= track.machine.reachable()
+        unknown = [s for s in args.status if s not in declared]
+        if unknown:
+            raise AutoresearchError(
+                f"unknown status {unknown[0]!r}; declared: {sorted(declared)}")
         entries = [e for e in entries if e.status in args.status]
+    if args.track and args.track not in config.tracks:
+        # The same argument as the status filter above, and the same remedy:
+        # `entry new --track` and `entry graph --track` both refuse an
+        # undeclared track, so the one verb that lists by track was the last
+        # place a typo could read as an empty queue (sig.golf H12).
+        raise AutoresearchError(
+            f"unknown track {args.track!r}; declared: {sorted(config.tracks)}")
     if args.track:
         entries = [e for e in entries if e.track == args.track]
     if getattr(args, "json", False):
@@ -811,6 +880,19 @@ def cmd_close(args):
             "that does not name its replacement is how a duplicate outlives "
             "the entry it duplicated (H15)")
 
+    # A closure states what it decided. `summary` is the record's own typed
+    # sentence about the verdict: the closed queue row renders it, every brief
+    # carries it, and the fabrication net reads its numbers. Without one the
+    # row shows a dash -- the same glyph a lost statement would show -- and the
+    # net has nothing to check, so a closure that says nothing passes cleanly.
+    # Twenty-one of this domain's closures said nothing (sig.golf H18).
+    if track.machine.status(args.status).terminal and not (
+            args.summary or "").strip():
+        raise AutoresearchError(
+            f"closing {args.id} as {args.status} requires --summary: a "
+            f"closure states what it decided. For a closure that already "
+            f"exists, `ar entry amend {args.id} --summary ... --why ...` "
+            f"completes it.")
     memo_root = config.paths.root
     result = Result(
         verdict=args.status, memo=args.memo or "", at=_iso(), session=args.session,
@@ -1016,12 +1098,14 @@ def cmd_budget(args):
         target = _probe_target(config)
     except AutoresearchError:
         target = None
-    best = runs_mod.best_run(all_runs, config.goal)
+    best, excluded = runs_mod.frontier(store, all_runs, config.goal)
     decision = budget_mod.should_stop(
         config,
         measurements=best[1].metrics if best else None,
         target=target,
         budgets=[domain],
+        unmet_required_gates=budget_mod.unmet_required_gates(
+            config.goal, store, best),
         independent_confirmation=budget_mod.independent_confirmation(
             config.goal, best, all_runs, target))
 
@@ -1037,6 +1121,12 @@ def cmd_budget(args):
             "stop": {"reason": decision.reason, "detail": decision.detail},
             "target": finite(target),
             "best": finite(best[0]) if best else None,
+            # Named, never dropped silently: a wiring check's number is real,
+            # and a reader who cannot see what the frontier ignored cannot tell
+            # a flat frontier from a moved one (sig.golf H4).
+            "excluded_scaffold": (
+                {"id": excluded[1].id, "entry": excluded[1].entry,
+                 "objective": finite(excluded[0])} if excluded else None),
         }, indent=2))
         return 0
 
@@ -1053,16 +1143,23 @@ def cmd_budget(args):
             print(f"    OVERRUN: {row['overrun']}")
 
     print(f"\nstop decision: {decision}")
+    # The last line repeats the decision above it in the numbers a reader is
+    # looking for, so it is derived from that decision rather than from a
+    # second, looser `is_met`: a budget that prints GOAL MET beside a
+    # `running` stop decision is the sig.golf H2 record in one screen.
     # `target` is tested for truth, not for None: a zero target cannot be
     # normalised against, and `is_met` refuses it rather than dividing by it.
     if best is not None and target:
-        # The goal decides what "met" means -- its direction, and its own
-        # `stop_when` if it declares one. This line used to test `<` against the
-        # target itself, which said "not met" for every maximise domain and
-        # disagreed with the stop decision printed directly above it.
-        met = config.goal.is_met(best[1].metrics, target)
+        met = decision.reason == budget_mod.MET
         print(f"best objective {render._fmt(best[0])} vs target {render._fmt(target)}"
               + ("  ** GOAL MET **" if met else ""))
+    if excluded is not None:
+        # Named, never dropped silently (sig.golf H4): a wiring check's number
+        # is real, and a reader who cannot see what the frontier ignored cannot
+        # tell a flat frontier from a moved one.
+        value, record = excluded
+        print(f"excluded  {record.id} on {record.entry or '(no entry)'}: "
+              f"scaffold run, objective {render._fmt(value)} -- not a finding")
     return 0
 
 
@@ -1161,12 +1258,26 @@ def cmd_migrate(args):
             print(f"{track.id}: no source document at {source}, skipping "
                   "(set `migrate_from` on the track to name it)")
             continue
-        result = migrate_prose(
-            source, track=track.id,
-            claims_root=config.paths.claims if config.paths.claims.exists() else None,
-            root=config.paths.root,
-            terminal=tuple(track.machine.terminal_names),
-            machine=track.machine)
+        try:
+            result = migrate_prose(
+                source, track=track.id,
+                claims_root=config.paths.claims if config.paths.claims.exists() else None,
+                root=config.paths.root,
+                terminal=tuple(track.machine.terminal_names),
+                machine=track.machine)
+        except ValueError as exc:
+            # A document that is not a prose queue is a wrong input, not a
+            # crash: the common case is a domain whose track view is the
+            # GENERATED markdown of records that already exist (sig.golf H11).
+            # The parser's own diagnostic is kept -- it explains the format --
+            # and the remedy joins it.
+            reason = str(exc).rstrip()
+            reason = reason if reason.endswith(".") else reason + "."
+            raise AutoresearchError(
+                f"{source} is not a prose queue: {reason} Name the document "
+                f"to convert with `ar migrate --source <file>`, or set "
+                f"`migrate_from` on the {track.id!r} track to name it."
+            ) from exc
         print(f"\n=== {track.id} ({source.name}) ===")
         print(result.report())
         problems += [d.line() for d in result.disagreements]
@@ -1256,7 +1367,10 @@ def cmd_validate(args):
                          for p in record.problems(config.goal)]
     except AutoresearchError as exc:
         problems.append(str(exc))
-    warnings = validate_mod.inbox_warnings(config) + validate_mod.core_warnings(config)
+    warnings = (validate_mod.inbox_warnings(config)
+                + validate_mod.core_warnings(config)
+                + validate_mod.closure_warnings(config)
+                + validate_mod.output_warnings(config))
 
     if getattr(args, "json", False):
         # Only the document: warnings and the read-counts summary are prose
@@ -1303,6 +1417,20 @@ def cmd_skill_list(args):
     stale = skills_mod.stale_report(config, found, entries)
     body_lines = sum(s.lines for s in found)
     index_lines = len(found)
+    pending = skills_mod.undistilled(config, found, entries)
+    if getattr(args, "json", False):
+        # The document, because "is the debt map current?" is a question an
+        # agent asks before it writes, and answering it must not mean parsing
+        # the prose below (sig.golf H24).
+        print(json.dumps({
+            "skills": [{"name": s.name, "lines": s.lines, "stale": stale.get(s.name, []),
+                        "cites": s.cites, "description": s.description}
+                       for s in sorted(found, key=lambda s: s.name)],
+            "undistilled": [{"track": e["track"], "id": e["id"],
+                             "status": e["status"]} for e in pending],
+            "body_lines": body_lines, "index_lines": index_lines,
+        }, indent=2))
+        return 0
     for skill in sorted(found, key=lambda s: s.name):
         mark = "STALE" if skill.name in stale else "ok"
         print(f"{skill.name:<32} {skill.lines:>4}L  {mark:<5} "
@@ -1310,9 +1438,15 @@ def cmd_skill_list(args):
         print(f"    {textwrap.shorten(skill.description, 96)}")
         for reason in stale.get(skill.name, []):
             print(f"    stale: {reason}")
-    pending = skills_mod.undistilled(config, found, entries)
     print(f"\n{len(found)} skill(s); {len(stale)} stale; "
           f"{len(pending)} terminal entr(ies) cited by none")
+    # Per track, because the flat number cannot be read: two uncited harness
+    # entries say the debt map has drifted, seventeen uncited research closures
+    # say nothing (sig.golf H24).
+    for track in sorted({e["track"] for e in pending}):
+        ids = [e["id"] for e in pending if e["track"] == track]
+        shown = ", ".join(ids[:12]) + (f", +{len(ids) - 12} more" if len(ids) > 12 else "")
+        print(f"  {track:<10} {len(ids):>4}: {shown}")
     if found:
         # The ratio is the design: a brief carries the descriptions, not the
         # bodies. Printing it is what keeps that an observation and not a claim.
@@ -1667,6 +1801,11 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     new.add_argument("--bar", help="pre-registered confirm/refute criteria")
     new.add_argument("--why", help="why it is filed")
     new.add_argument("--gate", help="precondition on shippability, not on investigating")
+    new.add_argument("--scaffold", action="store_true",
+                     help="this entry measures the harness, not a hypothesis "
+                          "(a wiring check, a placeholder). Its run rows are "
+                          "excluded from the frontier and named on the board "
+                          "(sig.golf H4)")
     new.add_argument("--confidence", type=float, default=0.5)
     new.add_argument("--impact", type=float, default=0.0)
     new.add_argument("--cost", type=float, default=1.0)
@@ -1696,6 +1835,22 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     amend.add_argument("--repro", help="command or path that demonstrates it")
     amend.add_argument("--observed", help="what actually happened")
     amend.add_argument("--expected", help="what should have happened instead")
+    amend.add_argument("--scaffold", dest="scaffold", action="store_true",
+                       default=None,
+                       help="mark the entry as measuring the harness rather "
+                            "than a hypothesis; its run rows leave the frontier")
+    amend.add_argument("--no-scaffold", dest="scaffold", action="store_false",
+                       help="undo --scaffold: the entry's rows are findings again")
+    amend.add_argument("--prediction",
+                       help="correct the pre-registered prediction in place; "
+                            "requires --why, because it is what the entry "
+                            "promised before it ran (sig.golf H6)")
+    amend.add_argument("--bar",
+                       help="correct the pre-registered confirm/refute bar in "
+                            "place; requires --why")
+    amend.add_argument("--why-filed", dest="why_filed",
+                       help="correct why this entry was filed in place; "
+                            "requires --why")
     amend.add_argument("--parent", dest="parent",
                        help="correct the parent this entry branches from "
                             "(H15: a mis-parented entry had no writer but "
@@ -1760,8 +1915,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     skill = sub.add_parser("skill", help="the domain's distilled, cited skills")
     ssub = skill.add_subparsers(dest="skill_cmd", required=True)
-    ssub.add_parser("list", help="every skill, its citations and its staleness"
-                    ).set_defaults(func=cmd_skill_list)
+    slist = ssub.add_parser("list",
+                         help="every skill, its citations and its staleness")
+    slist.add_argument("--json", action="store_true",
+                       help="print the listing as JSON, so an agent can ask "
+                            "whether the map is current without parsing prose")
+    slist.set_defaults(func=cmd_skill_list)
     sfind = ssub.add_parser(
         "find", help="route on a term: AND-match over skill names and descriptions")
     sfind.add_argument("terms", nargs="+",

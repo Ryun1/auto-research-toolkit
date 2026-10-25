@@ -5,7 +5,7 @@ import pytest
 
 from autoresearch.errors import SchemaError
 from autoresearch.goal import Goal
-from autoresearch.runs import OK, RunRecord, append, best_run, read_all
+from autoresearch.runs import OK, RunRecord, append, best_run, frontier, read_all
 
 GOAL = Goal.from_dict({"goal": {
     "id": "g", "objective": "ops * peak",
@@ -210,3 +210,56 @@ def test_snapshot_reuses_the_digest_of_unchanged_files(tmp_path, monkeypatch):
     second = runs_mod.snapshot(tmp_path)
     assert len(calls) == 1  # the changed file was re-hashed
     assert second[pathlib.Path("s1.jsonl")][1] != first[pathlib.Path("s1.jsonl")][1]
+
+
+# -- the frontier ignores wiring checks (sig.golf H4) ------------------------
+
+class _Store:
+    """The one method `frontier` asks of a store."""
+
+    def __init__(self, **entries):
+        self._entries = entries
+
+    def load(self, entry_id):
+        return self._entries[entry_id]      # KeyError: unreadable evidence
+
+
+def _entry(scaffold=False):
+    return type("Entry", (), {"scaffold": scaffold})()
+
+
+def test_a_scaffold_row_leaves_the_frontier_and_is_named():
+    fixture = record(metrics={"ops": 1.0, "peak": 1.0}, id="fix", entry="Q1")
+    finding = record(metrics={"ops": 10.0, "peak": 1.0}, id="find", entry="Q2")
+    best, excluded = frontier(_Store(Q1=_entry(True), Q2=_entry()), [fixture, finding], GOAL)
+    assert (best[0], best[1].id) == (10.0, "find")
+    assert (excluded[0], excluded[1].id) == (1.0, "fix")
+
+
+def test_a_domain_whose_rows_are_all_scaffolding_has_no_frontier():
+    """Better no headline than a fixture's: the board says so instead of
+    ranking a wiring check as a finding."""
+    rows = [record(metrics={"ops": 1.0, "peak": 1.0}, id="a", entry="Q1"),
+            record(metrics={"ops": 2.0, "peak": 1.0}, id="b", entry="Q2")]
+    best, excluded = frontier(_Store(Q1=_entry(True), Q2=_entry(True)), rows, GOAL)
+    assert best is None
+    assert excluded[1].id == "a"      # the better of the two, for a minimise goal
+
+
+def test_a_row_naming_no_entry_is_a_finding():
+    """Default-deny runs one way: nothing is scaffolding unless the domain said
+    so, so an unattributed row is never quietly dropped from the frontier."""
+    rows = [record(metrics={"ops": 1.0, "peak": 1.0}, id="orphan"),
+            record(metrics={"ops": 9.0, "peak": 1.0}, id="find", entry="Q2")]
+    best, excluded = frontier(_Store(Q2=_entry()), rows, GOAL)
+    assert (best[0], best[1].id) == (1.0, "orphan")
+    assert excluded is None
+
+
+def test_a_row_whose_entry_cannot_be_read_stays_in_the_frontier():
+    """Nobody can prove an unreadable entry declared itself scaffolding."""
+    rows = [record(metrics={"ops": 1.0, "peak": 1.0}, id="lost", entry="Q404"),
+            record(metrics={"ops": 9.0, "peak": 1.0}, id="find", entry="Q2")]
+    best, excluded = frontier(_Store(Q2=_entry()), rows, GOAL)
+    assert (best[0], best[1].id) == (1.0, "lost")
+    assert excluded is None

@@ -213,8 +213,38 @@ def faithfulness_problems(records, entry, goal, detail_anchors=()) -> list[str]:
             pass
     if rows:
         anchor.add(float(len(rows)))
-    for token in re.findall(r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+\.\d+",
-                            entry.result.summary):
+    summary = entry.result.summary
+    # A comparison sentence names its baseline -- "objective 3,553,792 = -8.9%
+    # on the confirmed 3,899,520" -- and the net reads decimals only, so the
+    # baseline was invisible, the percentage had no pair of anchors to be
+    # arithmetic over, and an honest improvement read as fabricated (sig.golf
+    # H8: three ledger-backed closures, ten standing findings). A
+    # comma-grouped number that matches a retained row's objective value IS
+    # that baseline and joins the arithmetic pool, so the percentage is
+    # verified rather than waived; one that matches nothing is left alone,
+    # exactly as every other unchecked integer already is.
+    ledger_objectives: set[float] = set()
+    for record in records:
+        if record.status != OK:
+            continue
+        try:
+            ledger_objectives.add(abs(goal.objective_value(record.metrics)))
+        except Exception:
+            pass
+    compare = set(anchor)
+    for token in re.findall(r"\d{1,3}(?:,\d{3})+", summary):
+        value = abs(float(token.replace(",", "")))
+        if any(_tolerates(value, o) for o in ledger_objectives):
+            compare.add(value)
+    # A decimal inside a longer dotted run is part of an identifier, not a
+    # measurement: `leanprover/lean4:v4.31.0` is a build tag, and reading a
+    # number out of it put a version string on trial for fabrication
+    # (sig.golf H8). Tokenise the whole dotted run and keep only two-group
+    # decimals -- one point, one fraction -- which is every number anyone
+    # writes as a measurement.
+    for token in re.findall(r"\d+(?:\.\d+)+(?:[eE][+-]?\d+)?", summary):
+        if token.split("e")[0].split("E")[0].count(".") != 1:
+            continue
         value = abs(float(token))
         if value == 0.0:
             continue
@@ -225,19 +255,55 @@ def faithfulness_problems(records, entry, goal, detail_anchors=()) -> list[str]:
         # percentage change of two matched anchors is that arithmetic, so it
         # is accepted -- anything else cannot be traced to a measurement.
         if any(_tolerates(value, d)
-               for a in anchor for b in anchor if a is not b
+               for a in compare for b in compare if a is not b
                for d in (a - b,
                          a / b if b else None,
                          (a / b - 1) * 100 if b else None,
                          (1 - a / b) * 100 if b else None)
                if d is not None):
             continue
+        # Untraceable and untraceable-but-pre-registered are different
+        # findings, and only the QC role (or a person) can tell which one they
+        # are looking at. The number stays named either way; what changes is
+        # whether the record says it was written down before the run
+        # (sig.golf H23: every standing finding in this domain is a formula or a
+        # fraction that its own prediction already stated).
+        pre_registered = _pre_registered(entry, value)
+        suffix = ("" if not pre_registered else
+                  f" -- but it is stated in this entry's own {pre_registered}, "
+                  f"which was written before the run")
         out.append(
             f"{entry.id}: summary number {token} matches no retained run row "
             f"metric, objective value, settled run_detail figure, or "
             f"arithmetic over them ({len(rows)} row(s), "
-            f"{len(anchors)} run_detail figure(s) retained)")
+            f"{len(anchors)} run_detail figure(s) retained){suffix}")
     return out
+
+
+def _pre_registered(entry, value: float) -> str:
+    """Which of the entry's own fields already stated this number, if any.
+
+    Compared by value with the net's tolerance, not token for token: a summary
+    *reports*, so it rounds the figure its prediction stated exactly
+    ("0.66391" predicted, "0.664" reported), and a clause that only fires on an
+    identical spelling stays silent on the commonest shape (sig.golf H23).
+    """
+    for name in ("prediction", "bar"):
+        for other in _numbers(getattr(entry, name, "")):
+            if _tolerates(value, float(other)):
+                return name
+    return ""
+
+
+def _numbers(text: str) -> list[str]:
+    """The decimal numbers a typed field states, extracted as the net extracts.
+
+    Compared by value with the net's own tolerance rather than token for token: a
+    summary *reports*, so it rounds the figure its prediction stated exactly
+    ("0.66391" predicted, "0.664" reported), and a clause that only fires on an
+    identical spelling stays silent on the most common shape (sig.golf H23).
+    """
+    return re.findall(r"\d+\.\d+(?:[eE][+-]?\d+)?", text or "")
 
 
 def _tolerates(value: float, anchor: float, rel: float = 5e-3) -> bool:
@@ -277,6 +343,34 @@ def best_run(records, goal):
         if best is None or goal.better(value, best[0]):
             best = (value, record)
     return best
+
+
+def frontier(store, records, goal):
+    """`(best, excluded)` -- the record's frontier, and the best row left out.
+
+    A row whose owning entry is declared `scaffold` is a wiring check: its
+    number is real, its row belongs on the board, and it is not a finding about
+    the hypothesis. Reading it as one is how a domain's headline number becomes
+    a fixture for good (sig.golf H4: a wiring check at objective 4,768 outranked
+    a real scheme at 3,899,520, so a 15x improvement never appeared).
+
+    One resolver, because the board, the budget and the loop each deriving their
+    own is how they came to answer different questions about one record (the H2
+    shape). `excluded` is `(objective, record)` for the best scaffold row, so a
+    caller can *name* what it dropped: a row that vanishes without a word reads
+    as a frontier that did not move.
+    """
+    findings, scaffold = [], []
+    for record in records:
+        entry = None
+        if record.entry:
+            try:
+                entry = store.load(record.entry)
+            except Exception:        # unreadable evidence is no evidence
+                entry = None
+        (scaffold if entry is not None and getattr(entry, "scaffold", False)
+         else findings).append(record)
+    return best_run(findings, goal), best_run(scaffold, goal)
 
 
 def read_all(directory, strict: bool = False) -> list[RunRecord]:

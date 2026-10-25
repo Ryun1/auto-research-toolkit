@@ -416,6 +416,36 @@ def independent_confirmation(goal, best, records, target) -> bool:
     return False
 
 
+def unmet_required_gates(goal, store, best) -> tuple[str, ...]:
+    """Required gate names the best run's owning entry has not passed.
+
+    One resolution for every caller. `should_stop` is documented as the only
+    place a campaign decides to end, but a guard a caller may simply omit is a
+    guard that does not hold: sig.golf H2 recorded `goal-met` in `ar budget`
+    for a goal whose `admitted` gate no entry had passed, on the same record
+    where the loop correctly held the win open. The meter view and the loop
+    read one record, so they resolve one answer.
+
+    `best` carries the run record, and the record names its entry; the entry
+    carries the gate outcomes. A run that names no entry, or names one the
+    store cannot produce, counts as every gate unmet: a measurement nobody can
+    trace to its evidence cannot inherit a proof. Empty when the goal declares
+    no `required_gates`, so a goal without the linkage stops as before.
+    """
+    required = goal.required_gates
+    if not required or best is None:
+        return ()
+    record = best[1]
+    if not record.entry:
+        return required
+    try:
+        entry = store.load(record.entry)
+    except Exception:            # unreadable evidence is no evidence
+        return required
+    states = {g.name: g.state for g in entry.gates}
+    return tuple(name for name in required if states.get(name) != "passed")
+
+
 def should_stop(config, *, measurements=None, target=None,
                 verdicts_per_iteration=None, budgets=(),
                 unmet_required_gates=(),

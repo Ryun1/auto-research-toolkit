@@ -89,3 +89,81 @@ def test_validate_reports_in_progress_without_a_claim(sandbox, store, capsys):
 def test_an_empty_inbox_is_silent(sandbox):
     assert inbox_warnings(sandbox) == []
     assert sandbox.check() == []
+
+
+def test_a_closure_with_no_summary_warns_but_never_fails(sandbox, store, capsys):
+    """sig.golf H18: the gate is at closure, so the ones that predate it (or
+    arrived by a path that never had one) are a warning -- validate's contract
+    is that a convention nudge never changes the exit code."""
+    from autoresearch import cli, render
+    from autoresearch.validate import closure_warnings
+    from conftest import close
+    memo(sandbox, "inbox/Q1.md")
+    entry = close(sandbox, store, make_entry(store, "Q1"))
+    assert entry.result.summary
+    assert closure_warnings(sandbox) == []
+    entry.result.summary = ""
+    store.save(entry)
+    warnings = closure_warnings(sandbox)
+    assert len(warnings) == 1 and "Q1" in warnings[0] and "--summary" in warnings[0]
+    render.write_views(sandbox, store.all())
+    assert cli.main(["--domain", str(sandbox.paths.root), "validate"]) == 0
+    out = capsys.readouterr().out
+    assert "clean" in out and "Q1" in out
+
+
+def test_a_row_whose_declared_output_is_gone_is_named(sandbox, store, capsys):
+    """sig.golf H22: `RunRecord.outputs` is the only pointer from a number to
+    what produced it, and nothing read that declaration back -- so a row whose
+    evidence was never retained reads exactly like one whose evidence is
+    present. A warning, because validate's contract is that a convention nudge
+    never changes the exit code."""
+    from autoresearch import cli, render
+    from autoresearch.runs import OK, RunRecord, append
+    from autoresearch.validate import output_warnings
+    make_entry(store, "Q1")
+    append(sandbox.paths.runs / "s.jsonl", RunRecord(
+        id="ghost", session="s", entry="Q1", status=OK,
+        metrics={"ops": 1.0, "peak": 1.0}, provenance={"host": "x"},
+        outputs=["data/artifacts/never-written.bin"]))
+    warnings = output_warnings(sandbox)
+    assert len(warnings) == 1
+    assert "ghost" in warnings[0] and "never-written.bin" in warnings[0]
+    assert "evidence pack" in warnings[0]          # the remedy, named
+    render.write_views(sandbox, store.all())
+    assert cli.main(["--domain", str(sandbox.paths.root), "validate"]) == 0
+    assert "clean" in capsys.readouterr().out
+
+
+def test_a_row_whose_outputs_are_present_is_quiet(sandbox, store):
+    from autoresearch.runs import OK, RunRecord, append
+    from autoresearch.validate import output_warnings
+    keep = sandbox.paths.root / "data" / "artifacts"
+    keep.mkdir(parents=True, exist_ok=True)
+    (keep / "proof.bin").write_bytes(b"evidence")
+    append(sandbox.paths.runs / "s.jsonl", RunRecord(
+        id="kept", session="s", entry="Q1", status=OK,
+        metrics={"ops": 1.0, "peak": 1.0}, provenance={"host": "x"},
+        outputs=["data/artifacts/proof.bin"]))
+    assert output_warnings(sandbox) == []
+
+
+def test_evidence_declared_outside_the_tree_is_named(sandbox, store, tmp_path):
+    """sig.golf H26: existence is not containment. An absolute declaration, or
+    one that escapes with `../`, resolves to a real file often enough that an
+    existence test passes it -- while the bytes would not survive a clone, a
+    bundle or `ar harness update`, which is the property the warning is for."""
+    from autoresearch.runs import OK, RunRecord, append
+    from autoresearch.validate import output_warnings
+    make_entry(store, "Q1")
+    outside = tmp_path / "kept-outside.bin"
+    outside.write_bytes(b"x")
+    append(sandbox.paths.runs / "s.jsonl", RunRecord(
+        id="escaped", session="s", entry="Q1", status=OK,
+        metrics={"ops": 1.0, "peak": 1.0}, provenance={"host": "x"},
+        outputs=[str(outside), "../also-outside.bin"]))
+    warnings = output_warnings(sandbox)
+    # the present absolute path and the absent escape are both escapes
+    assert len(warnings) == 2
+    assert all("outside the domain tree" in w and "escaped" in w for w in warnings)
+    assert "kept-outside.bin" in warnings[0] and "also-outside.bin" in warnings[1]

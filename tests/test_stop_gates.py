@@ -183,6 +183,83 @@ def test_a_goal_without_required_gates_stops_as_before(sandbox):
     assert it.stop == MET
 
 
+
+# -- every reader of the decision (sig.golf H2) -------------------------------
+# The board and `ar budget` are what an agent reads before deciding whether to
+# keep going. A second caller of `should_stop` that simply omits the gate guard
+# answers "met" where the loop answers "running" -- on one record, two
+# verdicts, and the flattering one is the one a reader acts on. These go
+# through the real CLI, because the defect was a call site, not the decision.
+
+GATE = "kernel-proof"
+
+
+def require_gate(sandbox, gate=GATE):
+    """Point the sandbox's goal at a gate its research track defines."""
+    toml = sandbox.paths.root / "domain.toml"
+    toml.write_text(toml.read_text().replace(
+        '[[tracks]]\nid     = "harness"',
+        f'[[tracks.gates]]\nname = "{gate}"\n\n[[tracks]]\nid     = "harness"', 1))
+    goal = sandbox.paths.root / "goal.yaml"
+    goal.write_text(goal.read_text() + f"\n  required_gates: [{gate}]\n")
+
+
+def seed_gate_domain(sandbox, **entry):
+    """A sandbox whose best run meets the target, behind one unearned gate."""
+    require_gate(sandbox)
+    make_entry(Store(sandbox.paths.entries), "Q1", **entry)
+    seed_best_run(sandbox)
+
+
+def budget(sandbox, capsys):
+    from autoresearch import cli
+    assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
+    return capsys.readouterr().out
+
+
+def test_the_budget_view_does_not_call_an_unearned_win_a_win(sandbox, capsys):
+    seed_gate_domain(sandbox)
+    out = budget(sandbox, capsys)
+    assert f"stop decision: {RUNNING}" in out
+    assert GATE in out
+    assert "GOAL MET" not in out
+
+
+def test_the_budget_view_says_met_once_the_gate_is_passed(sandbox, capsys):
+    seed_gate_domain(sandbox, gates=[
+        {"name": GATE, "state": "passed", "evidence": ["proof log"]}])
+    out = budget(sandbox, capsys)
+    assert f"stop decision: {MET}" in out
+    assert "** GOAL MET **" in out
+
+
+def test_the_board_does_not_call_an_unearned_win_a_win(sandbox, capsys):
+    from autoresearch import cli
+    seed_gate_domain(sandbox)
+    assert cli.main(["--domain", str(sandbox.paths.root), "board"]) == 0
+    out = capsys.readouterr().out
+    assert "GOAL MET" not in out
+    assert f"required gate(s) not passed: {GATE}" in out
+
+
+def test_the_board_says_met_once_the_gate_is_passed(sandbox, capsys):
+    from autoresearch import cli
+    seed_gate_domain(sandbox, gates=[
+        {"name": GATE, "state": "passed", "evidence": ["proof log"]}])
+    assert cli.main(["--domain", str(sandbox.paths.root), "board"]) == 0
+    assert "** GOAL MET **" in capsys.readouterr().out
+
+
+def test_the_two_views_answer_the_same_question(sandbox, capsys):
+    """The defect was two call sites deriving the answer; one record, one
+    verdict -- whichever reader a session happens to open first."""
+    from autoresearch import cli
+    seed_gate_domain(sandbox)
+    out = budget(sandbox, capsys)
+    assert cli.main(["--domain", str(sandbox.paths.root), "board"]) == 0
+    board = capsys.readouterr().out
+    assert ("GOAL MET" in out) == ("GOAL MET" in board)
+
 # -- independent confirmation (AIRA arXiv 2507.02554 §5.3) -------------------
 # Selecting a search's final artifact by the proxy the search optimised
 # overfits: validation keeps rising while held-out performance plateaus.

@@ -270,6 +270,42 @@ def test_a_summary_tracing_to_the_ledger_is_clean(sandbox, store):
         sandbox.goal) == []
 
 
+
+def test_a_comparative_percentage_traces_to_the_baseline_it_names(sandbox, store):
+    """A campaign's summary says what it improved ON, and that baseline is
+    another entry's objective value, written the way people write large
+    numbers. The percentage is arithmetic over the two (sig.golf H8)."""
+    close(sandbox, store, make_entry(store, "Q1"),
+          summary="objective 3,553,792 = -8.9% on the confirmed 3,899,520")
+    row(sandbox, "Q1", {"ops": 3553792.0, "peak": 1.0}, session="a")
+    row(sandbox, "Q2", {"ops": 3899520.0, "peak": 1.0}, session="b")
+    assert runs_mod.faithfulness_problems(
+        runs_mod.read_all(sandbox.paths.runs), store.load("Q1"), sandbox.goal) == []
+
+
+def test_a_baseline_no_row_produced_does_not_launder_the_percentage(sandbox,
+                                                                  store):
+    """The widening is one number and it has to be a real one: naming a
+    baseline the ledger never produced has still invented the delta."""
+    close(sandbox, store, make_entry(store, "Q1"),
+          summary="objective 3,553,792 = -8.9% on the confirmed 3,999,999")
+    row(sandbox, "Q1", {"ops": 3553792.0, "peak": 1.0}, session="a")
+    problems = runs_mod.faithfulness_problems(
+        runs_mod.read_all(sandbox.paths.runs), store.load("Q1"), sandbox.goal)
+    assert problems and "8.9" in problems[0]
+
+
+def test_a_build_identifier_is_not_a_measurement(sandbox, store):
+    """`leanprover/lean4:v4.31.0` contributes 4.31 to the checked set, and a
+    version is not a number anyone fabricated (sig.golf H8)."""
+    close(sandbox, store, make_entry(store, "Q1"),
+          summary="built against leanprover/lean4:v4.31.0; "
+                   "T moved from 3.0 to 3.5 over 2 rows")
+    row(sandbox, "Q1", {"T": 3.0}, session="a")
+    row(sandbox, "Q1", {"T": 3.5}, session="b")
+    assert runs_mod.faithfulness_problems(
+        runs_mod.read_all(sandbox.paths.runs), store.load("Q1"), sandbox.goal) == []
+
 def test_a_verdict_with_no_rows_at_all_is_named(sandbox, store):
     close(sandbox, store, make_entry(store, "Q1"), summary="held")
     problems = runs_mod.faithfulness_problems([], store.load("Q1"),
@@ -344,14 +380,15 @@ def test_official_and_census_results_skip_the_ledger_checks(sandbox, store):
     assert runs_mod.faithfulness_problems([], store.load("Q2"), sandbox.goal) == []
 
 
-def test_the_ledger_default_keeps_the_fabrication_net(sandbox, store):
+def test_the_off_switch_default_keeps_the_fabrication_net(sandbox, store):
     """The off-switch test: without a declared class the strictness is
-    unchanged -- a summary number matching nothing is still named."""
+    unchanged -- a summary number matching nothing is still named. An
+    unlabelled closure is not a licence (QSB H87)."""
     close(sandbox, store, make_entry(store, "Q1"),
           summary="T measured at 0.417, decisive")
     _confirm_rows(sandbox, 1)
     entry = store.load("Q1")
-    assert entry.result.evidence_class == "ledger"
+    assert entry.result.evidence_class is None
     problems = runs_mod.faithfulness_problems(
         runs_mod.read_all(sandbox.paths.runs), entry, sandbox.goal)
     assert problems and "0.417" in problems[0]
@@ -414,3 +451,47 @@ def test_detail_anchors_read_from_settled_external_reports(sandbox):
 
     assert attempts_mod.detail_anchors_by_entry(sandbox) == {
         "Q1": [5.49], "Q2": [0.0498]}
+
+
+def test_a_number_the_prediction_already_stated_says_so(sandbox, store):
+    """sig.golf H23: the finding is KEPT -- the net must not waive a number it
+    cannot trace to the ledger -- but it names the pre-registration, because
+    "untraceable" and "untraceable, yet written down before the run" are
+    different findings and only the QC role can tell which it is looking at."""
+    row(sandbox, "Q1", {"T": 3.0}, session="a")
+    close(sandbox, store,
+          make_entry(store, "Q1", prediction="the keygen moment lands at 1.509"),
+          summary="measured; keygen moment 1.509 against B_keygen")
+    problems = runs_mod.faithfulness_problems(
+        runs_mod.read_all(sandbox.paths.runs), store.load("Q1"), sandbox.goal)
+    assert problems and "1.509" in problems[0]
+    assert "prediction" in problems[0] and "before the run" in problems[0]
+
+
+def test_a_number_nothing_predicted_keeps_the_plain_message(sandbox, store):
+    """The clause is evidence, not a loophole: a number the record never stated
+    anywhere is still reported as it was."""
+    row(sandbox, "Q1", {"T": 3.0}, session="a")
+    close(sandbox, store,
+          make_entry(store, "Q1", prediction="the moment will be near 1.5"),
+          summary="measured; keygen moment 0.417, decisive")
+    problems = runs_mod.faithfulness_problems(
+        runs_mod.read_all(sandbox.paths.runs), store.load("Q1"), sandbox.goal)
+    assert problems and "0.417" in problems[0]
+    assert "prediction" not in problems[0]
+
+
+def test_a_rounded_report_of_a_pre_registered_number_still_says_so(sandbox, store):
+    """sig.golf H23: a summary *reports*, so it rounds the figure its own
+    prediction stated exactly. The clause used to fire only on an identical
+    spelling, which left the commonest shape unexplained and sent a reviewer
+    hunting a non-fabrication."""
+    row(sandbox, "Q1", {"T": 3.0}, session="a")
+    close(sandbox, store,
+          make_entry(store, "Q1",
+                     prediction="band acceptance 0.66391 over 5,000 counters"),
+          summary="measured; band acceptance 0.664, decisive")
+    problems = runs_mod.faithfulness_problems(
+        runs_mod.read_all(sandbox.paths.runs), store.load("Q1"), sandbox.goal)
+    assert problems and "0.664" in problems[0]
+    assert "prediction" in problems[0]

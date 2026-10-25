@@ -1,5 +1,6 @@
 import hashlib
 import json
+import pathlib
 import stat
 import zipfile
 
@@ -22,6 +23,23 @@ def prepared(tmp_path):
     packed = pack(source, ["results"], archive, sources=["code.py"],
                   metadata={"note": "untrusted producer metadata"})
     return source, archive, packed
+
+
+def test_a_relative_archive_lands_inside_the_domain_not_the_cwd(tmp_path,
+                                                                monkeypatch):
+    """sig.golf H14: the archive is this domain's evidence, so where it lands
+    decides which domain claims it. Resolved against the process CWD it landed
+    in whatever directory the caller happened to be standing in -- once, that
+    was another domain's findings lane."""
+    source = tmp_path / "source"
+    (source / "results").mkdir(parents=True)
+    (source / "results" / "proof.bin").write_bytes(b"evidence")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    packed = pack(source, ["results"], "handoff.zip")
+    assert pathlib.Path(packed["archive"]) == (source / "handoff.zip").resolve()
+    assert not (elsewhere / "handoff.zip").exists()
 
 
 def rewrite(archive, destination, mutate):

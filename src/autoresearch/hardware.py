@@ -88,6 +88,7 @@ class Host:
     memory_gb: float = 0.0
     memory_available_gb: float | None = None
     gpu: GPU = field(default_factory=GPU)
+    cpu_features: frozenset[str] = frozenset()
     on_battery: bool | None = None
     thermal_throttled: bool | None = None
     hostname: str = ""
@@ -149,6 +150,8 @@ class Host:
             lines.append(f"power       {'battery' if self.on_battery else 'AC'}"
                          + ("  ** sustained throughput will be lower **"
                             if self.on_battery else ""))
+        if self.cpu_features:
+            lines.append("cpu         features " + " ".join(sorted(self.cpu_features)))
         if self.thermal_throttled:
             lines.append("thermal     THROTTLED — any figure taken now is a "
                          "lower bound, not a measurement")
@@ -159,7 +162,9 @@ class Host:
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
-        return dataclasses.asdict(self)
+        data = dataclasses.asdict(self)
+        data["cpu_features"] = sorted(self.cpu_features)
+        return data
 
 
 # -- detection -------------------------------------------------------------
@@ -193,6 +198,28 @@ def _detect_macos(host: Host) -> None:
     if host.vendor == "apple":
         host.gpu = GPU(backend="metal", name=host.chip, unified=True,
                        memory_gb=host.memory_gb)
+        feature_sysctls = {
+            "AdvSIMD": "hw.optional.arm.FEAT_AdvSIMD",
+            "AES": "hw.optional.arm.FEAT_AES",
+            "PMULL": "hw.optional.arm.FEAT_PMULL",
+            "SHA1": "hw.optional.arm.FEAT_SHA1",
+            "SHA2": "hw.optional.arm.FEAT_SHA2",
+            "SHA3": "hw.optional.arm.FEAT_SHA3",
+            "CRC32": "hw.optional.arm.FEAT_CRC32",
+            "DotProd": "hw.optional.arm.FEAT_DotProd",
+            "FP16": "hw.optional.arm.FEAT_FP16",
+            "BF16": "hw.optional.arm.FEAT_BF16",
+            "I8MM": "hw.optional.arm.FEAT_I8MM",
+            "BTI": "hw.optional.arm.FEAT_BTI",
+            "LSE": "hw.optional.arm.FEAT_LSE",
+            "RDM": "hw.optional.arm.FEAT_RDM",
+            "FHM": "hw.optional.arm.FEAT_FHM",
+        }
+        host.cpu_features = frozenset(
+            feature for feature, key in feature_sysctls.items() if _sysctl(key) == "1")
+        legacy = _sysctl("machdep.cpu.features")
+        if legacy:
+            host.cpu_features |= frozenset(legacy.lower().split())
         display = _run("system_profiler", "-json", "SPDisplaysDataType", timeout=20)
         if display:
             try:
@@ -216,6 +243,7 @@ def _detect_macos(host: Host) -> None:
 
 
 def _detect_linux(host: Host) -> None:
+    info = ""
     try:
         info = open("/proc/cpuinfo").read()
         model = re.search(r"^model name\s*:\s*(.+)$", info, re.M)
@@ -226,6 +254,9 @@ def _detect_linux(host: Host) -> None:
     lower = host.chip.lower()
     host.vendor = ("amd" if "amd" in lower else
                    "intel" if "intel" in lower else "unknown")
+    match = re.search(r"^flags\s*:\s*(.+)$", info, re.M)
+    if match:
+        host.cpu_features = frozenset(match.group(1).lower().split())
     try:
         for line in open("/proc/meminfo"):
             if line.startswith("MemTotal:"):
@@ -332,6 +363,8 @@ class Requirement:
     min_threads: int = 1
     needs_gpu: str = ""             # "", "any", "metal", "cuda"
     min_gpu_memory_gb: float = 0.0
+    target_arch: str = ""
+    target_features: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, name: str, spec: dict) -> Requirement:
@@ -341,6 +374,15 @@ class Requirement:
             raise ConfigError(
                 f"hardware requirement {name!r} has unknown key(s) "
                 f"{sorted(unknown)}; known: {sorted(known)}")
+        spec = dict(spec)
+        if "target_features" in spec:
+            raw = spec["target_features"]
+            if not isinstance(raw, (list, tuple)) or not all(
+                    isinstance(feature, str) and feature for feature in raw):
+                raise ConfigError(
+                    f"hardware requirement {name!r} target_features must be "
+                    f"a list of non-empty strings")
+            spec["target_features"] = tuple(raw)
         return cls(name=name, **spec)
 
 
@@ -361,6 +403,15 @@ class Capability:
 
 def check(host: Host, requirement: Requirement) -> Capability:
     problems = []
+    if requirement.target_arch and host.arch != requirement.target_arch:
+        problems.append(
+            f"needs {requirement.target_arch} architecture, host has {host.arch}")
+    missing_features = set(requirement.target_features) - host.cpu_features
+    if missing_features:
+        available = ", ".join(sorted(host.cpu_features)) or "none detected"
+        problems.append(
+            f"needs CPU features {', '.join(sorted(missing_features))}, "
+            f"host has {available}")
     if requirement.min_memory_gb and host.memory_gb < requirement.min_memory_gb:
         problems.append(
             f"needs {requirement.min_memory_gb:.1f} GB, host has "

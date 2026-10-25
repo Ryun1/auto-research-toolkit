@@ -22,9 +22,49 @@ def test_detect_reports_this_machine_without_raising():
     assert host.describe()
 
 
+def test_host_record_serializes_cpu_features_as_a_sorted_list():
+    import json
+    host = m2(cpu_features=frozenset({"sha_ni", "avx2"}))
+    assert json.loads(json.dumps(host.to_dict()))["cpu_features"] == ["avx2", "sha_ni"]
+
+
 def test_fingerprint_identifies_the_machine():
     assert m2().fingerprint == "Apple-M2/8t/16g"
     assert m2(chip="Apple M5", cpu_threads=10).fingerprint == "Apple-M5/10t/16g"
+
+
+def test_target_architecture_must_match_the_host():
+    cap = check(m2(), Requirement(name="x86-only", target_arch="x86_64"))
+    assert not cap.ok
+    assert cap.problems == ["needs x86_64 architecture, host has arm64"]
+
+
+def test_macos_detection_includes_optional_cpu_features(monkeypatch):
+    from autoresearch import hardware
+    values = {
+        "machdep.cpu.brand_string": "Apple M5",
+        "hw.perflevel0.logicalcpu": "4",
+        "hw.perflevel1.logicalcpu": "6",
+        "hw.memsize": str(32 * hardware.GIB),
+        "hw.optional.arm.FEAT_AdvSIMD": "1",
+        "hw.optional.arm.FEAT_AES": "1",
+        "hw.optional.arm.FEAT_SHA2": "1",
+        "hw.optional.arm.FEAT_SHA3": "0",
+    }
+    monkeypatch.setattr(hardware, "_sysctl", lambda key: values.get(key, ""))
+    monkeypatch.setattr(hardware, "_run", lambda *args, timeout=5: "")
+    host = hardware.Host(os="Darwin", arch="arm64", cpu_threads=10)
+    hardware._detect_macos(host)
+    assert {"AdvSIMD", "AES", "SHA2"} <= host.cpu_features
+    assert "SHA3" not in host.cpu_features
+
+
+def test_required_cpu_features_must_all_be_present():
+    host = m2(cpu_features=frozenset({"avx2", "sha_ni"}))
+    assert check(host, Requirement(name="avx2", target_features=("avx2",))).ok
+    cap = check(host, Requirement(name="avx512", target_features=("avx512f",)))
+    assert not cap.ok
+    assert cap.problems == ["needs CPU features avx512f, host has avx2, sha_ni"]
 
 
 def test_apple_silicon_reports_heterogeneous_cores_and_unified_memory():
@@ -69,6 +109,11 @@ def test_capability_failure_names_every_reason():
 def test_unified_memory_is_named_when_gpu_memory_is_short():
     cap = check(m2(), Requirement(name="x", min_gpu_memory_gb=64))
     assert any("unified" in p for p in cap.problems)
+
+
+def test_target_features_must_be_nonempty_strings():
+    with pytest.raises(ConfigError, match="target_features"):
+        Requirement.from_dict("x", {"target_features": [""]})
 
 
 def test_metal_host_does_not_satisfy_a_cuda_requirement():

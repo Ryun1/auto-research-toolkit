@@ -62,6 +62,12 @@ def evidence_problems(entry: Entry, track) -> list[str]:
     Every refusal names the missing field, because "incomplete" without the
     field name sends the reporter back to diff-hunting."""
     missing = [name for name in REQUIRED_FIELDS if not getattr(entry, name)]
+    if (getattr(entry, "core", "") or "").strip().lower() == "auto":
+        # Present but meaningless: the field names no version, so the upstream
+        # half of the loop has nothing to reproduce against (sig.golf H20).
+        return [f"{entry.id}: core is the literal 'auto' -- name the version "
+                f"this defect was observed on, or repair it with "
+                f"`ar entry amend {entry.id} --core <version>`"]
     if not missing:
         return []
     return [

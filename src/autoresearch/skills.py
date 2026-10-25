@@ -57,11 +57,15 @@ def core_version() -> str:
     semantics and the check rules both live in core, so a skill diagnosed a
     year later has to say what wrote it. `unknown` when the package is not
     installed -- a running-from-source checkout is a real case, and saying so
-    beats an empty string that reads as 'nobody recorded this'."""
-    from importlib import metadata
+    beats an empty string that reads as 'nobody recorded this'.
+
+    Read from the same place `ar doctor` and `ar harness check` read it, so a
+    skill, a defect and a diagnosis never quote three different versions for one
+    checkout (sig.golf H20)."""
+    from . import upstream
     try:
-        return metadata.version("autoresearch")
-    except metadata.PackageNotFoundError:
+        return upstream.installed().version
+    except AutoresearchError:
         return "unknown"
 
 
@@ -236,8 +240,16 @@ def _distilled_at(skill) -> str:
     `distilled: {at: }` parses to None, and `str(None)` is "None", which sorts
     above every ISO timestamp -- so the comparison below would be permanently
     false and the check would pass by never running.
+
+    A `datetime` is accepted too, because that is what YAML makes of the form
+    the documentation shows: `at: 2026-08-31T09:12:04Z` unquoted resolves to a
+    timestamp object, so a skill copied from the scaffold's own README was told
+    it carried no timestamp at all (sig.golf H10). The reader must not be sent
+    to add a field they already wrote.
     """
     raw = skill.distilled.get("at")
+    if isinstance(raw, dt.datetime):
+        return raw.isoformat()
     return str(raw) if isinstance(raw, str) and raw[:4].isdigit() else ""
 
 
@@ -518,6 +530,10 @@ def undistilled(config, skills, entries) -> list[dict]:
         result = entry.result
         out.append({
             "id": entry.id,
+            # Which track the entry belongs to: a flat "19 uncited" cannot be
+            # read, because two uncited harness entries and seventeen uncited
+            # research closures are different facts (sig.golf H24).
+            "track": entry.track,
             "title": entry.title,
             "status": entry.status,
             "closure_kind": getattr(result, "closure_kind", None),

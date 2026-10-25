@@ -322,10 +322,16 @@ toolkit reachable the way every other tool here is (`bin/<name>`), and
 
 Probes this domain's venvs -- `.venv312/bin/ar` first, the toolkit needs
 Python >= 3.11 and many machines ship an older system `python3` -- then
-`.venv/bin/ar`, and execs the first found with all arguments. Otherwise it
-falls back to `python3 -m autoresearch`; if no interpreter has the module the
-failure is LOUD and names the remedy, never a quiet fall-through to the
-archiver.
+`.venv/bin/ar`, and execs the first found with all arguments, naming THIS
+domain. Otherwise it falls back to `python3 -m autoresearch`; if no interpreter
+has the module the failure is LOUD and names the remedy, never a quiet
+fall-through to the archiver.
+
+--domain is passed because the shim knows which domain it belongs to and the
+toolkit does not: without it, running `other-domain/bin/ar board` from anywhere
+answers for whatever domain the caller is standing in, with a plausible exit
+code (sig.golf H17). An explicit --domain in the user's own arguments still
+wins, because argparse keeps the last occurrence.
 """
 import pathlib
 import subprocess
@@ -340,7 +346,7 @@ def main():
         ar = ROOT / candidate
         if ar.is_file():
             raise SystemExit(subprocess.run(
-                [str(ar), *sys.argv[1:]]).returncode)
+                [str(ar), "--domain", str(ROOT), *sys.argv[1:]]).returncode)
     try:
         probed = subprocess.run(
             ["python3", "-c", "import autoresearch"], capture_output=True)
@@ -348,7 +354,8 @@ def main():
         probed = None
     if probed is not None and probed.returncode == 0:
         raise SystemExit(subprocess.run(
-            ["python3", "-m", "autoresearch", *sys.argv[1:]]).returncode)
+            ["python3", "-m", "autoresearch", "--domain", str(ROOT),
+             *sys.argv[1:]]).returncode)
     sys.exit(
         "bin/ar: the auto-research-toolkit is not installed anywhere this "
         f"shim can reach (probed {', '.join(str(ROOT / c) for c in CANDIDATES)}"
@@ -402,7 +409,7 @@ name: width-validity-gate
 description: "Use when a proposal touches `width` or a run comes back unscored:
   'invalid', validity gate, rows that vanish from a sweep."
 cites: [Q7, Q12]
-distilled: {at: 2026-08-31T09:12:04Z, iteration: 14, core: 0.1.0}
+distilled: {at: '2026-08-31T09:12:04Z', iteration: 14, core: 0.1.0}
 ---
 
 # Width below 16 does not trade -- it deletes the run
@@ -617,6 +624,12 @@ GITIGNORE = '''# Per-machine state. Stopping work on one machine and resuming on
 # never running here -- plus a merge conflict on every handoff, over a file
 # whose whole purpose is local mutual exclusion.
 state/claims/
+
+# state/.locks/ holds the per-entry write locks `Store.save` takes so its
+# compare and its replace cannot interleave. Same argument as state/claims/: a
+# lock names a pid and a holder that mean nothing on another machine, and a
+# committed one buys a stall until it goes stale.
+state/.locks/
 
 # .ar/ holds the workspace pool: markers recording absolute paths that exist on
 # one machine only. The coordinator destroys its own slots in a `finally`;

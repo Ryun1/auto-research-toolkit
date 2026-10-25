@@ -22,6 +22,9 @@ from autoresearch.scaffold import init
 from autoresearch.skills import core_version
 from conftest import make_entry
 
+DEFAULT_HARNESS = type("T", (), {"id": "harness",
+                                 "requires_defect_evidence": True})()
+
 
 def file_defect(store, entry_id="H1", **over):
     data = dict(id=entry_id, track="harness",
@@ -346,3 +349,33 @@ def test_the_scaffold_makes_publishing_human_only(tmp_path):
     assert rules, "the publishing gate is missing from the scaffold"
     with pytest.raises(Exception, match="human-only"):
         config.policy.check_command(rules[0].example)
+
+
+def test_a_defect_recorded_as_auto_is_refused_by_name(store):
+    """sig.golf H20: the documented filing command writes `--core auto` and
+    nothing implemented it, so the field named no version at all -- and
+    `harness export` shipped it. Present but meaningless must not read as
+    present."""
+    entry = file_defect(store, core="auto")
+    problems = defects_mod.evidence_problems(entry, DEFAULT_HARNESS)
+    assert problems and "auto" in problems[0]
+    assert "amend" in problems[0]          # the repair, named
+
+
+def test_a_defect_with_a_real_version_is_unaffected(store):
+    assert defects_mod.evidence_problems(
+        file_defect(store, core="0.8.0"), DEFAULT_HARNESS) == []
+
+
+
+def test_core_auto_records_this_cores_version(sandbox, store):
+    """sig.golf H20: `--core auto` -- the flag this domain's AGENTS.md tells
+    every agent to use -- resolves to the version this core actually is, so the
+    documented filing command records provenance upstream can reproduce."""
+    from autoresearch import upstream as up_mod
+    assert ar(["--domain", str(sandbox.paths.root), "entry", "new", "a defect",
+               "--track", "harness", "--core", "auto", "--repro", "x",
+               "--observed", "y", "--expected", "z"]) == 0
+    stored = store.load("H1").core
+    assert stored and stored != "auto"
+    assert stored == up_mod.installed().version

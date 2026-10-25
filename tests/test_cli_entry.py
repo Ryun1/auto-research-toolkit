@@ -99,7 +99,7 @@ def test_amend_declares_the_evidence_class(sandbox, store, capsys):
     landed: one command, one typed field, --why mandatory, views re-rendered
     so validate follows without a manual render (the H32-class hygiene)."""
     entry = close(sandbox, store, make_entry(store, "Q1"))
-    assert entry.result.evidence_class == "ledger"
+    assert entry.result.evidence_class is None  # unlabelled until declared
 
     assert _ar(sandbox, "entry", "amend", "Q1",
                "--evidence-class", "official") == 2
@@ -125,5 +125,105 @@ def test_amend_refuses_a_reclassification_combined_with_field_edits(sandbox,
                "--title", "renamed") == 2
     assert "pass it alone" in capsys.readouterr().err
     entry = store.load("Q1")
-    assert entry.result.evidence_class == "ledger"
+    assert entry.result.evidence_class is None  # unlabelled until declared
     assert entry.title != "renamed"
+
+
+# -- the pre-registration has a writer (sig.golf H6) --------------------------
+# `entry new` takes --prediction/--bar/--why and amend could correct neither:
+# a number found wrong at filing time could only be fixed by hand-editing the
+# YAML, beside the record, where nothing renders or validates it.
+
+def test_amend_corrects_a_prediction_that_was_filed_wrong(sandbox, store):
+    make_entry(store, "Q1", prediction="at most 70,400 instructions")
+    assert _ar(sandbox, "entry", "amend", "Q1",
+               "--prediction", "at most 145,952 instructions",
+               "--why", "the image census measured 145,952") == 0
+    assert store.load("Q1").prediction == "at most 145,952 instructions"
+
+
+def test_the_superseded_prediction_stays_in_the_history(sandbox, store):
+    """An amend is a blind full-value write (H15), so the previous value has to
+    ride along -- otherwise the correction destroys the evidence that the
+    entry once claimed something else."""
+    make_entry(store, "Q1", prediction="at most 70,400 instructions")
+    _ar(sandbox, "entry", "amend", "Q1",
+       "--prediction", "at most 145,952 instructions", "--why", "measured")
+    event = store.load("Q1").history[-1]
+    assert event.kind == "amend"
+    assert "at most 70,400 instructions" in event.detail
+
+
+def test_amend_corrects_the_bar_and_the_reason_it_was_filed(sandbox, store):
+    make_entry(store, "Q1", bar="confirmed if C < 5000", why_filed="a hunch")
+    assert _ar(sandbox, "entry", "amend", "Q1",
+               "--bar", "confirmed if C < 5400",
+               "--why-filed", "derived from the Q6 census",
+               "--why", "both were transcribed from a stale note") == 0
+    entry = store.load("Q1")
+    assert entry.bar == "confirmed if C < 5400"
+    assert entry.why_filed == "derived from the Q6 census"
+
+
+def test_amend_will_not_silently_rewrite_the_pre_registration(sandbox, store,
+                                                              capsys):
+    """No --why, no write: a prediction that changes with no stated reason is
+    indistinguishable from one that was right all along."""
+    make_entry(store, "Q1", prediction="at most 70,400 instructions")
+    assert _ar(sandbox, "entry", "amend", "Q1",
+               "--prediction", "at most 145,952 instructions") == 2
+    assert "--why" in capsys.readouterr().err
+    assert store.load("Q1").prediction == "at most 70,400 instructions"
+
+
+def test_a_closed_entry_s_prediction_can_still_be_corrected(sandbox, store):
+    """The same stance `close --summary` takes (QSB H82): a terminal verdict is
+    not the last word on prose that is wrong, only on the verdict."""
+    close(sandbox, store, make_entry(store, "Q1", prediction="70,400"))
+    assert _ar(sandbox, "entry", "amend", "Q1",
+               "--prediction", "145,952",
+               "--why", "the census measured the real image") == 0
+    assert store.load("Q1").prediction == "145,952"
+
+
+def test_an_entry_can_be_filed_as_a_wiring_check_and_unmarked(sandbox, store):
+    """The mark is a filing-time decision (sig.golf H4): the entry that checks
+    the harness end to end is filed knowing it will out-score every real
+    scheme, and can be unmarked when the thing it checked becomes a finding."""
+    assert _ar(sandbox, "entry", "new", "wiring check", "--track", "research",
+               "--scaffold") == 0
+    assert store.load("Q1").scaffold is True
+    assert _ar(sandbox, "entry", "amend", "Q1", "--no-scaffold") == 0
+    assert store.load("Q1").scaffold is False
+    assert _ar(sandbox, "entry", "amend", "Q1", "--scaffold") == 0
+    assert store.load("Q1").scaffold is True
+
+
+def test_an_unknown_status_filter_is_refused_rather_than_reading_as_empty(
+        sandbox, store, capsys):
+    """sig.golf H12: `--status confirmedd` printed "0 entries read" and exited
+    0 -- the same screen an empty queue prints, which is how a session decides
+    there is nothing to do."""
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "entry", "list", "--status", "confirmedd") == 2
+    err = capsys.readouterr().err
+    assert "unknown status" in err and "confirmed" in err
+
+
+def test_a_declared_status_matching_nothing_is_still_an_answer(sandbox, store,
+                                                                capsys):
+    """The refusal is about the typo, not about emptiness."""
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "entry", "list", "--status", "confirmed") == 0
+    assert "0 entries read" in capsys.readouterr().out
+
+
+def test_an_unknown_track_filter_is_refused_too(sandbox, store, capsys):
+    """The same argument as the status filter, in the verb that filters by
+    track: `entry new --track` and `entry graph --track` already refused an
+    undeclared track, so listing by one was the last place a typo read as an
+    empty queue."""
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "entry", "list", "--track", "nope") == 2
+    assert "unknown track" in capsys.readouterr().err
+    assert _ar(sandbox, "entry", "list", "--track", "research") == 0

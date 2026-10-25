@@ -108,6 +108,10 @@ min_threads = 4
 gb_per_unit = 0.0076     # memory cost of one concurrent unit
 needs_gpu = "any"
 
+[hardware.x86-avx2]
+target_arch = "x86_64"
+target_features = ["avx2", "sha_ni"]
+
 # Rentable classes. `measured_ratio` is throughput on that class over throughput
 # on the local host, FOR THIS WORKLOAD, at a stated concurrency. Leave it out
 # until someone has measured it: a speedup cannot be read off a spec sheet.

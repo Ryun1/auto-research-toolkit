@@ -138,13 +138,16 @@ def queue_view(track, entries, machine=None) -> str:
             f"One row per terminal entry ({len(closed)}). Pointers only: the "
             "reasoning lives in the memo.", ""]
     if closed:
-        out += ["| Entry | Status | Kind | Disposition | Applicability | Readiness | Date | Evidence | Verdict |",
-                "|---|---|---|---|---|---|---|---|---|"]
+        out += ["| Entry | Status | Kind | Disposition | Evidence | Applicability | Readiness | Date | Evidence memo | Verdict |",
+                "|---|---|---|---|---|---|---|---|---|---|"]
         for e in sorted(closed, key=lambda e: e.number):
             r = e.result
             out.append(
                 f"| {e.id} | {e.status} | {(r.closure_kind if r else '') or '—'} "
                 f"| {r.disposition if r else '—'} "
+                # A blank is a blank: a closure that never said what backed it
+                # must not read like one the run-ledger net covers (QSB H87).
+                f"| {r.evidence_class if r and r.evidence_class else '(unlabelled)'} "
                 f"| {r.applicability.describe() if r and r.applicability else 'unscoped (legacy)'} "
                 f"| {e.gate_readiness(machine.required_gates)} "
                 f"| {(r.at[:10] if r else '')} | `{r.memo if r else ''}` "
@@ -177,6 +180,9 @@ def _entry_section(e, required_gates=()) -> list[str]:
              ("Cost", f"{e.cost:.4g} run-units")]
     if e.gate:
         rows.append(("Gate", e.gate))
+    if e.scaffold:
+        rows.append(("Scaffold", "yes — this entry measures the harness, so its "
+                                 "run rows are excluded from the frontier"))
     if e.mechanisms:
         rows.append(("Mechanisms", ", ".join(f"`{m}`" for m in e.mechanisms)))
     if e.tags:
@@ -203,8 +209,50 @@ def _entry_section(e, required_gates=()) -> list[str]:
     return out
 
 
+def last_iteration(config) -> tuple[int, dict, int] | None:
+    """The newest iteration record on disk, with its number.
+
+    Every `ar loop` writes one -- the phases it ran, the shortlist, the verdicts
+    and the stop reason -- and nothing in the verb surface read it back. A
+    returning session could see the goal, the queues and the measurements, but
+    not that the loop had stopped mid-handoff with an assignment outstanding,
+    without opening `state/iterations/*.json` by hand (sig.golf H25).
+    """
+    records = []
+    try:
+        for path in config.paths.iterations.glob("*.json"):
+            if path.stem.isdigit():
+                records.append((int(path.stem), path))
+        if not records:
+            return None
+        # The newest record is not always the newest *loop* iteration: a
+        # one-phase `skill distil` or `ar research` is captured out of band with
+        # `stop: running`, and reporting that as the coordinator's state says
+        # the loop is running when it stopped at a handoff two records ago.
+        parsed = []
+        for number, path in sorted(records, reverse=True):
+            try:
+                parsed.append((number, json.loads(path.read_text())))
+            except (OSError, ValueError):
+                continue
+        loop = next(((n, r) for n, r in parsed
+                     if r.get("kind", "iteration") == "iteration"), None)
+        if loop is None:
+            return None
+        number, record = loop
+        # Counted, not inferred: the arithmetic distance between two numbers is
+        # not the number of out-of-band records, and a deleted or renumbered
+        # record in between turns one capture into "2" (sig.golf H25).
+        out_of_band = sum(1 for n, r in parsed if n > number
+                          and r.get("kind", "iteration") != "iteration")
+        return number, record, out_of_band
+    except (OSError, ValueError):
+        return None
+
+
 def board(config, entries, runs, target=None, best=None, skipped_runs=0,
-          best_metrics=None) -> str:
+          best_metrics=None, unmet_required_gates=(),
+          excluded_best=None) -> str:
     """One screen answering what is currently true.
 
     Modelled on the source harness's `bin/board`, which existed because a cold
@@ -227,13 +275,31 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0,
         # GOAL MET is the stop decision's own answer: a stop_when clause is
         # the goal's definition of "met" (qsb requires +1% over a moving
         # target), so the board must not derive a second, looser one from
-        # raw distance.
+        # raw distance -- and the required gates the decision also honours
+        # keep an objective-level win from reading as a win (sig.golf H2).
         met = goal.is_met(best_metrics or {}, target)
+        if not met:
+            tail = ""
+        elif unmet_required_gates:
+            tail = ("  (not a win: required gate(s) not passed: "
+                    + ", ".join(unmet_required_gates) + ")")
+        else:
+            tail = "  ** GOAL MET **"
         out.append(f"best       {_fmt(value)}  ({entry_id})   "
-                   f"distance {distance:+.2%}"
-                   + ("  ** GOAL MET **" if met else ""))
+                   f"distance {distance:+.2%}" + tail)
     else:
         out.append("best       (no valid measurement yet)")
+    if excluded_best is not None:
+        # The frontier ignores scaffold rows; the board says which and why.
+        # Silently preferring a real finding over a fixture is the fix, and
+        # silently preferring it *without saying so* would be the same defect
+        # wearing the fix's clothes: a reader has to be able to tell a frontier
+        # that did not move from one whose fixture was reclassified (sig.golf
+        # H4).
+        value, record = excluded_best
+        out.append(f"excluded  {record.id} on {record.entry or '(no entry)'}"
+                   f"  scaffold run, objective {_fmt(value)} -- a wiring "
+                   f"check is not a finding")
     out.append("")
 
     for track in config.tracks.values():
@@ -265,6 +331,38 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0,
         if not queued:
             out.append("    (none — the queue is empty, not merely all held)")
         out.append("")
+
+    # What the loop last did, from the record it wrote. The board answers what
+    # is true now, and "the coordinator stopped at a native handoff with one
+    # assignment outstanding" is a fact about now (sig.golf H25).
+    recorded = last_iteration(config)
+    total = 0
+    try:
+        total = sum(1 for p in config.paths.iterations.glob("*.json")
+                    if p.stem.isdigit())
+    except OSError:
+        pass
+    out.append(f"## Iterations — {total} recorded")
+    if recorded:
+        _n, it, out_of_band = recorded
+        # `last {n}` only when the newest record IS the loop's own: with
+        # out-of-band captures since, naming the loop's last iteration is the
+        # fact, and the count says why the number is not the newest record.
+        out[-1] += (f", last loop iteration {it.get('n', _n)} "
+                    f"({out_of_band} out-of-band record(s) since)"
+                    if out_of_band else f", last {it.get('n', _n)}")
+        out.append(f"  stop        {it.get('stop') or '(none)'}"
+                   + (f" — {it['stop_detail']}" if it.get("stop_detail") else ""))
+        moved = " ".join(f"{ph['name']}({ph.get('did', 0)})"
+                         for ph in (it.get("phases") or [])
+                         if ph.get("did") or ph.get("error"))
+        if moved:
+            out.append(f"  phases      {moved}")
+        for problem in (ph for ph in (it.get("phases") or []) if ph.get("error")):
+            out.append(f"  problem     {problem['name']}: {problem['error']}")
+    else:
+        out.append("  (none — the loop has not run in this domain)")
+    out.append("")
 
     ok = [r for r in runs if r.status == "ok"]
     out.append(f"## Measurements — {len(runs)} rows read, {len(ok)} valid"

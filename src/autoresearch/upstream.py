@@ -58,6 +58,25 @@ class Install:
     editable: bool = False
 
 
+def _checkout_version(url: str | None) -> str | None:
+    """The version the checkout itself declares, for an editable install.
+
+    pip writes dist metadata once, at install time, and an editable install
+    points at a working tree that keeps moving: this repository's pyproject
+    says 0.9.0 while its own venv still reports 0.5.0. For a source install the
+    working tree is the truth, so read it -- and only it (sig.golf H20).
+    """
+    if not url or not url.startswith("file://"):
+        return None
+    pyproject = pathlib.Path(url.removeprefix("file://")) / "pyproject.toml"
+    try:
+        text = pyproject.read_text()
+    except OSError:
+        return None
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.M)
+    return match.group(1) if match else None
+
+
 def installed() -> Install:
     """Read the install from pip's own metadata. There is exactly one source
     of truth for where this core came from, and pip already wrote it."""
@@ -77,8 +96,9 @@ def installed() -> Install:
         commit = vcs.get("commit_id")
         ref = vcs.get("requested_revision")
         editable = bool((data.get("dir_info") or {}).get("editable"))
-    return Install(version=dist.version or "unknown", commit=commit, url=url,
-                   ref=ref, editable=editable)
+    declared = _checkout_version(url) if editable else None
+    return Install(version=declared or dist.version or "unknown", commit=commit,
+                   url=url, ref=ref, editable=editable)
 
 
 def version_tuple(version: str) -> tuple[int, ...] | None:
@@ -239,15 +259,20 @@ def remote_tags(url: str) -> dict[str, str]:
 
 
 def _pull_status(url: str, ref: str, local: str,
-                 limit: int = 30) -> tuple[str, bool, str | None]:
+                 limit: int = 30) -> tuple[str, str, str | None]:
     """Compare a local commit against a remote ref, with one clone.
 
-    Returns `(head, behind, changelog)`. 'Behind' requires the local commit to
-    be an *ancestor* of the remote one: a checkout that is ahead of (or has
-    diverged from) origin has nothing to pull, and reporting 'update
-    available' at it would be exactly the false alarm that trains a reader to
-    skip the real ones. A clone is needed either way, so the ancestry check and
-    the changelog come out of the same one.
+    Returns `(head, relation, changelog)`. The relation is one of `same`,
+    `behind`, `diverged` (both commits known, neither containing the other)
+    or `unpushed` (the clone never saw our commit at all, so the ancestry
+    question cannot even be asked). Only `behind` has anything to pull, and
+    only `same` is "up to date": reporting the other two as current is a claim
+    the comparison did not earn (sig.golf H15 -- a checkout whose commit
+    upstream has never seen printed "up to date" beside a different upstream
+    head, which is the reading that stops someone looking).
+
+    A clone is needed either way, so the ancestry check and the changelog come
+    out of the same one.
     """
     with tempfile.TemporaryDirectory(prefix="ar-upstream-") as tmp:
         clone = pathlib.Path(tmp) / "upstream"
@@ -270,13 +295,17 @@ def _pull_status(url: str, ref: str, local: str,
                 f"upstream {url} has no branch or tag named {ref!r}; "
                 "check the [upstream] table or pass --ref")
         if local == head:
-            return head, False, None
+            return head, "same", None
         ancestor = subprocess.run(
             ["git", "-C", str(clone), "merge-base", "--is-ancestor",
              local, head], capture_output=True, text=True,
             timeout=TIMEOUT_SECONDS)
         if ancestor.returncode != 0:
-            return head, False, None
+            # 1: both commits are known and neither contains the other.
+            # 128: the clone never saw our commit -- it was never pushed.
+            # Neither is something to pull, and neither is "up to date".
+            relation = "diverged" if ancestor.returncode == 1 else "unpushed"
+            return head, relation, None
         log = subprocess.run(
             ["git", "-C", str(clone), "log", "--oneline", "--no-decorate",
              f"{local}..{head}"],
@@ -285,7 +314,7 @@ def _pull_status(url: str, ref: str, local: str,
     shown = lines[:limit]
     tail = f"\n  ... and {len(lines) - len(shown)} more" if len(lines) > limit else ""
     body = "\n".join(f"  {line}" for line in shown) + tail
-    return head, True, body or None
+    return head, "behind", body or None
 
 
 def changelog(url: str, old: str, new: str, limit: int = 30) -> str | None:
@@ -332,11 +361,22 @@ class UpdatePlan:
     url: str
     ref: str
     head: str
-    behind: bool
+    #: How the local commit relates to the upstream ref: `same`, `behind`,
+    #: `diverged` (both known, neither contains the other) or `unpushed` (the
+    #: clone never saw our commit). Only `behind` has anything to pull, and
+    #: only `same` is "up to date" -- the other two say so out loud, because
+    #: they are the cases where "up to date" is a claim the comparison did not
+    #: earn (sig.golf H15).
+    relation: str = "same"
     changelog: str | None = None
     #: for an editable checkout, the commit the checkout itself is on --
     #: distinct from install.commit, which only a pip-recorded git install has
     local: str | None = None
+
+    @property
+    def behind(self) -> bool:
+        """True only when upstream contains our commit and has moved past it."""
+        return self.relation == "behind"
 
     def summary(self) -> str:
         inst = self.install
@@ -378,7 +418,7 @@ def plan_update(config, ref: str | None = None) -> UpdatePlan:
         # The ancestry property is not editable-path-only: a pip install
         # pinned to a commit upstream does not contain must not read as an
         # update. The clone this path does anyway resolves the ref.
-        head, behind, log = _pull_status(url, ref, commit)
+        head, relation, log = _pull_status(url, ref, commit)
     else:
         # Not a git install (a version pin from a package index, say):
         # compare against the newest tag, the only honest comparable.
@@ -388,10 +428,11 @@ def plan_update(config, ref: str | None = None) -> UpdatePlan:
                 f"upstream {url} has no branch or tag named {ref!r}; "
                 "check the [upstream] table or pass --ref")
         newest = latest_tag(remote_tags(url))
-        behind = newest is not None and _vkey(newest) > _vkey(inst.version)
+        relation = ("behind" if newest is not None
+                    and _vkey(newest) > _vkey(inst.version) else "same")
         log = None
     return UpdatePlan(install=inst, url=url, ref=ref, head=head,
-                      behind=behind, changelog=log,
+                      relation=relation, changelog=log,
                       local=commit if inst.editable else None)
 
 

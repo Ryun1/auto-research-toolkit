@@ -1,4 +1,5 @@
 import pytest
+import yaml
 
 from autoresearch.entries import Entry, Result
 from autoresearch.errors import SchemaError, TransitionError
@@ -311,9 +312,6 @@ def test_an_unknown_evidence_class_is_refused_at_the_record():
         result(evidence_class="vibes")
 
 
-def test_evidence_class_defaults_to_ledger():
-    assert result().evidence_class == "ledger"
-
 
 def test_set_evidence_class_records_the_reclassification(store, sandbox):
     """The escape hatch is one writer with one typed field: the verdict is
@@ -332,7 +330,9 @@ def test_set_evidence_class_records_the_reclassification(store, sandbox):
     assert reread.result.verdict == "confirmed"
     event = reread.history[-1]
     assert event.kind == "evidence-class"
-    assert "ledger -> official" in event.detail
+    # A reclassification records where it came from, and "unlabelled" is
+    # a real starting state now that the flag has no default (QSB H87).
+    assert "-> official" in event.detail
     assert "evaluator-owned" in event.detail
 
 
@@ -345,3 +345,84 @@ def test_set_evidence_class_refuses_without_a_result_or_a_reason(store):
         entry.set_evidence_class("census", who="s", why="  ")
     with pytest.raises(TransitionError, match="not in"):
         entry.set_evidence_class("vibes", who="s", why="why not")
+
+
+def test_scaffold_must_be_a_boolean():
+    """This field decides whether a run row is a finding, so a value that
+    merely reads as false is a finding the record silently reclassified."""
+    with pytest.raises(SchemaError, match="scaffold"):
+        Entry(id="Q1", track="research", title="t", scaffold="yes")
+
+
+def _write_record(path, **over):
+    """Another session's bytes, written without going through this Store --
+    the way a second session in the same checkout writes."""
+    record = {"id": "Q1", "track": "research", "title": "theirs",
+              "status": "queued"}
+    record.update(over)
+    path.write_text(yaml.safe_dump(record, sort_keys=False))
+
+
+def test_a_fresh_session_that_loads_an_entry_by_id_is_guarded(sandbox, store):
+    """sig.golf H16: `save`'s optimistic-concurrency guard compares against a
+    cache that only a save (or `all()`) filled, so a by-id verb in a fresh
+    process -- which is `ar entry amend`, `close`, `claim`, `reprice`, `gates`
+    -- had nothing to compare and wrote unguarded. Eight concurrent amends all
+    reported success and two corrections were destroyed with no error."""
+    from autoresearch.entries import _ENTRY_CACHE
+    path = sandbox.paths.entries / "Q1.yaml"
+    _write_record(path)
+    _ENTRY_CACHE.clear()      # this process starts empty, as a fresh CLI does
+    mine = store.load("Q1")   # the by-id read under test
+    _write_record(path, title="theirs, later")
+    mine.title = "mine"
+    with pytest.raises(SchemaError, match="changed on disk"):
+        store.save(mine)
+    assert store.load("Q1").title == "theirs, later"
+
+
+def test_two_writes_of_the_same_size_are_not_the_same_signature(sandbox, store):
+    """sig.golf H16, second half: size+mtime cannot see two concurrent records
+    of equal length written inside one filesystem timestamp granularity -- six
+    writers, four events, two corrections gone. The digest is what tells those
+    two records apart, so the refusal still fires."""
+    import os
+
+    from autoresearch.entries import _signature
+    make_entry(store, "Q1", hypothesis="aaa")
+    path = store.path("Q1")
+    first = _signature(path)
+    path.write_text(path.read_text().replace("aaa", "bbb"))
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, first[1]))   # same size, same mtime
+    second = _signature(path)
+    assert second[0] == first[0] and second[1] == first[1]
+    assert second[2] != first[2]
+    # and the guard sees it: a stale copy cannot overwrite the newer bytes
+    stale = Entry(id="Q1", track="research", title="Q1 title", hypothesis="aaa")
+    with pytest.raises(SchemaError, match="changed on disk"):
+        store.save(stale)
+
+
+def test_the_replace_happens_inside_the_write_lock(sandbox, store, monkeypatch):
+    """sig.golf H16, third part: comparing a signature and replacing the file
+    are two steps, so two writers could both find the file unchanged, both
+    pass, and both replace it -- the loser's correction gone, with a success
+    message on both sides. The compare and the replace must not interleave."""
+    import os
+    make_entry(store, "Q1", hypothesis="base")
+    seen = {}
+    real = os.replace
+
+    def spy(src, dst):
+        seen["held"] = (sandbox.paths.entries.parent
+                         / ".locks" / "Q1.lock").exists()
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", spy)
+    store.save(Entry(id="Q1", track="research", title="Q1 title",
+                     hypothesis="mine"))
+    assert seen["held"] is True
+    # and the lock is not left behind: a committed or stale lock would stall
+    # the next writer on a machine that is not this one
+    assert not (sandbox.paths.entries.parent / ".locks" / "Q1.lock").exists()

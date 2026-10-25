@@ -87,6 +87,52 @@ def test_board_goal_met_requires_stop_when(sandbox, store):
     assert "GOAL MET" in text
 
 
+def test_a_scaffold_fixture_loses_the_headline_to_a_real_finding(sandbox, store,
+                                                                capsys):
+    """sig.golf H4: a wiring check scored 15x better than every real scheme and
+    held the board's only headline number for the rest of the campaign, so the
+    improvement never appeared."""
+    from autoresearch import cli
+    from autoresearch.runs import RunRecord, append
+    make_entry(store, "Q1", scaffold=True)
+    make_entry(store, "Q2")
+    append(sandbox.paths.runs / "fixture.jsonl",
+           RunRecord(metrics={"ops": 1.0, "peak": 1.0}, session="s",
+                     provenance={"h": "x"}, entry="Q1", id="fix"))
+    append(sandbox.paths.runs / "finding.jsonl",
+           RunRecord(metrics={"ops": 10.0, "peak": 1.0}, session="s",
+                     provenance={"h": "x"}, entry="Q2", id="find"))
+    assert cli.main(["--domain", str(sandbox.paths.root), "board"]) == 0
+    out = capsys.readouterr().out
+    best = next(line for line in out.splitlines() if line.startswith("best "))
+    assert "(Q2)" in best, best
+    # named, not dropped: a reader must be able to tell a frontier that did not
+    # move from one whose fixture was reclassified
+    assert "excluded" in out and "fix" in out and "Q1" in out
+
+
+def test_the_board_names_the_scaffold_row_it_left_out(sandbox, store):
+    from autoresearch.runs import RunRecord
+    r = RunRecord(metrics={"ops": 10.0, "peak": 2.0}, session="s",
+                  provenance={"h": "x"}, entry="Q1")
+    text = render.board(sandbox, store.all(), [r], target=1000.0,
+                        best=(20.0, "Q2"), best_metrics=r.metrics,
+                        excluded_best=(1.0, r))
+    line = next(line for line in text.splitlines() if line.startswith("excluded"))
+    assert "Q1" in line and "not a finding" in line
+
+
+def test_a_scaffold_entry_says_so_in_its_own_view(sandbox, store):
+    make_entry(store, "Q1", scaffold=True)
+    make_entry(store, "Q2")
+    entries = store.all()
+    assert "**Scaffold:**" in render.queue_view(sandbox.tracks["research"],
+                                               entries)
+    only_q2 = [e for e in entries if e.id == "Q2"]
+    assert "Scaffold" not in render.queue_view(sandbox.tracks["research"],
+                                               only_q2)
+
+
 def test_unadopted_domain_is_pointed_at_migrate_not_render(sandbox, store):
     """An empty store with a source document means "not adopted yet", not
     "forgot to re-render". Pointing the first case at `ar render` sends the
@@ -291,3 +337,73 @@ def test_circles_mode_shrinks_nodes_to_ids(sandbox, store):
     assert "a long title" not in round
     assert round == render.graph_view(sandbox.tracks["research"], store.all(),
                                       circles=True)
+
+
+# -- what the loop last did (sig.golf H25) -----------------------------------
+
+def _iteration(sandbox, n, **over):
+    import json
+    record = {"n": n, "started": "2026-01-01T00:00:00+00:00",
+              "stop": "native-handoff",
+              "stop_detail": "1 assignment(s) outstanding",
+              "phases": [{"name": "rank", "did": 3, "error": None},
+                         {"name": "qc", "did": 0, "error": "2 problem(s)"}]}
+    record.update(over)
+    path = sandbox.paths.iterations / f"{n:04d}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record))
+
+
+def test_the_board_says_what_the_loop_last_did(sandbox, store):
+    """Every `ar loop` writes an iteration record and nothing read it back, so a
+    returning session could not see that the loop had stopped mid-handoff with an
+    assignment outstanding without opening JSON by hand."""
+    _iteration(sandbox, 7)
+    text = render.board(sandbox, store.all(), [])
+    assert "## Iterations" in text and "last 7" in text
+    assert "native-handoff" in text
+    assert "1 assignment(s) outstanding" in text
+    assert "rank(3)" in text                      # only what did something
+    assert "problem     qc: 2 problem(s)" in text  # and what went wrong
+
+
+def test_the_board_says_when_the_loop_has_never_run(sandbox, store):
+    text = render.board(sandbox, store.all(), [])
+    assert "(none — the loop has not run in this domain)" in text
+
+
+def test_a_broken_iteration_record_does_not_break_the_board(sandbox, store):
+    """The board is the screen a cold session opens; an unreadable iteration
+    file is a fact to report, not a reason to fail the whole projection."""
+    path = sandbox.paths.iterations / "0003.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json")
+    text = render.board(sandbox, store.all(), [])
+    assert "## Iterations" in text
+
+def test_the_stop_line_is_the_last_loop_iteration_not_an_out_of_band_capture(
+        sandbox, store):
+    """A one-phase `skill distil` or `ar research` is recorded out of band with
+    `stop: running`. Reporting the newest record as the coordinator's state says
+    the loop is running when it stopped at a handoff two records ago."""
+    _iteration(sandbox, 7)
+    _iteration(sandbox, 8, kind="out-of-band", stop="running",
+               stop_detail="", phases=[{"name": "distil", "did": 0, "error": None}])
+    text = render.board(sandbox, store.all(), [])
+    assert "last loop iteration 7" in text
+    assert "out-of-band record(s) since" in text
+    assert "native-handoff" in text          # the loop's own outcome
+    assert text.count("stop        running") == 0
+
+
+def test_out_of_band_records_are_counted_not_inferred(sandbox, store):
+    """The arithmetic distance between two record numbers is not the number of
+    out-of-band records: a deleted or renumbered record in between turned one
+    capture into "2" (sig.golf H25)."""
+    _iteration(sandbox, 7)
+    # 8 is absent on purpose: the gap must not inflate the count
+    _iteration(sandbox, 9, kind="out-of-band", stop="running", stop_detail="",
+               phases=[{"name": "distil", "did": 0, "error": None}])
+    text = render.board(sandbox, store.all(), [])
+    assert "1 out-of-band record(s) since" in text
+    assert "2 out-of-band" not in text

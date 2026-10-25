@@ -343,6 +343,14 @@ def _command(args):
         row = cancel(config, args.id, args.session, args.reason,
                      confirm_inactive=args.confirm_inactive)
         _refresh_views(config)   # cancel releases the claim: views must follow
+    elif args.external_action == "reap":
+        row = attempts.reap_assignment(config, args.id, args.session,
+                                       ttl_hours=args.ttl_hours,
+                                       why=args.why or "")
+        print(f"assignment {row['id']} on {row['entry']} REAPED ACROSS SESSIONS "
+              f"by {args.session!r} (it belonged to {row.get('reaped_from')!r}): "
+              f"{row.get('reason')}")
+        _refresh_views(config)
     else:
         row = attempts.load(config, args.id, args.session)
     print(json.dumps(row, indent=2))
@@ -352,7 +360,7 @@ def _command(args):
 def register_parser(subparsers):
     parser = subparsers.add_parser("external", help="bounded native coordinator handoff; no model dispatch")
     subs = parser.add_subparsers(dest="external_action", required=True)
-    for action in ("assign", "complete", "cancel", "show"):
+    for action in ("assign", "complete", "cancel", "show", "reap"):
         child = subs.add_parser(action)
         if action == "assign":
             child.add_argument("--entry", required=True)
@@ -367,4 +375,9 @@ def register_parser(subparsers):
                                help="why the assignment is abandoned; recorded on the row")
             child.add_argument("--confirm-inactive", action="store_true",
                                help="confirm the worker is not running; this is also the recovery path for an assignment stuck in `completing` (cancel refuses only terminal rows)")
+        if action == "reap":
+            child.add_argument("--ttl-hours", type=float,
+                               help="free an assignment this old even when another session holds it (default: budgets.claim_ttl_hours)")
+            child.add_argument("--why",
+                               help="why it was reaped; recorded on the row")
         child.set_defaults(func=_command)

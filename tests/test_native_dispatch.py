@@ -298,3 +298,59 @@ def test_a_legacy_refused_receipt_never_poisons_a_retry(coordinator, store):
                     "legacy poison; protocol recovery",
                     confirm_inactive=True)
     assert attempts.load(coordinator.config, identity)["status"] == "cancelled"
+
+
+def _age_the_assignment(config, identity, hours):
+    """Rewrite an assignment's creation time, the way a session that died ten
+    hours ago leaves it."""
+    import datetime as dt
+    path = attempts.directory(config) / identity / "record.json"
+    saved = json.loads(path.read_text())
+    saved["created"] = (dt.datetime.now(dt.UTC)
+                        - dt.timedelta(hours=hours)).isoformat()
+    path.write_text(json.dumps(saved))
+
+
+def test_an_expired_assignment_is_reaped_by_another_session(coordinator, store):
+    """sig.golf H19: an assignment nobody settles held a concurrency slot with
+    no path to clear it -- `external cancel` and `settle` both refuse another
+    session's row, and `ar reap` knew only claims. One expired assignment is now
+    freeable by anyone, and the row says who took it from whom."""
+    from autoresearch.errors import AutoresearchError
+    it = coordinator.run_iteration(1)
+    identity = it.attempt_ids[0]
+    owner = attempts.load(coordinator.config, identity)["session"]
+    _age_the_assignment(coordinator.config, identity, 10)
+    # the protocol path still refuses: cancelling is the holder's decision
+    with pytest.raises(AutoresearchError, match="belongs to another session"):
+        external.cancel(coordinator.config, identity, "other", "mine now",
+                        confirm_inactive=True)
+    reaped = attempts.reap_assignment(coordinator.config, identity, "other",
+                                      why="owner silent")
+    assert reaped["status"] == "cancelled"
+    assert reaped["reaped_by"] == "other" and reaped["reaped_from"] == owner
+    assert "owner silent" in reaped["reason"]
+    assert not [r for r in attempts.records(coordinator.config)
+                if r["status"] in attempts.ACTIVE]     # the slot is free
+
+
+def test_a_live_assignment_is_not_reaped(coordinator, store):
+    """The TTL is the whole safety margin: inside it the holder is presumed
+    alive, because reaping a live assignment gives two sessions the same work
+    (the same rule `Claims.reap` applies to claims)."""
+    from autoresearch.errors import AutoresearchError
+    it = coordinator.run_iteration(1)
+    with pytest.raises(AutoresearchError, match="presumed alive"):
+        attempts.reap_assignment(coordinator.config, it.attempt_ids[0], "other")
+    assert attempts.load(coordinator.config, it.attempt_ids[0])["status"] \
+        == "assigned"
+
+
+def test_reaping_a_settled_assignment_is_refused(coordinator, store):
+    from autoresearch.errors import AutoresearchError
+    it = coordinator.run_iteration(1)
+    identity = it.attempt_ids[0]
+    attempts.settle(coordinator.config, identity, attempts.load(
+        coordinator.config, identity)["session"], "failed")
+    with pytest.raises(AutoresearchError, match="already settled"):
+        attempts.reap_assignment(coordinator.config, identity, "other")

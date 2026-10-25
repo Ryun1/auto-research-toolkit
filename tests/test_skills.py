@@ -32,6 +32,30 @@ def test_a_cited_skill_over_terminal_entries_is_clean(sandbox, store):
     assert _check(sandbox, store) == []
 
 
+def test_the_documented_timestamp_form_is_read_and_still_bites(sandbox, store):
+    """`at: 2026-08-31T09:12:04Z`, unquoted, is exactly what the scaffold's own
+    README shows and what YAML makes of it -- a datetime, which the check read
+    as no timestamp at all, so the reader was told to add a field they had
+    already written (sig.golf H10). Accepting it must not weaken it: a
+    relabelled citation still makes the skill stale."""
+    entry, = _entries(sandbox, store, "Q1", verdict="refuted",
+                      closure_kind="mechanism")
+    path = sandbox.paths.root / sandbox.skills.dir / "documented" / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "---\nname: documented\n"
+        'description: "use when a skill is written from the documented shape."\n'
+        "cites: [Q1]\n"
+        "distilled: {at: 2026-08-31T09:12:04Z, iteration: 14, core: 0.1.0}\n"
+        "---\n\n# documented\n\nIt held [Q1].\n")
+    assert _check(sandbox, store) == []
+
+    entry.relabel("cell", "test", why="only ever measured at one width")
+    entry.result.reopen_condition = "another width"
+    store.save(entry)
+    assert any("relabel" in p for p in _check(sandbox, store))
+
+
 def test_read_all_reports_zero_rather_than_failing_when_nothing_is_distilled(sandbox):
     """A domain that has not distilled anything is not misconfigured, and a
     reader that cannot say 'zero' is indistinguishable from one that read

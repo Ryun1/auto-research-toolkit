@@ -255,12 +255,13 @@ def test_target_raises_without_a_cache(domain):
                                        ChallengeError("down")))
 
 
-def test_target_refuses_a_snapshot_with_no_number(domain):
+def test_target_refuses_a_page_that_carries_no_number(domain):
+    """`target` never prints a guess. Which stage refuses is the adapter's
+    business -- a pull that cannot read the page says so there, and a snapshot
+    holding no number says so at the read -- so the contract under test is the
+    one a probe depends on: no float on stdout."""
     config = _declare_challenge(domain, refresh_seconds=3600)
-    challenge_mod.pull(config.challenge.source, "", "", 3600, 60,
-                       domain.paths.root,
-                       fetcher=lambda u, t: "<html></html>")
-    with pytest.raises(ChallengeError, match="names no record"):
+    with pytest.raises(ChallengeError, match="no record"):
         challenge_mod.target_value(config.challenge.source, "", "", 3600, 60,
                                    domain.paths.root,
                                    fetcher=lambda u, t: "<html></html>")
@@ -385,3 +386,99 @@ def test_config_flags_an_unknown_source(domain):
     config = _declare_challenge(domain, source="nosuch")
     problems = config.check()
     assert any("nosuch" in p and "adapter" in p for p in problems), problems
+
+
+# -- one adapter, two challenges on one site (sig.golf H1) ---------------------
+# The yukon adapter reads the QSB board: rows carrying `verified candidates/s`
+# and a record line in the same unit. Pointed at another challenge on the same
+# site it matched nothing -- and reported "fetched", cached the emptiness, and
+# credited the snapshot to the QSB page it had never read.
+
+#: The shape of a leaderboard that ranks a different unit entirely: a rate's
+#: marker is simply absent.
+OTHER_CHALLENGE_PAGE = """
+<html><body>
+<h1>Leaderboard</h1>
+<p>Best spacetime 70,253,051</p>
+<table><tr><td>Size (bytes)</td><td>6404</td><td>Cycles</td><td>11,572</td></tr></table>
+</body></html>
+"""
+
+
+def test_pull_refuses_a_page_the_adapter_cannot_read(domain):
+    with pytest.raises(ChallengeError, match="yielded no record"):
+        challenge_mod.pull(
+            "yukon", "https://www.yukon.org/sig.golf", "", 3600, 60,
+            domain.paths.root, fetcher=lambda u, t: OTHER_CHALLENGE_PAGE)
+
+
+def test_the_refusal_says_what_the_adapter_was_looking_for(domain):
+    """"No rows parsed" is not a reason a stranger can act on; the marker is."""
+    with pytest.raises(ChallengeError) as excinfo:
+        challenge_mod.pull(
+            "yukon", "https://www.yukon.org/sig.golf", "", 3600, 60,
+            domain.paths.root, fetcher=lambda u, t: OTHER_CHALLENGE_PAGE)
+    message = str(excinfo.value)
+    assert "verified candidates/s" in message
+    assert "https://www.yukon.org/sig.golf" in message
+
+
+def test_a_refused_pull_caches_nothing(domain):
+    """The empty snapshot was the evidence of the silent failure: a cached file
+    that reads like intel and holds none."""
+    with pytest.raises(ChallengeError):
+        challenge_mod.pull(
+            "yukon", "https://www.yukon.org/sig.golf", "", 3600, 60,
+            domain.paths.root, fetcher=lambda u, t: OTHER_CHALLENGE_PAGE)
+    assert challenge_mod.snapshot_path(domain.paths.root).exists() is False
+
+
+def test_a_refused_pull_leaves_a_good_cache_intact(domain):
+    url = challenge_mod.DEFAULT_URLS["yukon"]
+    challenge_mod.pull("yukon", url, "", 3600, 60, domain.paths.root,
+                       fetcher=lambda u, t: YUKON_PAGE)
+    with pytest.raises(ChallengeError):
+        challenge_mod.pull("yukon", url, "", 3600, 60, domain.paths.root,
+                           force=True,
+                           fetcher=lambda u, t: OTHER_CHALLENGE_PAGE)
+    cached = challenge_mod.load_snapshot(domain.paths.root)
+    assert cached.target_value() == 741_852_708
+
+
+def test_the_credit_names_the_page_that_was_fetched():
+    """Two challenges on one site are two boards; the publisher is the site's,
+    the page is this campaign's."""
+    snap = challenge_mod._from_yukon("https://www.yukon.org/sig.golf",
+                                      YUKON_PAGE)
+    line = challenge_mod.credit(snap)
+    assert "https://www.yukon.org/sig.golf" in line
+    assert "qsb" not in line
+    assert challenge_mod.credit(
+        challenge_mod._from_yukon("https://www.yukon.org/qsb", YUKON_PAGE)
+    ).endswith("(https://www.yukon.org/qsb)")
+
+
+def test_a_bar_only_snapshot_is_still_intel(domain):
+    """The refusal is "nothing to read", not "no board rows": provably.fast
+    publishes a bar and computes its board client-side, so its snapshot always
+    has zero rows and still names a target."""
+    snap, action = challenge_mod.pull(
+        "provablyfast", "https://provably.fast/data/index.json", "", 3600, 60,
+        domain.paths.root, fetcher=lambda u, t: json.dumps(PF_SNAPSHOT))
+    assert action == "fetched"
+    assert snap.board == []
+    assert snap.target_value() == 1.03
+
+
+def test_a_cached_snapshot_holding_nothing_is_not_fresh(domain):
+    """Domains that pulled before this guard existed still have the empty
+    snapshot on disk. Serving it from cache would keep the defect alive in
+    exactly the domains it was found in."""
+    url = "https://www.yukon.org/sig.golf"
+    empty = challenge_mod._from_yukon(url, OTHER_CHALLENGE_PAGE)
+    path = challenge_mod.snapshot_path(domain.paths.root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(empty.to_dict(), indent=2, sort_keys=True))
+    with pytest.raises(ChallengeError, match="yielded no record"):
+        challenge_mod.pull("yukon", url, "", 3600, 60, domain.paths.root,
+                           fetcher=lambda u, t: OTHER_CHALLENGE_PAGE)

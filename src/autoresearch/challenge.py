@@ -52,14 +52,45 @@ DEFAULT_URLS = {
 }
 ADAPTERS = tuple(sorted(DEFAULT_URLS))
 
-#: who publishes the data. A snapshot quotes other people's measurements;
-#: the source's own renderings must carry the credit beside them -- a rate
-#: whose provenance is unnamed is the exact defect the fingerprint doctrine
-#: exists to stop.
-SOURCE_CREDIT = {
-    "provablyfast": "data by provably.fast (https://provably.fast)",
-    "yukon": "data by Yukon / Eigen Labs with StarkWare (https://www.yukon.org/qsb)",
+#: Who publishes the data. A snapshot quotes other people's measurements; the
+#: source's own renderings must carry the credit beside them -- a rate whose
+#: provenance is unnamed is the exact defect the fingerprint doctrine exists to
+#: stop. The *page* is deliberately not in here: it is whatever this campaign
+#: fetched, and pinning one page per adapter made every second challenge on the
+#: same site cite the first one (sig.golf H1 -- a sig.golf snapshot credited to
+#: the QSB page).
+SOURCE_PUBLISHER = {
+    "provablyfast": "provably.fast",
+    "yukon": "Yukon / Eigen Labs with StarkWare",
 }
+
+#: What each adapter's page has to look like, quoted when a fetch yields
+#: nothing. An adapter written against one challenge's markup and pointed at
+#: another's used to fail silently -- "fetched", zero rows, no record, and a
+#: cached snapshot as the evidence.
+ADAPTER_MARKERS = {
+    "provablyfast": "a JSON snapshot carrying campaign.measurement_policy",
+    "yukon": "a leaderboard rendering `verified candidates/s`",
+}
+
+#: For an adapter with no declared marker: the sentence still has to say what
+#: was looked for, and "we found nothing" is not a reason.
+GENERIC_MARKER = "a page in the source's own published format"
+
+
+def credit(snapshot) -> str:
+    """The attribution line for a snapshot: who publishes it, and the page
+    this campaign actually read."""
+    publisher = SOURCE_PUBLISHER.get(snapshot.source, snapshot.source)
+    return (f"data by {publisher} ({snapshot.url})" if snapshot.url
+            else f"data by {publisher}")
+
+
+def unreadable_reason(source: str, url: str) -> str:
+    """One sentence naming why an adapter found nothing in a page."""
+    marker = ADAPTER_MARKERS.get(source, GENERIC_MARKER)
+    return (f"this adapter reads {marker}, and the page at "
+            f"{url or DEFAULT_URLS.get(source, '?')} is not it")
 
 
 # -- fetching ----------------------------------------------------------------
@@ -371,7 +402,13 @@ def pull(source: str, url: str, benchmark: str, refresh_seconds: float,
         fresh = (cached.source == source
                  and cached.url == url
                  and (age := _age(cached.fetched_at)) is not None
-                 and age < refresh_seconds)
+                 and age < refresh_seconds
+                 # Fresh is not the same as usable. A snapshot cached before
+                 # this guard existed can hold nothing at all, and serving it
+                 # from cache would keep the H1 defect alive in every domain
+                 # that already pulled: the refetch below either replaces it
+                 # or refuses, and either way says so.
+                 and (cached.board or cached.target_value() is not None))
         if fresh:
             return cached, (f"cached ({_human_age(age)} old; refreshes after "
                             f"{refresh_seconds:g}s)")
@@ -385,6 +422,18 @@ def pull(source: str, url: str, benchmark: str, refresh_seconds: float,
             f"challenge source {source!r} serves the {parsed.benchmark!r} "
             f"board, but [challenge] declares benchmark {benchmark!r}; "
             "point url at the board you mean")
+    if not parsed.board and parsed.target_value() is None:
+        # An adapter pointed at a page it cannot read used to report
+        # "fetched" and cache the emptiness (sig.golf H1: the QSB adapter on
+        # the sig.golf page parsed zero rows, no record and no bar). Nothing is
+        # written here: an empty snapshot is not intel, and refusing now puts
+        # the reason next to the fetch rather than leaving `challenge target`
+        # to refuse later, further from the cause.
+        raise ChallengeError(
+            f"challenge source {source!r} yielded no record, no bar and no "
+            f"board rows: {unreadable_reason(source, url)}. Point "
+            f"`[challenge] url` at the page this adapter reads, or add an "
+            f"adapter for this challenge. Nothing was cached.")
     parsed.benchmark = parsed.benchmark or benchmark
     path = snapshot_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)

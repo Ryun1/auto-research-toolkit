@@ -345,7 +345,13 @@ that make a record a record, not only its prose: `--parent` (through the same
 *add* rather than replace, because a blind full-value write on a list is how
 one session's sources silently lose another's. Every amendment records the
 value it replaced, so a concurrent correction is visible in history instead of
-only in a session's notes. `ar entry new` has no default `--track`: a filing
+only in a session's notes. The filing-time fields are writers too:
+`--prediction`, `--bar` and `--why-filed` correct what an entry promised
+*before* it ran, and each demands `--why`, because a pre-registration that
+changes with no stated reason is indistinguishable from one that was right all
+along (sig.golf H6 — an entry predicted a verify image "at most 70,400
+instructions" against a measured 145,952, and the only writer was a hand edit
+of the YAML). `ar entry new` has no default `--track`: a filing
 that forgot it used to land on the research track, where a harness defect
 reads to the next agent as a lead on the score. A track declaring
 `requires_defect_evidence` is now enforced at filing, not only at export and

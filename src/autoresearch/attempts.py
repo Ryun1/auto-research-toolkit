@@ -250,7 +250,7 @@ def reconcile(config, attempt_id, session, charged_runs, reason):
     if not reason.strip():
         raise AutoresearchError("reconcile requires a nonempty --reason")
     if not re.fullmatch(r"[a-f0-9]{32}", str(attempt_id) or ""):
-        raise AutoresearchError("invalid attempt identity")
+        raise _identity_error(attempt_id)
     path = directory(config) / attempt_id / "record.json"
     if not path.exists():
         raise AutoresearchError(f"no attempt record at {path}; nothing to reconcile")
@@ -289,9 +289,23 @@ def reconcile(config, attempt_id, session, charged_runs, reason):
     return tomb
 
 
+def _identity_error(attempt_id) -> AutoresearchError:
+    """What an attempt id has to be, and where to read one.
+
+    `ar external show` and `ar attempt show` are the verbs an operator holds
+    when a dispatch went wrong, and they were answering a truncated id, a run
+    id or a stray name with three words that named neither the rule nor the
+    remedy (sig.golf H13). The sibling refusals in `load` already name what
+    went wrong; this is the one that did not.
+    """
+    return AutoresearchError(
+        f"attempt id must be 32 lowercase hex characters; {attempt_id!r} is "
+        f"not. `ar attempt list` prints the ids on this domain.")
+
+
 def load(config, attempt_id, session=None):
     if not isinstance(attempt_id, str) or not re.fullmatch(r"[a-f0-9]{32}", attempt_id):
-        raise AutoresearchError("invalid attempt identity")
+        raise _identity_error(attempt_id)
     row = next((r for r in records(config) if r["id"] == attempt_id), None)
     if row is None:
         raise AutoresearchError(f"unknown attempt {attempt_id}")
@@ -381,8 +395,23 @@ def reserve(config, entry_id, session, seconds, command=(), *, kind="exec", unit
         parallel = config.coordinator.get("max_parallel", DEFAULT_MAX_PARALLEL)
         if not isinstance(parallel, int) or parallel <= 0:
             raise AutoresearchError("max_parallel must be a finite positive integer")
-        if sum(r["status"] in ACTIVE for r in records(config)) >= parallel:
-            raise AutoresearchError("execution concurrency ceiling exhausted; inspect attempts")
+        # A reservation whose setup FAILED is not in flight: it executes
+        # nothing, so it holds no slot. It stays ACTIVE on purpose -- the
+        # half-built workspace is evidence to cancel or recover from -- and the
+        # ceiling looks through it (sig.golf H9: one dead setup held a third of
+        # a campaign's concurrency for seven hours).
+        active = [r for r in records(config)
+                  if r["status"] in ACTIVE and not r.get("setup_error")]
+        if len(active) >= parallel:
+            raise AutoresearchError(
+                f"execution concurrency ceiling exhausted: {len(active)} of "
+                f"{parallel} slots held by "
+                + ", ".join(f"{r['id']} on {r.get('entry') or '?'} "
+                            f"({r.get('session') or '?'}, "
+                            f"{(r.get('created') or '')[:16]})"
+                            for r in active)
+                + "; free one with `ar external cancel <id> --reason ... "
+                  "--confirm-inactive`")
         row.update(schema=SCHEMA, id=uuid.uuid4().hex, status="reserved", kind=kind,
                    created=now(), command=list(command), reserved_runs=units,
                    charged_runs=units, timeout_seconds=min(seconds, remaining),
@@ -413,6 +442,60 @@ def settle(config, attempt_id, session, status, *, run_ids=(), consumed=None, **
         row.update(status=status, run_ids=ids, charged_runs=amount, finished=now())
         save(config, row)
         return row
+
+
+def _age_hours(iso: str) -> float:
+    """Hours since an ISO timestamp, UTC-assumed when naive (as everywhere)."""
+    then = dt.datetime.fromisoformat(iso)
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=dt.UTC)
+    return (dt.datetime.now(dt.UTC) - then).total_seconds() / 3600.0
+
+
+def reap_assignment(config, attempt_id, session, *, ttl_hours=None, why=""):
+    """Free ONE expired external assignment, whoever holds it.
+
+    The mirror image of `Claims.reap`. A claim ages out by TTL and one operator
+    command frees it; an external assignment nobody settled kept its concurrency
+    slot with no path at all -- `external cancel` and `settle` both refuse a row
+    owned by another session, and `ar reap` knows only claims. So a session that
+    died between dispatch and settlement took a share of the campaign's
+    parallelism with it (sig.golf H19: two rows `assigned` for hours while the
+    claims behind them were long gone).
+
+    This crosses the ownership check the protocol paths enforce, deliberately
+    and only past the TTL, recording both sides on the row -- the discipline a
+    stolen lock already follows. Cancelling stays the holder's decision.
+    """
+    row = load(config, attempt_id)        # no session: crossing it is the point
+    if row["kind"] != "external":
+        raise AutoresearchError(
+            f"attempt {row['id']!r} is a {row['kind']!r} attempt, not an "
+            f"external assignment; `ar external reap` frees assignments")
+    if row["status"] in TERMINAL:
+        raise AutoresearchError(
+            f"assignment {row['id']} already settled as {row['status']!r}")
+    age = _age_hours(row.get("created") or row.get("claim_at") or now())
+    ttl = float(ttl_hours if ttl_hours is not None
+                else config.budgets.get("claim_ttl_hours", 6))
+    if age <= ttl:
+        raise AutoresearchError(
+            f"assignment {row['id']} on {row['entry']} was dispatched "
+            f"{age:.2f} h ago, inside the {ttl:.2f} h TTL; its holder "
+            f"{row['session']!r} is presumed alive. Reaping a live assignment "
+            f"gives two sessions the same work.")
+    with claims(config, session)._lock():
+        row = load(config, attempt_id)
+        if row["status"] in TERMINAL:      # settled while we waited for the lock
+            raise AutoresearchError(
+                f"assignment {row['id']} settled as {row['status']!r} while "
+                f"the reap was waiting for the lock")
+        row.update(status="cancelled", finished=now(),
+                   reason=why or (f"reaped: {row['session']} silent for "
+                                  f"{age:.1f} h (TTL {ttl} h)"),
+                   reaped_by=session, reaped_from=row["session"])
+        save(config, row)
+    return row
 
 
 def checkpoint(config, attempt_id, session, note, *, confirm_inactive=False):

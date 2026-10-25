@@ -977,3 +977,42 @@ def test_every_brief_is_strict_json(sandbox):
         json.loads(brief, parse_constant=reject_constant)  # rejects non-finite constants
     judge = json.loads(briefs[-1])  # any brief; judge sees the same shape
     assert judge["budget_remaining"]["gpu_hours"] is None
+
+
+# -- an empty answer is not an answer (sig.golf H21) --------------------------
+
+def test_a_generator_that_proposes_nothing_says_so(sandbox, store):
+    """`generate: did 0` with an empty detail cannot be told from a brain that
+    is broken -- and the brief asked for hypotheses this board has not tried."""
+    import re
+    coordinator = Coordinator(sandbox, ScriptedBrain({**IDLE, Role.GENERATOR: []}))
+    history = coordinator.run(max_iterations=1)
+    phase = next(p for it in history for p in it.phases if p.name == "generate")
+    assert any(re.search(r"generator 0 proposed nothing", line)
+               for line in phase.detail), phase.detail
+
+
+def test_a_generator_may_attach_why_it_proposed_nothing(sandbox, store):
+    """The list contract has nowhere to put a reason, so the envelope
+    {"proposals": [...], "notes": [...]} carries it."""
+    coordinator = Coordinator(sandbox, ScriptedBrain(
+        {**IDLE, Role.GENERATOR: {"proposals": [], "notes": ["no paid brain"]}}))
+    history = coordinator.run(max_iterations=1)
+    phase = next(p for it in history for p in it.phases if p.name == "generate")
+    said = next(line for line in phase.detail if "proposed nothing" in line)
+    assert "no paid brain" in said
+
+
+def test_the_envelope_still_files_its_proposals(sandbox, store):
+    """The envelope is the list contract plus notes, not a different one: a
+    generator that proposes through it must land the same entry."""
+    proposal = {
+        "title": "an enveloped idea",
+        "hypothesis": "hypothesis text", "prediction": "p", "bar": "b",
+        "confidence": 0.4, "impact": 0.05, "cost": 2.0,
+        "mechanisms": ["enveloped"], "why_filed": "the board has not tried it",
+    }
+    coordinator = Coordinator(sandbox, ScriptedBrain(
+        {**IDLE, Role.GENERATOR: {"proposals": [proposal], "notes": ["one only"]}}))
+    coordinator.run(max_iterations=1)
+    assert [e.title for e in store.all()] == ["an enveloped idea"]

@@ -5,6 +5,7 @@ real git plumbing. The two properties under test are the ones that make an
 automated upgrade honest: only NEW validation problems roll an upgrade back,
 and what lands is always the resolved SHA, never a moving ref name.
 """
+import json
 import pathlib
 import subprocess
 
@@ -127,6 +128,8 @@ def test_a_diverged_noneditable_install_has_nothing_to_pull(upstream, upstream_r
     plan = plan_for(upstream, orphan, monkeypatch)
     assert plan.head == second
     assert not plan.behind and plan.changelog is None
+    assert plan.relation != "same", \
+        "a diverged checkout is not 'up to date', whatever else it is"
 
 
 def test_an_editable_install_says_so_instead_of_guessing(toy, monkeypatch):
@@ -167,7 +170,8 @@ def make_plan(upstream_repo, old_commit, behind=True):
     return UpdatePlan(
         install=Install(version="0.1.0", commit=old_commit,
                         url=str(repo), ref="main"),
-        url=str(repo), ref="main", head="f" * 40, behind=behind)
+        url=str(repo), ref="main", head="f" * 40,
+        relation="behind" if behind else "same")
 
 
 def test_a_clean_upgrade_records_itself_in_the_inbox(sandbox, upstream_repo):
@@ -287,8 +291,12 @@ def test_check_exit_codes_are_machine_readable(toy, monkeypatch, capsys):
         url = "https://example.invalid/x"
         ref = "main"
         head = "b" * 40
-        behind = True
+        relation = "behind"
         changelog = "  abc123 Ranking: something"
+
+        @property
+        def behind(self):
+            return self.relation == "behind"
 
         def summary(self):
             return "installed   core 0.1.0 @ aaaaaaaaaaaa\nupstream    x main @ bbbbbbbbbbbb"
@@ -297,9 +305,15 @@ def test_check_exit_codes_are_machine_readable(toy, monkeypatch, capsys):
     assert ar(["--domain", str(toy.paths.root), "harness", "check"]) == 1
     assert "update available" in capsys.readouterr().out
 
-    FakePlan.behind = False
+    FakePlan.relation = "same"
     assert ar(["--domain", str(toy.paths.root), "harness", "check"]) == 0
     assert "up to date" in capsys.readouterr().out
+
+    FakePlan.relation = "unpushed"
+    assert ar(["--domain", str(toy.paths.root), "harness", "check"]) == 0
+    out = capsys.readouterr().out
+    assert "up to date" not in out
+    assert "never pushed" in out
 
 
 def test_an_editable_checkout_is_compared_by_its_own_head(upstream, upstream_repo,
@@ -340,6 +354,11 @@ def test_a_checkout_ahead_of_origin_has_nothing_to_pull(upstream, upstream_repo,
     plan = up.plan_update(upstream)
     assert plan.head == first
     assert not plan.behind
+    # whichever of the two, depending on whether the origin clone still holds
+    # the object: a local clone hardlinks it, a fetched one does not. What it
+    # must never be is "same" -- that is the "up to date" this repo's own
+    # checkout used to be told while upstream sat at a different commit.
+    assert plan.relation in {"diverged", "unpushed"}
 
 
 def test_update_refuses_to_pip_replace_an_editable_checkout(sandbox, upstream_repo):
@@ -351,7 +370,7 @@ def test_update_refuses_to_pip_replace_an_editable_checkout(sandbox, upstream_re
     plan = UpdatePlan(
         install=Install(version="0.1.0", editable=True,
                         url="file://" + str(repo)),
-        url=str(repo), ref="main", head="f" * 40, behind=True)
+        url=str(repo), ref="main", head="f" * 40, relation="behind")
     with pytest.raises(AutoresearchError, match="editable"):
         up.apply_update(sandbox, plan, installer=FakeInstaller(),
                         verifier=verifier)
@@ -441,3 +460,47 @@ def test_the_scaffold_ships_an_upstream_table(tmp_path):
     config = DomainConfig.load(tmp_path / "d")
     assert config.upstream.url.startswith("https://")
     assert config.upstream.ref == "main"
+
+
+# -- which version IS this core (sig.golf H20) --------------------------------
+
+class _FakeDist:
+    """pip's own metadata, as written at install time."""
+
+    def __init__(self, version, direct_url):
+        self.version = version
+        self._direct_url = direct_url
+
+    def read_text(self, name):
+        return self._direct_url if name == "direct_url.json" else None
+
+
+def test_an_editable_install_reports_the_version_in_the_checkout(tmp_path,
+                                                                  monkeypatch):
+    """pip writes dist metadata once; an editable install points at a working
+    tree that keeps moving. The tree is the truth -- this repository's pyproject
+    says 0.9.0 while its venv still reports 0.5.0."""
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text(
+        '[project]\nname = "autoresearch"\nversion = "9.9.9"\n')
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.1.0", json.dumps({"url": f"file://{checkout}",
+                             "dir_info": {"editable": True}})))
+    assert up.installed().version == "9.9.9"
+
+
+def test_a_wheel_install_still_reports_what_pip_recorded(tmp_path, monkeypatch):
+    """Only an editable install has a checkout to read; a wheel's metadata is
+    the only source there is."""
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.1.0", json.dumps({"url": "https://example.invalid/x.tar.gz"})))
+    assert up.installed().version == "0.1.0"
+
+
+def test_an_editable_checkout_without_a_pyproject_falls_back(tmp_path,
+                                                             monkeypatch):
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.1.0", json.dumps({"url": f"file://{tmp_path}/gone",
+                             "dir_info": {"editable": True}})))
+    assert up.installed().version == "0.1.0"

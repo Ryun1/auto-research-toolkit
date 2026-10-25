@@ -32,7 +32,8 @@ def test_a_non_terminal_close_says_the_entry_returns(sandbox, store, capsys):
 def test_a_terminal_close_prints_no_warning(sandbox, store, capsys):
     memo(sandbox, "inbox/Q1.md")
     make_entry(store, "Q1")
-    code = _claim_and_close(sandbox, "Q1", "confirmed", "--memo", "inbox/Q1.md")
+    code = _claim_and_close(sandbox, "Q1", "confirmed", "--memo", "inbox/Q1.md",
+                            "--summary", "it held")
     assert code == 0
     assert "not terminal" not in capsys.readouterr().out
 
@@ -47,7 +48,8 @@ def test_a_close_leaves_the_views_valid_so_validate_passes(sandbox, capsys):
                      "--track", "research", "--id", "Q1"]) == 0
     assert cli.main([*root, "claim", "Q1", "--why", "taking it"]) == 0
     assert cli.main([*root, "close", "Q1", "confirmed",
-                     "--memo", memo(sandbox, "inbox/Q1.md")]) == 0
+                     "--memo", memo(sandbox, "inbox/Q1.md"),
+                     "--summary", "it held"]) == 0
     assert cli.main([*root, "validate"]) == 0
     assert "problem" not in capsys.readouterr().out
 
@@ -64,12 +66,34 @@ def test_a_census_close_bypasses_the_replication_gate(sandbox, store, capsys):
         "[coordinator]", "[coordinator]\nconfirm_runs = 2"))
     memo(sandbox, "inbox/Q1.md")
     make_entry(store, "Q1")
-    code = _claim_and_close(sandbox, "Q1", "confirmed", "--memo", "inbox/Q1.md")
+    code = _claim_and_close(sandbox, "Q1", "confirmed", "--memo", "inbox/Q1.md",
+                            "--summary", "it held")
     assert code == 2
     assert "valid run row" in capsys.readouterr().err
 
     make_entry(store, "Q2")
     code = _claim_and_close(sandbox, "Q2", "confirmed", "--memo", "inbox/Q1.md",
+                            "--summary", "a census of the corpus",
                             "--evidence-class", "census")
     assert code == 0
     assert store.load("Q2").result.evidence_class == "census"
+
+
+def test_a_terminal_close_without_a_summary_is_refused(sandbox, store, capsys):
+    """sig.golf H18: the summary is the record's own typed sentence about the
+    verdict -- the closed row renders it, every brief carries it, and the
+    fabrication net reads its numbers. Without one, a closure that states
+    nothing passes every check there is."""
+    memo(sandbox, "inbox/Q1.md")
+    make_entry(store, "Q1")
+    root = ["--domain", str(sandbox.paths.root), "--session", "s"]
+    assert cli.main([*root, "claim", "Q1", "--why", "taking it"]) == 0
+    assert cli.main([*root, "close", "Q1", "confirmed",
+                     "--memo", "inbox/Q1.md"]) == 2
+    err = capsys.readouterr().err
+    assert "--summary" in err and "states what it decided" in err
+    assert "ar entry amend" in err          # the remedy for one that exists
+    assert store.load("Q1").result is None  # nothing was written
+    assert cli.main([*root, "close", "Q1", "confirmed", "--memo", "inbox/Q1.md",
+                     "--summary", "measured 3.1% below the record"]) == 0
+    assert store.load("Q1").result.summary == "measured 3.1% below the record"

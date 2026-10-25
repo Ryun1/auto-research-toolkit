@@ -36,6 +36,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import datetime as dt
+import hashlib
 import json
 import math
 import pathlib
@@ -169,11 +170,12 @@ class Result:
     disposition: str = "experiment"
     #: Snapshot the tested premises so later entry amendments cannot extend them.
     mechanisms: list[str] | None = None
-    #: Which evidence class backs this result; see EVIDENCE_CLASSES. Default
-    #: `ledger` keeps the full mechanical faithfulness net; `official` and
-    #: `census` are declared, record-visible scopes for evidence no local run
-    #: row can back (pvfast-stwo-simd H10/H11).
-    evidence_class: str = "ledger"
+    #: Which evidence class backs this result; see EVIDENCE_CLASSES. `None`
+    #: means nobody said -- the closure was written without the flag, and the
+    #: record says so rather than claiming the run-ledger net that a static
+    #: proxy or an empty memo never got (QSB H87). An unlabelled result still
+    #: faces the full net: only an explicit `official`/`census` opts out.
+    evidence_class: str | None = None
 
     def __post_init__(self):
         if isinstance(self.applicability, dict):
@@ -187,7 +189,8 @@ class Result:
         if self.mechanisms is not None and (not isinstance(self.mechanisms, list)
                 or any(not isinstance(m, str) or not m.strip() for m in self.mechanisms)):
             raise SchemaError("result.mechanisms must be a list of non-empty strings")
-        if self.evidence_class not in EVIDENCE_CLASSES:
+        if (self.evidence_class is not None
+                and self.evidence_class not in EVIDENCE_CLASSES):
             raise SchemaError(
                 f"result.evidence_class must be one of {EVIDENCE_CLASSES}, "
                 f"got {self.evidence_class!r}")
@@ -234,6 +237,15 @@ class Entry:
     #: a precondition on SHIPPABILITY, not on investigating. Typed, so ranking
     #: can filter on it rather than an agent rediscovering it (H09).
     gate: str = ""
+    #: This entry measures the harness, not a hypothesis: a wiring check, a
+    #: placeholder, a smoke test. Its numbers are real and its row stays on the
+    #: board, but the frontier -- the board's best-objective line, the budget's
+    #: stop decision, the loop's -- is computed over everything else, and the
+    #: board names the row it left out. Default-deny in the other direction:
+    #: nothing is scaffolding unless the domain says so (sig.golf H4, where a
+    #: wiring-check fixture scored 4,768 against a real scheme's 3,899,520 and
+    #: held the headline for the rest of the campaign).
+    scaffold: bool = False
     #: names a [hardware.<class>] requirement. The host is checked against it
     #: BEFORE the entry is claimed, so an experiment this machine cannot run is
     #: refused with a reason instead of dispatched and discovered.
@@ -300,6 +312,13 @@ class Entry:
                 raise SchemaError(
                     f"entry.{name} must be a list of non-empty strings "
                     f"(got {type(value).__name__} item in {name})")
+        if type(self.scaffold) is not bool:
+            # Typed, like `gate.required`: this field decides whether a run row
+            # is a finding, and a string that reads as false is a finding the
+            # record silently reclassified as scaffolding.
+            raise SchemaError(
+                f"entry.scaffold must be a boolean, got "
+                f"{type(self.scaffold).__name__}")
         if self.result is not None:
             self.result.__post_init__()
         if self.kind:
@@ -469,6 +488,46 @@ class Entry:
             _now(), "evidence-class", who, f"{old} -> {value}: {why}"))
         self.updated = _now()
 
+    def correct_result_text(self, summary: str | None, reopen_condition: str | None,
+                            who: str, why: str) -> None:
+        """Correct a closure's own prose, in place, from a terminal state.
+
+        A closure that recorded a wrong number could not be corrected: `close`
+        refuses a terminal-to-terminal transition, `claim` refuses a terminal
+        entry, `release` needs a claim to release, and `amend` reached every
+        field of the entry EXCEPT the two that carry the verdict's meaning. So
+        the error outlived the session that found it, and the rendered row --
+        which shows the summary, truncated -- showed the wrong figure to every
+        later reader (QSB H82).
+
+        The status and the verdict are untouched: this is the closure's text
+        being corrected, not its outcome being rewritten. A correction without
+        a reason is an unaccountable edit of the record, so the reason is
+        mandatory, and the change is appended to history like every other
+        mutation.
+        """
+        if self.result is None:
+            raise TransitionError(f"{self.id} has no result to correct")
+        if not why.strip():
+            raise TransitionError(
+                f"{self.id}: correcting a closure without a reason is an "
+                f"unaccountable edit of the record; pass --why")
+        if summary is None and reopen_condition is None:
+            raise TransitionError(
+                f"{self.id}: nothing to correct; pass --summary and/or "
+                f"--reopen-condition")
+        parts = []
+        if summary is not None:
+            self.result.summary = summary
+            parts.append(f"summary={summary!r}")
+        if reopen_condition is not None:
+            self.result.reopen_condition = reopen_condition
+            parts.append(f"reopen_condition={reopen_condition!r}")
+        self.history.append(Event(
+            _now(), "correction", who, f"{'; '.join(parts)}: {why}"))
+        self.updated = _now()
+
+
     # -- derived ----------------------------------------------------------
 
     @property
@@ -522,12 +581,23 @@ class Entry:
 #: every call until it is fixed or removed, and a removed file leaves no ghost
 #: row. Hits are rebuilt through `from_dict`, so callers receive fresh objects
 #: exactly as a re-read would produce.
-_ENTRY_CACHE: dict[str, dict[str, tuple[tuple[int, int], dict]]] = {}
+_ENTRY_CACHE: dict[str, dict[str, tuple[tuple[int, int, str], dict]]] = {}
 
 
-def _signature(path: pathlib.Path) -> tuple[int, int]:
+def _signature(path: pathlib.Path) -> tuple[int, int, str]:
+    """Size, mtime and a short digest of the bytes.
+
+    The first two are a cheap filter; the digest is what makes two writes of
+    the *same length* inside one filesystem timestamp granularity
+    distinguishable. Without it the guard below silently missed them: eight
+    concurrent amends that all produced an identically sized record left four
+    events on disk for six successful writers, two corrections gone with no
+    error (sig.golf H16). An entry file is a few kilobytes; reading it is
+    cheaper than losing a write.
+    """
     stat = path.stat()
-    return (stat.st_size, stat.st_mtime_ns)
+    return (stat.st_size, stat.st_mtime_ns,
+            hashlib.sha256(path.read_bytes()).hexdigest()[:16])
 
 
 class Store:
@@ -553,13 +623,93 @@ class Store:
         path = self.path(entry_id)
         if not path.exists():
             raise SchemaError(f"no entry {entry_id!r} at {path}")
-        return Entry.from_dict(yaml.safe_load(path.read_text()) or {})
+        return self._read(path)
 
-    def save(self, entry: Entry) -> pathlib.Path:
+    def _read(self, path: pathlib.Path) -> Entry:
+        """One entry file, named for what is wrong with it if anything is.
+
+        `all()` and `load()` share this because the residue check and the
+        cache belong to the read, not to the caller: a marker-bearing file
+        that `ar entry show` parses happily while `ar board` refuses is the
+        same defect wearing two faces (QSB H83).
+
+        The read also registers what it read, because that is the signature
+        `save`'s optimistic-concurrency guard compares against (QSB H71).
+        `all()` filled that cache and `load()` did not, so every verb that
+        loads an entry by id -- amend, close, claim, release, reprice, gates --
+        wrote with no guard at all: eight concurrent amends all reported
+        success and two corrections were destroyed with no error and nothing to
+        rebase, which is the QSB H71 failure on the one path that needed it
+        most (sig.golf H16). The signature is taken BEFORE the read, so a write
+        landing during the read is caught too.
+        """
+        from . import merge as merge_mod
+        try:
+            signature = _signature(path)
+            body = path.read_text()
+        except OSError as exc:
+            raise SchemaError(f"{path}: {exc}") from exc
+        residue = merge_mod.file_problem(path, "resolve the conflict in the file")
+        if residue:
+            raise SchemaError(residue)
+        try:
+            entry = Entry.from_dict(yaml.safe_load(body) or {})
+        except (SchemaError, TypeError, yaml.YAMLError) as exc:
+            raise SchemaError(f"{path}: {exc}") from exc
+        _ENTRY_CACHE.setdefault(str(self.dir.resolve()), {})[path.name] = \
+            (signature, entry.to_dict())
+        return entry
+
+    def save(self, entry: Entry, force: bool = False) -> pathlib.Path:
+        """Write the record, guarded and exclusive.
+
+        The exclusivity is the newer half of the guard. Comparing a signature
+        and then replacing the file are two steps, so two writers could both
+        find the file unchanged, both pass, and both replace it -- the loser's
+        correction gone, with a success message on both sides (sig.golf H16:
+        eight concurrent amends destroyed up to three corrections in roughly a
+        quarter of runs). Inside one process it is worse still: two writers
+        share the cache the guard reads, so the second write refreshes the
+        evidence the first is about to compare against.
+
+        So the guard and the replace run under one named lock, per entry. The
+        windows are short on purpose -- a save takes microseconds, so a lock
+        older than two minutes was abandoned by a session that died holding it,
+        and a writer that cannot get in within ten seconds refuses loudly
+        rather than writing over a peer."""
         import os
+
+        from .claims import Lock
         entry.__post_init__()
         self.dir.mkdir(parents=True, exist_ok=True)
+        lock = Lock(self.dir.parent / ".locks" / f"{entry.id}.lock",
+                    holder=f"entry write (pid {os.getpid()})",
+                    timeout=10.0, stale_after=120.0)
+        with lock:
+            return self._write(entry, force)
+
+    def _write(self, entry: Entry, force: bool = False) -> pathlib.Path:
+        """The guarded write `save` holds the lock across. Not a public entry
+        point: without the lock the compare and the replace are two steps and
+        the guard is advisory."""
+        import os
         path = self.path(entry.id)
+        # Optimistic concurrency. Two sessions editing the entry set in one
+        # checkout can each destroy the other's committed record, and the
+        # toolkit reported the mutation as successful -- a closure printed as
+        # done was simply gone from disk, with no error and nothing to rebase
+        # (QSB H71). A file whose on-disk signature no longer matches the one
+        # this process read has been written by somebody else in between, and
+        # the write is refused rather than silently merged away.
+        cached = _ENTRY_CACHE.get(str(self.dir.resolve()), {}).get(path.name)
+        if (not force and cached is not None and path.exists()
+                and cached[0] != _signature(path)):
+            raise SchemaError(
+                f"{path}: changed on disk since this session read it "
+                f"(size/mtime/digest {cached[0]} -> {_signature(path)}) -- another "
+                f"session wrote this entry concurrently and this save would "
+                f"destroy it. Re-read the entry and redo the change, or pass "
+                f"force=True to overwrite deliberately (QSB H71)")
         body = yaml.safe_dump(entry.to_dict(), sort_keys=False,
                               allow_unicode=True, width=100)
         # Atomic replace, not truncate-then-write: a concurrent `all()` (a
@@ -578,6 +728,12 @@ class Store:
         # worse, trust a signature the write already invalidated.
         _ENTRY_CACHE.setdefault(str(self.dir.resolve()), {})[path.name] = \
             (_signature(path), entry.to_dict())
+        # Post-write re-read assertion: the write reported success, so confirm
+        # the bytes on disk are the ones written. A tool that says it saved and
+        # did not is the failure nobody can see.
+        if _signature(path) != _ENTRY_CACHE[str(self.dir.resolve())][path.name][0]:
+            raise SchemaError(f"{path}: write reported success but the file on "
+                              f"disk does not match what was written")
         return path
 
     def all(self) -> list[Entry]:
@@ -592,12 +748,8 @@ class Store:
             if cached is not None and cached[0] == sig:
                 out.append(Entry.from_dict(copy.deepcopy(cached[1])))
                 continue
-            try:
-                raw = yaml.safe_load(path.read_text()) or {}
-                entry = Entry.from_dict(raw)
-            except (SchemaError, TypeError, yaml.YAMLError) as exc:
-                raise SchemaError(f"{path}: {exc}") from exc
-            cache[path.name] = (sig, raw)
+            entry = self._read(path)
+            cache[path.name] = (sig, entry.to_dict())
             out.append(entry)
         # list() first: a concurrent all() may insert while we prune, and a
         # dict that changes size during comprehension iteration raises.

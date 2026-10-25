@@ -4,7 +4,7 @@ Exit codes matter here: `check` is a gate, and `list` is the screen someone
 looks at before deciding whether to spend an iteration distilling.
 """
 from autoresearch import cli
-from conftest import close, make_entry, make_skill
+from conftest import close, make_entry, make_skill, memo
 
 
 def _ar(sandbox, *args):
@@ -176,3 +176,52 @@ def test_distil_retains_unknown_usage_on_failure(sandbox, monkeypatch):
     with pytest.raises(RuntimeError, match="interrupted"):
         _ar(sandbox, "skill", "distil")
     assert recorded_usage(sandbox)["money"] is None
+
+
+# -- can the listing answer "is the debt map current?" (sig.golf H24) ----------
+
+def _closed_on(store, entry_id, track, verdict="confirmed"):
+    """A terminal entry on `track`, at that track's own terminal verdict: a
+    defect closes `fixed`, a research entry `confirmed`."""
+    from autoresearch.entries import Entry, Result
+    store.save(Entry(id=entry_id, track=track, title=f"{entry_id} title",
+                     status=verdict,
+                     result=Result(verdict=verdict, memo="inbox/m.md",
+                                   at="2026-08-31T00:00:00+00:00", session="t",
+                                   summary="it held")))
+    return entry_id
+
+
+def test_the_undistilled_count_is_readable_per_track(sandbox, store, capsys):
+    """Two uncited harness entries say the debt map has drifted; seventeen
+    uncited research closures say nothing. A flat '19' cannot tell them apart,
+    so the listing names them by track (sig.golf H24)."""
+    memo(sandbox, "inbox/m.md")
+    make_skill(sandbox, "a-skill", cites=["Q1"])
+    _closed_on(store, "H1", "harness", "fixed")
+    _closed_on(store, "Q1", "research")
+    assert _ar(sandbox, "skill", "list") == 0
+    out = capsys.readouterr().out
+    assert "harness" in out and "H1" in out
+    # the research line is there too: Q1 is closed and cited, Q3 is not
+    _closed_on(store, "Q3", "research")
+    assert _ar(sandbox, "skill", "list") == 0
+    out = capsys.readouterr().out
+    harness_line = next(x for x in out.splitlines() if x.strip().startswith("harness"))
+    research_line = next(x for x in out.splitlines() if x.strip().startswith("research"))
+    assert harness_line.strip().startswith("harness") and "H1" in harness_line
+    assert "Q3" in research_line and "Q1" not in research_line
+
+
+def test_skill_list_answers_the_question_as_json(sandbox, store, capsys):
+    """An agent asks this before it writes; making it parse the prose to find
+    out is the failure the --json convention exists to prevent (sig.golf H24)."""
+    import json
+    memo(sandbox, "inbox/m.md")
+    make_skill(sandbox, "a-skill", cites=["Q1"])
+    _closed_on(store, "H1", "harness", "fixed")
+    assert _ar(sandbox, "skill", "list", "--json") == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert [e["id"] for e in doc["undistilled"]] == ["H1"]
+    assert doc["undistilled"][0]["track"] == "harness"
+    assert doc["skills"][0]["cites"] == ["Q1"]

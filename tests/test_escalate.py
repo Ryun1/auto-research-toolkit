@@ -194,6 +194,32 @@ def test_an_undeclared_hardware_class_is_refused(sandbox, capsys):
     assert code == 2
     assert "not declared" in capsys.readouterr().err
 
+def test_cross_isa_requirement_escalates_to_measurement(sandbox, capsys,
+                                                        monkeypatch):
+    from autoresearch import cli, config, hardware
+    from autoresearch.escalate import RemoteClass
+    from autoresearch.hardware import Requirement
+    host = hardware.Host(
+        os="Darwin", arch="arm64", chip="Apple M2", vendor="apple",
+        cpu_threads=8, memory_gb=16.0, memory_available_gb=12.0,
+        gpu=hardware.GPU(backend="metal", name="Apple M2", memory_gb=16.0,
+                         unified=True))
+    loaded = config.DomainConfig.load(sandbox.paths.root)
+    loaded.hardware["x86-only"] = Requirement(
+        name="x86-only", target_arch="x86_64")
+    loaded.remote = [RemoteClass("x86-box", 0.5)]
+    monkeypatch.setattr(cli, "_load", lambda args: loaded)
+    monkeypatch.setattr(cli.hw, "detect", lambda: host)
+    code = run(sandbox, "--hardware", "x86-only", "--correct-locally")
+    captured = capsys.readouterr()
+    out = captured.out
+    assert code == 1, (code, captured.out, captured.err)
+    assert "FAIL x86-only" in out and "host has arm64" in out
+    assert "escalation: NEEDS_MEASUREMENT" in out
+    assert "local hardware is meeting the need" not in out
+
+
+
 
 def test_a_zero_local_rate_is_refused_rather_than_read_as_sufficient(sandbox, capsys):
     from autoresearch import cli

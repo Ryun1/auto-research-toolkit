@@ -73,3 +73,32 @@ def test_shipped_toy_domain_ships_the_hand_driven_protocol_in_sync():
     opened in."""
     from autoresearch.scaffold import AGENTS_MD
     assert (TOY / "AGENTS.md").read_text() == AGENTS_MD
+
+
+def test_the_package_runs_as_a_module():
+    """The fallback every `bin/ar` shim advertises (sig.golf H7). A machine
+    whose toolkit lives in its default python3 has no `ar` on PATH, and this is
+    the path the shim is left with -- so the probe that selects it has to be
+    followed by a command that works, not an ImportError naming __main__."""
+    result = subprocess.run([sys.executable, "-m", "autoresearch", "--help"],
+                            cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "usage: ar" in result.stdout
+
+
+def test_the_module_carries_a_refusal_not_a_crash_to_the_shim():
+    """The shim propagates this return code, and a probe that cannot tell a
+    refusal from a crash reports a broken domain as a broken install -- which
+    is what the missing `__main__` did: rc 1 with an ImportError on stderr."""
+    result = subprocess.run(
+        [sys.executable, "-m", "autoresearch", "--domain", str(ROOT), "board"],
+        cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode != 0, result.stdout
+    assert result.stderr.startswith("ar:"), result.stderr
+
+
+def test_the_scaffolded_shim_names_the_fallback_that_works():
+    """The constant and the package are one contract: if the shim stops naming
+    `python3 -m autoresearch`, this fails rather than letting the two drift."""
+    from autoresearch.scaffold import AR
+    assert '"-m", "autoresearch"' in AR

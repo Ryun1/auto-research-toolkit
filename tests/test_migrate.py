@@ -198,6 +198,23 @@ def test_migration_collision_preserves_all_existing_records(sandbox, dry_run):
     assert not store.exists("Q1")
 
 
+def test_a_document_that_is_not_a_prose_queue_is_refused_not_a_traceback(
+        sandbox, capsys):
+    """sig.golf H11: `ar migrate` on a domain that is already migrated -- the
+    track view is the GENERATED markdown of records -- let the parser's
+    ValueError escape, and the user got a stack instead of a refusal."""
+    from autoresearch import cli
+
+    view = sandbox.paths.root / "docs" / "log" / "Hypothesis Queue.md"
+    view.parent.mkdir(parents=True, exist_ok=True)
+    view.write_text("# Hypothesis Queue\n\n_No open entries._\n")
+    args = ["--domain", str(sandbox.paths.root), "migrate", "--track", "research"]
+    assert cli.main(args) == 2
+    err = capsys.readouterr().err
+    assert "not a prose queue" in err
+    assert "--source" in err          # the remedy, not only the diagnosis
+
+
 CUSTOM = """
 [[tracks]]
 id = "field"

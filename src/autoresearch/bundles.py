@@ -193,7 +193,19 @@ def pack(root, paths, archive, *, sources=(), metadata=None) -> dict:
     Directories include all regular descendants. No links are followed. Output
     is a deterministic ZIP, published without replacing an existing archive.
     """
-    root, archive = pathlib.Path(root).resolve(), pathlib.Path(archive).absolute()
+    root = pathlib.Path(root).resolve()
+    archive = pathlib.Path(archive)
+    if not archive.is_absolute():
+        # The archive is this domain's evidence, not the caller's. Resolving a
+        # relative path against the process CWD put it wherever the agent
+        # happened to be standing: `ar --domain /tmp/other evidence pack
+        # --output data/artifacts/bundle.tar` wrote the other domain's evidence
+        # into THIS domain's findings lane, where the lane rules and
+        # `ar validate` then read it as a finding this campaign produced
+        # (sig.golf H14). Every other path this verb takes is domain-relative
+        # -- the positional paths, --source, and import's --into.
+        archive = root / archive
+    archive = archive.absolute()
     if metadata is not None and not isinstance(metadata, dict):
         raise SchemaError("bundle metadata must be a JSON object")
     selected = sorted([*_files(root, paths, "evidence"),
