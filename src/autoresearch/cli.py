@@ -953,6 +953,20 @@ def cmd_close(args):
     # that only refuses on one path is not a guard). An official/census
     # evidence class is deliberately measurement-free or externally owned;
     # demanding ledger rows of it would refuse honest work (pvfast H10).
+    # A non-terminal close (`blocked`) stores no Result, so the evidence flags
+    # used to be built and dropped while the command printed the memo path
+    # (qsb H322, #28). The memo must exist all the same, and a closure kind --
+    # how far a verdict reaches -- has no verdict here to label.
+    terminal = track.machine.status(args.status).terminal
+    if not terminal:
+        if args.closure:
+            raise AutoresearchError(
+                f"--closure labels how far a verdict reaches; {args.status!r} "
+                f"is not terminal on track {track.id!r}, so there is no "
+                f"verdict to label")
+        if args.memo and not (memo_root / args.memo).exists():
+            raise AutoresearchError(
+                f"{args.id}: evidence memo {args.memo!r} does not exist")
     if (args.status == "confirmed"
             and args.evidence_class not in ("official", "census")
             and config.confirm_runs > 1):
@@ -963,6 +977,15 @@ def cmd_close(args):
     entry.apply(track.machine, args.status, who=args.session, why=args.why or "",
                 result=result,
                 memo_exists=lambda m: (memo_root / m).exists())
+    if not terminal:
+        evidence = {"memo": result.memo, "summary": result.summary,
+                    "reopen_condition": result.reopen_condition,
+                    "evidence_class": result.evidence_class}
+        if any(evidence.values()):
+            entry.history.append(Event(
+                _iso(), "evidence", args.session,
+                " — ".join(v for v in (result.summary, result.memo) if v),
+                snapshot={"verdict": args.status, **evidence}))
     # An entry settled outside the assignment that was cancelled on it said
     # nothing of that assignment: the row read `cancelled`, the entry
     # `confirmed`, and nothing tied the two (#17). Name them on the closure.
@@ -1001,7 +1024,8 @@ def cmd_close(args):
           + (f" ({args.closure})" if args.closure else "")
           + (f" — superseded by {getattr(replacement, 'id', replacement)}"
              if replacement else "")
-          + f" — evidence: {result.memo}")
+          + (f" — evidence: {result.memo}" if terminal or result.memo
+             else ""))
     if args.status == "refuted" and args.closure == "mechanism":
         # A mechanism closure removes every open entry sharing the mechanism
         # from `ar rank`. Said nowhere, curators found it by hand five times in
@@ -1021,8 +1045,18 @@ def cmd_close(args):
         # track closes `fixed`, not `confirmed`), and the first real domain
         # filed a harness defect with the research-track verb, watched the
         # entry bounce back to the queue, and only then learned the rule.
+        # Only the initial status is ranked, so a `blocked` entry does not
+        # return to the queue: it waits for its reopen edge (#28).
+        if entry.status == track.machine.initial:
+            fate = "stays actionable and returns to the queue"
+        elif any(t.source == entry.status and t.dest == track.machine.initial
+                 for t in track.machine.transitions):
+            fate = (f"stays {entry.status}, off the queue, until "
+                    f"`ar close {entry.id} --reopen`")
+        else:
+            fate = f"stays {entry.status}, off the queue"
         print(f"! {args.status!r} is not terminal on track {track.id!r}: "
-              f"{entry.id} stays actionable and returns to the queue "
+              f"{entry.id} {fate} "
               f"(terminal here: {', '.join(sorted(track.machine.terminal_names))})")
     hint = skills_mod.skill_candidate_hint(entry, config)
     if hint:

@@ -17,16 +17,61 @@ def _claim_and_close(sandbox, entry_id, status, *extra):
     return capsys_code
 
 
-def test_a_non_terminal_close_says_the_entry_returns(sandbox, store, capsys):
-    """`blocked` is a legal close target that leaves the entry actionable."""
+def test_a_non_terminal_close_says_where_the_entry_goes(sandbox, store, capsys):
+    """`blocked` is a legal close target that is not terminal. It does not
+    return to the queue -- `ar rank` reads only the initial status -- so the
+    warning must say it waits until `--reopen` (#28)."""
     make_entry(store, "Q1")
     code = _claim_and_close(sandbox, "Q1", "blocked",
                             "--why", "waiting on a quiet host")
     assert code == 0
     out = capsys.readouterr().out
     assert "'blocked' is not terminal on track 'research'" in out, out
-    assert "Q1 stays actionable and returns to the queue" in out
+    assert "returns to the queue" not in out
+    assert "Q1 stays blocked, off the queue, until `ar close Q1 --reopen`" in out
     assert "terminal here: confirmed, refuted" in out
+    assert "evidence:" not in out, "no memo was given, so none is named"
+
+
+def test_a_blocked_close_keeps_the_evidence_it_was_given(sandbox, store, capsys):
+    """#28: --memo/--summary/--reopen-condition/--evidence-class were built
+    into a Result and dropped on a non-terminal close, while the command
+    printed the memo path as if it had been recorded."""
+    memo(sandbox, "inbox/m.md")
+    make_entry(store, "Q1")
+    code = _claim_and_close(sandbox, "Q1", "blocked", "--why", "w",
+                            "--memo", "inbox/m.md", "--summary", "real evidence",
+                            "--reopen-condition", "a quiet host",
+                            "--evidence-class", "ledger")
+    assert code == 0
+    assert "evidence: inbox/m.md" in capsys.readouterr().out
+    entry = store.load("Q1")
+    assert entry.status == "blocked" and entry.result is None
+    event = next(e for e in entry.history if e.kind == "evidence")
+    assert event.snapshot == {"verdict": "blocked", "memo": "inbox/m.md",
+                              "summary": "real evidence",
+                              "reopen_condition": "a quiet host",
+                              "evidence_class": "ledger"}
+    assert "real evidence" in event.detail
+
+
+def test_a_blocked_close_refuses_a_memo_that_does_not_exist(sandbox, store, capsys):
+    make_entry(store, "Q1")
+    code = _claim_and_close(sandbox, "Q1", "blocked", "--why", "w",
+                            "--memo", "inbox/missing.md")
+    assert code != 0
+    assert store.load("Q1").status == "in-progress"
+
+
+def test_a_blocked_close_refuses_a_closure_kind(sandbox, store, capsys):
+    """A closure kind says how far a verdict reaches; a non-terminal close has
+    no verdict to label, so the flag is refused rather than dropped."""
+    make_entry(store, "Q1")
+    code = _claim_and_close(sandbox, "Q1", "blocked", "--why", "w",
+                            "--closure", "cell")
+    assert code != 0
+    assert "--closure" in capsys.readouterr().err
+    assert store.load("Q1").status == "in-progress"
 
 
 def test_a_terminal_close_prints_no_warning(sandbox, store, capsys):
