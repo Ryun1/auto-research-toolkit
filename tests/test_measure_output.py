@@ -49,3 +49,16 @@ def test_a_target_of_millions_is_not_scientific_notation(sandbox, capsys):
     assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
     out = capsys.readouterr().out
     assert "best objective 0.701 vs target 6,000,000" in out, out
+
+
+def test_measure_passes_domain_flags_through_without_a_separator():
+    """falcon H1: `ar measure --entry Q55 --patch X` refused `--patch` as an
+    unknown argument; only `-- --patch X` reached the domain command."""
+    for argv in (["measure", "--entry", "Q55", "--patch", "p"],
+                 ["--domain", "d", "measure", "--entry=Q55", "--patch", "p"],
+                 ["measure", "--entry", "Q55", "--", "--patch", "p"]):
+        args = cli.build_parser().parse_args(cli._measure_passthrough(argv))
+        assert args.entry == "Q55" and args.rest == ["--patch", "p"], argv
+    # measure's own help is still measure's, and other verbs are untouched
+    assert cli._measure_passthrough(["measure", "--help"]) == ["measure", "--help"]
+    assert cli._measure_passthrough(["board"]) == ["board"]

@@ -1993,7 +1993,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     meas = sub.add_parser("measure", help="run the domain's measurement, record the row")
     meas.add_argument("--entry")
-    meas.add_argument("rest", nargs="*", help="passed through to the domain command")
+    meas.add_argument("rest", nargs="*",
+                      help="passed through to the domain command, flags included")
     meas.set_defaults(func=cmd_measure)
 
     challenge = sub.add_parser(
@@ -2143,7 +2144,29 @@ def _plugins_config(argv) -> DomainConfig | None:
     return config
 
 
+def _measure_passthrough(argv):
+    """`ar measure --entry Q55 --patch X` refused `--patch` as unknown: the
+    domain's flags only got through after a `--` the help never mentioned
+    (falcon H1). Everything after measure's own `--entry` is the domain's, so
+    the separator is supplied here."""
+    i = 0
+    while i < len(argv) and argv[i] != "measure":
+        i += 2 if argv[i] in ("--domain", "--session") else 1
+    j = i + 1
+    while j < len(argv):
+        if argv[j] == "--entry":
+            j += 2
+        elif argv[j].startswith("--entry="):
+            j += 1
+        else:
+            break
+    if i < len(argv) and j < len(argv) and argv[j] not in ("--", "-h", "--help"):
+        return argv[:j] + ["--"] + argv[j:]
+    return argv
+
+
 def main(argv=None) -> int:
+    argv = _measure_passthrough(list(argv if argv is not None else sys.argv[1:]))
     spec = _plugins_config(argv)
     if spec is not None:
         try:
