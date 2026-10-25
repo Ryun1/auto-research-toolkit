@@ -426,6 +426,11 @@ ar challenge check    compare the published policy against this host and [policy
 ar challenge target   print the target number, one line (fetch-if-stale)
 ```
 
+With no `[challenge]` table, `ar challenge target` prints goal.yaml's own
+target — the number `ar board` reads — and says so on stderr. A probe that is
+itself `exec ar challenge target` needs the table; without it the call refuses
+rather than recursing.
+
 It splits on the harness's two enforcement classes:
 
 - **Enforced.** The published record *is* the moving target. `bin/probe-target`

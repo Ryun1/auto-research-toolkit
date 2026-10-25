@@ -20,6 +20,7 @@ import dataclasses
 import datetime as dt
 import json
 import math
+import os
 import pathlib
 import subprocess
 import sys
@@ -60,13 +61,13 @@ def _store(config) -> Store:
     return Store(config.paths.entries)
 
 
-def _make_probe(config):
+def _make_probe(config, env=None):
     """The target probe as a callable: the domain's command, run, and refused
     by name when it fails. One derivation -- `ar loop`, `ar budget` and the
     board must not disagree about what a failed probe looks like."""
     def probe(command):
         result = subprocess.run(command.split(), cwd=config.paths.root,
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, env=env)
         if result.returncode != 0:
             raise AutoresearchError(
                 f"target probe {command!r} failed ({result.returncode}): "
@@ -298,10 +299,36 @@ def cmd_challenge_target(args):
     wraps this: `exec ar challenge target` -- the probe reads the last stdout
     line as a float. Notes go to stderr, which the probe keeps for failures."""
     config = _load(args)
-    value = challenge_mod.target_value(
-        *_challenge_params(config), config.paths.root)
+    if not config.challenge.source:
+        value = _goal_target_without_challenge(config)
+    else:
+        value = challenge_mod.target_value(
+            *_challenge_params(config), config.paths.root)
     print(f"{value:.10g}")
     return 0
+
+
+#: Set while `ar challenge target` runs the goal's probe, so a probe that is
+#: itself `exec ar challenge target` refuses instead of recursing.
+_TARGET_FALLBACK_ENV = "AR_CHALLENGE_TARGET_FALLBACK"
+
+
+def _goal_target_without_challenge(config) -> float:
+    """With no [challenge] table, the goal's own target -- the number
+    `ar board` and the loop already read. Refusing here while the board
+    answered was a trap three curator passes fell into (#26)."""
+    if os.environ.get(_TARGET_FALLBACK_ENV):
+        raise AutoresearchError(
+            "no [challenge] table, and goal.yaml's target source wraps "
+            "`ar challenge target` itself, so there is no number to read: "
+            "declare [challenge] in domain.toml, or point the goal's target "
+            "at a probe that does not call this verb")
+    target = config.goal.target
+    print(f"challenge target: no [challenge] table; reading goal.yaml's "
+          f"target ({target.source or f'value {target.value:g}'})",
+          file=sys.stderr)
+    return target.resolve(_make_probe(
+        config, env={**os.environ, _TARGET_FALLBACK_ENV: "1"}))
 
 
 def cmd_escalate(args):

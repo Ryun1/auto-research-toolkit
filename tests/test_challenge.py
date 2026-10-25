@@ -482,3 +482,51 @@ def test_a_cached_snapshot_holding_nothing_is_not_fresh(domain):
     with pytest.raises(ChallengeError, match="yielded no record"):
         challenge_mod.pull("yukon", url, "", 3600, 60, domain.paths.root,
                            fetcher=lambda u, t: OTHER_CHALLENGE_PAGE)
+
+
+# -- target without a [challenge] table (#26) ----------------------------------
+
+def test_target_falls_back_to_the_goals_target_source(domain, capsys):
+    """#26: a domain with no [challenge] table but a goal target source got a
+    refusal from `ar challenge target` while `ar board` read the same target."""
+    from autoresearch import cli
+    assert cli.main(["--domain", str(domain.paths.root),
+                     "challenge", "target"]) == 0
+    out, err = capsys.readouterr()
+    assert float(out.strip().splitlines()[-1]) == 6_000_000.0
+    assert "no [challenge] table" in err and "bin/probe-target" in err
+
+
+def test_target_falls_back_to_a_fixed_goal_value(domain, capsys):
+    from autoresearch import cli
+    goal = domain.paths.root / "goal.yaml"
+    goal.write_text(goal.read_text().replace(
+        "  target:\n    source: bin/probe-target\n    moving: true\n"
+        "    refresh_seconds: 300\n", "  target:\n    value: 42\n"))
+    assert cli.main(["--domain", str(domain.paths.root),
+                     "challenge", "target"]) == 0
+    assert capsys.readouterr().out.strip() == "42"
+
+
+def test_a_probe_that_wraps_challenge_target_does_not_recurse(domain, capsys):
+    """The documented probe is `exec ar challenge target`. With no [challenge]
+    table the fallback would run that probe, which runs the fallback again:
+    the re-entered call refuses instead, naming the missing table."""
+    import os
+    import stat
+    import sys
+    from autoresearch import cli
+    probe = domain.paths.root / "bin" / "probe-target"
+    probe.write_text(f"#!/bin/sh\nexec {sys.executable} -m autoresearch "
+                     f"--domain {domain.paths.root} challenge target\n")
+    probe.chmod(probe.stat().st_mode | stat.S_IEXEC)
+    env = dict(os.environ)
+    try:
+        code = cli.main(["--domain", str(domain.paths.root),
+                         "challenge", "target"])
+    finally:
+        os.environ.clear()
+        os.environ.update(env)
+    assert code != 0
+    err = capsys.readouterr().err
+    assert "[challenge]" in err and "wraps `ar challenge target`" in err
