@@ -29,6 +29,7 @@ from typing import Any
 
 from . import expr
 from .errors import GoalError
+from .noise import Noise
 
 MINIMISE, MAXIMISE = "minimise", "maximise"
 DIRECTIONS = (MINIMISE, MAXIMISE)
@@ -158,6 +159,9 @@ class Goal:
     #: reduced-width toy config (ecdsa H168) each printed as best, GOAL MET.
     #: A row missing a name a constraint reads is ineligible: fail closed.
     constraints: tuple[str, ...] = ()
+    #: How a better number is told from a noisy one (#37); see `noise.py`.
+    #: The default method `none` keeps the single-best-row frontier.
+    noise: Noise = field(default_factory=Noise)
 
     def __post_init__(self):
         if self.direction not in DIRECTIONS:
@@ -354,4 +358,5 @@ class Goal:
             constraints=tuple(raw_constraints),
             required_gates=tuple(gates),
             allow_degenerate_target=degenerate,
-            confirm_independently=confirm)
+            confirm_independently=confirm,
+            noise=Noise.from_dict(data.get("noise"), gid))

@@ -385,10 +385,35 @@ def frontier(store, records, goal):
             left_out.append(record)
         else:
             findings.append(record)
+    if goal.noise.method == "none":
+        best = best_run(findings, goal)
+    else:
+        # #37: groups by config, and a gain inside the floor does not move
+        # the frontier. The held rows are named like any other exclusion.
+        from . import noise
+        incumbent, held = noise.admit(goal, scored_rows(findings, goal))
+        best = incumbent.representative(goal) if incumbent else None
+        for group, reason in held:
+            for _, record in group.scored:
+                why[id(record)] = reason
+                left_out.append(record)
     excluded = best_run(left_out, goal)
     if excluded is not None:
         excluded = (*excluded, why[id(excluded[1])])
-    return best_run(findings, goal), excluded
+    return best, excluded
+
+
+def scored_rows(records, goal) -> list[tuple[float, RunRecord]]:
+    """`(objective, record)` for every row `best_run` would consider."""
+    out = []
+    for record in records:
+        if record.status != OK or record.problems(goal):
+            continue
+        try:
+            out.append((goal.objective_value(record.metrics), record))
+        except AutoresearchError:
+            continue
+    return out
 
 
 def exclusion_reason(store, record, goal) -> str | None:
@@ -684,3 +709,16 @@ def harvest(directory, before, destination, *, workspace, root, goal, lanes,
                 except (OSError, ValueError, TypeError, AttributeError, SchemaError) as exc:
                     result.problems.append(f"{path}: appended row {lineno}: {exc}")
     return result
+
+
+def noise_problems(config, store, records, entry_id) -> list[str]:
+    """Why a `confirmed` closure of `entry_id` does not clear the goal's noise
+    floor (#37): the current epoch's frontier rows only, scaffold and
+    constraint exclusions applied, so the baseline is the one the board shows."""
+    goal = config.goal
+    if goal.noise.method == "none":
+        return []
+    from . import epochs, noise
+    rows = [r for r in epochs.current_rows(config, records)
+            if exclusion_reason(store, r, goal) is None]
+    return noise.confirmation_problems(goal, scored_rows(rows, goal), entry_id)

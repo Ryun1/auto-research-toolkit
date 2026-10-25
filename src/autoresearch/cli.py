@@ -1077,6 +1077,14 @@ def cmd_close(args):
             runs_mod.read_all(config.paths.runs), args.id, config.confirm_runs)
         if evidence:
             raise AutoresearchError("; ".join(evidence))
+    if (args.status == "confirmed"
+            and args.evidence_class not in ("official", "census")):
+        # The count above says enough executions said so; this says they
+        # said more than the noise does (#37). A no-op under `none`.
+        noisy = runs_mod.noise_problems(
+            config, store, runs_mod.read_all(config.paths.runs), args.id)
+        if noisy:
+            raise AutoresearchError("; ".join(noisy))
     if terminal:
         # Pinned to what its evidence was measured under, so a later move of
         # the evaluator or benchmark can list it as a reopen candidate (#40).

@@ -1248,6 +1248,15 @@ class Coordinator:
                     entry_id, self.config.confirm_runs)
                 if evidence:
                     raise AutoresearchError("; ".join(evidence))
+            if (verdict == "confirmed"
+                    and str(report.get("disposition", "experiment")) == "experiment"
+                    and evidence_class not in ("official", "census")):
+                # Same floor `ar close` applies (#37).
+                noisy = runs_mod.noise_problems(
+                    self.config, self.store,
+                    runs_mod.read_all(self.config.paths.runs), entry_id)
+                if noisy:
+                    raise AutoresearchError("; ".join(noisy))
             result = Result(
                 verdict=verdict, memo=str(report.get("memo", "")), at=_iso(),
                 session=self.session, summary=str(report.get("summary", "")),

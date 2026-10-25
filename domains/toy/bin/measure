@@ -13,9 +13,13 @@ research loop interesting rather than trivial:
 * a **validity gate**: `width` below 16 produces an invalid run, so the loop must
   learn that a cheaper-looking config does not score;
 * deterministic noise, so repeated measurement of one config is stable but two
-  configs are not trivially ordered.
+  configs are not trivially ordered;
+* opt-in run-to-run noise (`AR_TOY_NOISE=<relative sigma>`, seeded by
+  `AR_TOY_SEED` when set), so a noise floor (#37) has something to refuse --
+  without it, reruns of one config always agree and no noise guard can be
+  exercised.
 """
-import argparse, hashlib, json, os, platform, subprocess, sys, time, uuid
+import argparse, hashlib, json, os, platform, random, subprocess, sys, time, uuid
 
 DEFAULTS = {"unroll": 1, "width": 32, "fold": 0, "cache": 0}
 
@@ -35,6 +39,10 @@ def evaluate(knobs):
     if cache and fold:          # the interaction: cache alone does nothing
         ops *= 0.95
     ops *= jitter(knobs)
+    sigma = float(os.environ.get("AR_TOY_NOISE") or 0)
+    if sigma:
+        seed = os.environ.get("AR_TOY_SEED")
+        ops *= 1.0 + random.Random(seed).gauss(0.0, sigma)
     peak = width + 2 * unroll + (8 if cache else 0)
     return {"ops": round(ops, 3), "peak": float(peak)}
 

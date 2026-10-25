@@ -131,6 +131,16 @@ goal:
   # board, named as excluded, and never becomes `best` or GOAL MET. A row can
   # also opt out itself with `config: {scaffold: true}` (a bench, not a score).
   constraints: ["width == 256", "class_bytes <= 4089446"]
+  # How a better number is told from a noisy one (default method: none, the
+  # single best row). Rows group by `config`; a group displaces the frontier
+  # only when its gain clears the floor, else the board names it "within
+  # noise of <incumbent>", and a `confirmed` closure must clear the same
+  # floor against the other entries' best. mad: k x 1.4826 x the MAD of
+  # repeated configs about their medians (applies once min_rows such rows
+  # exist); bootstrap: alpha lower bound on the mean difference, two rows a
+  # side; declared: k x sigma, for evaluators that cannot cheaply rerun.
+  # Not corrected for the many comparisons a whole search makes.
+  noise: {method: mad, k: 2.0, min_rows: 3}
 ```
 
 Two guards the *coordinator* owns sit on top of the goal, and both are
