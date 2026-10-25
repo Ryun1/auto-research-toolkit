@@ -226,3 +226,24 @@ def test_reap_still_frees_a_stale_claim_on_an_active_entry(sandbox, store):
     assert former == "dead"
     assert reaped.claim is None
     assert reaped.status == "queued"
+
+
+def test_exported_ar_session_is_the_claim_holder(sandbox, store, monkeypatch):
+    """#30 (QSB H328): `--session` defaulted to the literal `cli` and never read
+    the environment, so a session that exported AR_SESSION claimed as `cli` and
+    then had its own claim refused by verbs that require a safe owner."""
+    from autoresearch import cli
+    make_entry(store, "Q1")
+    monkeypatch.setenv("AR_SESSION", "s3")
+    assert cli.main(["--domain", str(sandbox.paths.root),
+                     "claim", "Q1", "--why", "x"]) == 0
+    assert store.load("Q1").claim.session == "s3"
+
+
+def test_explicit_session_flag_beats_ar_session(sandbox, store, monkeypatch):
+    from autoresearch import cli
+    make_entry(store, "Q1")
+    monkeypatch.setenv("AR_SESSION", "s3")
+    assert cli.main(["--domain", str(sandbox.paths.root), "--session", "s4",
+                     "claim", "Q1", "--why", "x"]) == 0
+    assert store.load("Q1").claim.session == "s4"

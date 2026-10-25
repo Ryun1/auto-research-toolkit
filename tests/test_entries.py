@@ -473,3 +473,41 @@ def test_a_terminal_table_of_only_superseded_keeps_the_verdicts():
     assert tuned.status("superseded").requires_evidence is False
     harness = default_machine({"fixed": {"requires_evidence": True}})
     assert "confirmed" not in harness.terminal_names
+
+
+def test_all_skips_an_entry_removed_between_listing_and_stat(store, monkeypatch):
+    """#31 (QSB H323): a file another session removes after `glob()` listed it
+    raised FileNotFoundError out of `all()`, and every store-reading verb died
+    on a traceback."""
+    import pathlib
+    make_entry(store, "Q1")
+    make_entry(store, "Q2")
+    real_glob = pathlib.Path.glob
+
+    def glob_then_vanish(self, pattern):
+        listed = list(real_glob(self, pattern))
+        store.path("Q1").unlink()
+        return iter(listed)
+
+    monkeypatch.setattr(pathlib.Path, "glob", glob_then_vanish)
+    assert [e.id for e in store.all()] == ["Q2"]
+
+
+def test_all_skips_an_entry_removed_between_stat_and_read(store, monkeypatch):
+    """#31: the same window one step later -- the stat succeeded and the read
+    found nothing."""
+    import pathlib
+
+    from autoresearch import entries as entries_mod
+    make_entry(store, "Q1")
+    make_entry(store, "Q2")
+    entries_mod._ENTRY_CACHE.clear()
+    real_read_text = pathlib.Path.read_text
+
+    def vanish_on_read(self, *a, **kw):
+        if self.name == "Q1.yaml":
+            self.unlink()
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", vanish_on_read)
+    assert [e.id for e in store.all()] == ["Q2"]

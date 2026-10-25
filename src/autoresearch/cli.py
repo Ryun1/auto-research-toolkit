@@ -48,7 +48,7 @@ from . import validate as validate_mod
 from .claims import Claims, claim_state_problems
 from .config import DomainConfig, discover
 from .entries import EVIDENCE_CLASSES, Entry, Event, Result, Store
-from .errors import AutoresearchError
+from .errors import AutoresearchError, SchemaError
 from .states import CLOSURE_KINDS
 
 
@@ -86,8 +86,28 @@ def _render_views(config) -> None:
     claim state -- so a verb that saves an entry record re-renders here, or
     every hand-driven mutation costs a failed validate before the next read.
     Silent by design: `ar render` is the surface that narrates what was written.
+
+    Every caller has already saved, so a sibling file that will not load is not
+    this command's failure: the write landed and only the views are stale. A
+    refusal here made a successful close exit 2, the retry was refused as a
+    no-op transition, and that refusal read as proof nothing happened (#29,
+    QSB H300). It warns instead, and `main` exits VIEWS_STALE, not 2.
     """
-    render.write_views(config, _store(config).all())
+    try:
+        entries = _store(config).all()
+    except SchemaError as exc:
+        print(f"ar: warning: the write landed, but the views were not "
+              f"re-rendered: {exc}\n  fix that file, then run `ar validate` "
+              f"and `ar render`", file=sys.stderr)
+        _VIEWS_STALE.append(str(exc))
+        return
+    render.write_views(config, entries)
+
+
+# Exit status of a command whose write landed but whose view re-render could
+# not read the store: distinct from 2, which means nothing was written.
+VIEWS_STALE = 3
+_VIEWS_STALE: list[str] = []
 
 
 # -- verbs ----------------------------------------------------------------
@@ -433,6 +453,14 @@ def cmd_entry_new(args):
             f"declared: {sorted(config.tracks)}")
     store = _store(config)
     track = config.tracks[args.track]
+    if args.id:
+        # An id no track owns was written, and that one file then stopped
+        # every store-reading verb for the whole domain (#18).
+        owner = config.track_for(args.id)
+        if owner.id != track.id:
+            raise AutoresearchError(
+                f"id {args.id!r} belongs to track {owner.id!r} (prefix "
+                f"{owner.prefix!r}), not {track.id!r} (prefix {track.prefix!r})")
     from . import tree
     # The same gate the coordinator's generate phase runs: a human or a
     # native-dispatch agent files through the identical tree rules, so the
@@ -1383,14 +1411,20 @@ def cmd_validate(args):
                 print(f"  - {p}")
         return 1
     store = _store(config)
-    entries = store.all()
+    entries, read_problems = store.read_all()
+    problems += read_problems
     problems += [f"duplicate entry id: {d}" for d in store.duplicates()]
     problems += render.check_views(config, entries)
     found, skill_problems = skills_mod.read_all(config)
     problems += skill_problems
     problems += skills_mod.check(config, found, entries, skills_mod.best_measurements(config))
     for entry in entries:
-        track = config.track_for(entry.id)
+        try:
+            track = config.track_for(entry.id)
+        except AutoresearchError as exc:
+            # One mis-prefixed file stopped validate for every entry (#18).
+            problems.append(f"{entry.id}: {exc}")
+            continue
         machine = track.machine
         if entry.status not in machine.statuses:
             problems.append(
@@ -1728,11 +1762,16 @@ def _env():
 # -- parser ---------------------------------------------------------------
 
 def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> argparse.ArgumentParser:
+    import os
     ap = argparse.ArgumentParser(prog="ar", description=__doc__.splitlines()[0])
     ap.add_argument("--domain", type=pathlib.Path,
                     help="domain root (default: nearest enclosing domain.toml)")
-    ap.add_argument("--session", default="cli",
-                    help="who is acting; recorded on every state change")
+    # AR_SESSION is the documented alternative to --session (attempts.py's
+    # refusal names it); a default that ignored it recorded an exporting
+    # session's claims as `cli` (#30, QSB H328).
+    ap.add_argument("--session", default=os.environ.get("AR_SESSION", "cli"),
+                    help="who is acting; recorded on every state change "
+                         "(default: $AR_SESSION, else 'cli')")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     ini = sub.add_parser("init", help="scaffold a new domain")
@@ -2244,8 +2283,10 @@ def main(argv=None) -> int:
     else:
         parser = build_parser()
         args = parser.parse_args(argv)
+    _VIEWS_STALE.clear()
     try:
-        return args.func(args)
+        code = args.func(args)
+        return VIEWS_STALE if code == 0 and _VIEWS_STALE else code
     except AutoresearchError as exc:
         print(f"ar: {exc}", file=sys.stderr)
         return 2

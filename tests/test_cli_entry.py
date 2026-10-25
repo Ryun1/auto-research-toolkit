@@ -227,3 +227,26 @@ def test_an_unknown_track_filter_is_refused_too(sandbox, store, capsys):
     assert _ar(sandbox, "entry", "list", "--track", "nope") == 2
     assert "unknown track" in capsys.readouterr().err
     assert _ar(sandbox, "entry", "list", "--track", "research") == 0
+
+
+def test_entry_new_refuses_an_id_no_track_owns(sandbox, store, capsys):
+    """#18: `--id QT1` was written, and that one file then stopped `ar
+    validate` and every store-reading verb for the whole domain."""
+    assert _ar(sandbox, "entry", "new", "x", "--track", "research",
+               "--id", "QT1") == 2
+    assert "no track owns entry id 'QT1'" in capsys.readouterr().err
+    assert not store.exists("QT1")
+
+
+def test_entry_new_refuses_an_id_another_track_owns(sandbox, store, capsys):
+    assert _ar(sandbox, "entry", "new", "x", "--track", "research",
+               "--id", "H7") == 2
+    err = capsys.readouterr().err
+    assert "'H7' belongs to track" in err and "not 'research'" in err
+    assert not store.exists("H7")
+
+
+def test_entry_new_accepts_an_id_its_track_owns(sandbox, store):
+    assert _ar(sandbox, "entry", "new", "x", "--track", "research",
+               "--id", "Q7") == 0
+    assert store.load("Q7").track == "research"

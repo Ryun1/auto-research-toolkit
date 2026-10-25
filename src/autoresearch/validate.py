@@ -51,11 +51,18 @@ def closure_warnings(config) -> list[str]:
     a broken record.
     """
     from .entries import Store
+    from .errors import AutoresearchError
     out = []
-    for entry in Store(config.paths.entries).all():
+    # Files that will not load, and ids no track owns, are validate's
+    # problems already; a warning pass must not stop on them (#32, #18).
+    for entry in Store(config.paths.entries).read_all()[0]:
         if entry.result is None:
             continue
-        if not config.track_for(entry.id).machine.status(
+        try:
+            track = config.track_for(entry.id)
+        except AutoresearchError:
+            continue
+        if not track.machine.status(
                 entry.result.verdict).terminal:
             continue
         if (entry.result.summary or "").strip():

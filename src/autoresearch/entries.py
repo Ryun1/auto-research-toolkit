@@ -753,18 +753,46 @@ class Store:
         return path
 
     def all(self) -> list[Entry]:
+        return self._scan(None)
+
+    def read_all(self) -> tuple[list[Entry], list[str]]:
+        """Every entry that loads, and one problem per file that does not.
+
+        `all()` refuses on the first malformed file, which is right for a verb
+        about to act on the store. `ar validate` exists to name what is wrong,
+        and stopping at the first file made a multi-session repair a loop of
+        fix one, re-run, find the next (#32, QSB H320)."""
+        problems: list[str] = []
+        return self._scan(problems), problems
+
+    def _scan(self, problems: list[str] | None) -> list[Entry]:
         if not self.dir.exists():
             return []
         cache = _ENTRY_CACHE.setdefault(str(self.dir.resolve()), {})
         out, seen = [], set()
         for path in sorted(self.dir.glob("*.yaml")):
-            seen.add(path.name)
-            sig = _signature(path)
+            # A file another session removes between the listing and the stat
+            # or read is not part of the store any more: skip it rather than
+            # let one rename kill every store-reading verb (#31, QSB H323).
+            try:
+                sig = _signature(path)
+            except FileNotFoundError:
+                continue
             cached = cache.get(path.name)
             if cached is not None and cached[0] == sig:
+                seen.add(path.name)
                 out.append(Entry.from_dict(copy.deepcopy(cached[1])))
                 continue
-            entry = self._read(path)
+            try:
+                entry = self._read(path)
+            except SchemaError as exc:
+                if not path.exists():
+                    continue
+                if problems is None:
+                    raise
+                problems.append(str(exc))
+                continue
+            seen.add(path.name)
             cache[path.name] = (sig, entry.to_dict())
             out.append(entry)
         # list() first: a concurrent all() may insert while we prune, and a
@@ -785,7 +813,7 @@ class Store:
         explicit, asserted property so the guarantee is tested rather than
         assumed, which is what H81's vacuous duplicate-id guard was missing."""
         seen, dupes = set(), []
-        for entry in self.all():
+        for entry in self.read_all()[0]:
             if entry.id in seen:
                 dupes.append(entry.id)
             seen.add(entry.id)

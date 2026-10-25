@@ -7,6 +7,13 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 TOY = ROOT / "domains" / "toy"
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_session(monkeypatch):
+    """`--session` defaults to $AR_SESSION (#30): a developer who exports it
+    must not change which session every CLI test acts as."""
+    monkeypatch.delenv("AR_SESSION", raising=False)
+
+
 @pytest.fixture
 def toy():
     """The toy domain, read-only."""
