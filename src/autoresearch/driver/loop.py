@@ -285,9 +285,15 @@ class Coordinator:
         on a wiring check's number would record a win nobody earned, on the one
         screen the record exists to keep honest (sig.golf H4)."""
         best, _excluded = runs_mod.frontier(
-            self.store, runs_mod.read_all(self.config.paths.runs),
-            self.config.goal)
+            self.store, self._epoch_rows(), self.config.goal)
         return best
+
+    def _epoch_rows(self):
+        """The current epoch's rows (#40): a row measured by a superseded
+        evaluator or benchmark is a number from another instrument."""
+        from .. import epochs as epochs_mod
+        return epochs_mod.current_rows(
+            self.config, runs_mod.read_all(self.config.paths.runs))
 
     def _unmet_required_gates(self, best) -> tuple[str, ...]:
         """Required gate names the best run's owning entry has not passed.
@@ -1252,6 +1258,13 @@ class Coordinator:
                                if applicability is not None else None),
                 disposition=report.get("disposition", "experiment"),
                 evidence_class=evidence_class)
+            # Pinned like an `ar close` (#40): the worker's declared source
+            # revision names the tree when it gave one.
+            from .. import epochs as epochs_mod
+            result.pin = epochs_mod.pin(
+                self.config, runs_mod.read_all(self.config.paths.runs), entry_id,
+                declared_revision=(result.applicability.source_revision
+                                   if result.applicability else ""))
             entry.apply(machine, verdict, who=self.session,
                         why=result.summary, result=result,
                         memo_exists=lambda m: (self.config.paths.root / m).exists())
@@ -1674,8 +1687,7 @@ class Coordinator:
             budgets=[self.domain_budget],
             unmet_required_gates=self._unmet_required_gates(best),
             independent_confirmation=budget_mod.independent_confirmation(
-                self.config.goal, best,
-                runs_mod.read_all(self.config.paths.runs), it.target))
+                self.config.goal, best, self._epoch_rows(), it.target))
         outstanding = [e for e, v in it.verdicts.items() if v == "assigned"]
         if self.config.dispatch == "native" and outstanding:
             # The work this iteration dispatched is happening in native

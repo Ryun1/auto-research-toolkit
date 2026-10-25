@@ -176,8 +176,15 @@ class Result:
     #: proxy or an empty memo never got (QSB H87). An unlabelled result still
     #: faces the full net: only an explicit `official`/`census` opts out.
     evidence_class: str | None = None
+    #: what the closure was measured under (#40): evaluator_sha and
+    #: benchmark_revision (its epoch), source_revision and core. Empty on
+    #: closures from before the stamp -- `ar epochs` counts those, it does
+    #: not guess them.
+    pin: dict = field(default_factory=dict)
 
     def __post_init__(self):
+        if not isinstance(self.pin, dict):
+            raise SchemaError("result.pin must be a mapping")
         if isinstance(self.applicability, dict):
             self.applicability = Applicability.from_dict(self.applicability)
         if self.applicability is not None and not isinstance(self.applicability, Applicability):

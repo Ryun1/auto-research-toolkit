@@ -336,8 +336,10 @@ def best_measurements(config):
     verbatim. None means the derived-constant lint cannot run -- which every
     caller reports as a gap, never as a pass.
     """
+    from . import epochs as epochs_mod
     from . import runs as runs_mod
-    best = runs_mod.best_run(runs_mod.read_all(config.paths.runs), config.goal)
+    best = runs_mod.best_run(epochs_mod.current_rows(
+        config, runs_mod.read_all(config.paths.runs)), config.goal)
     return best[1].metrics if best else None
 
 

@@ -168,6 +168,51 @@ def measurement_warnings(config) -> list[str]:
     return out
 
 
+def revision_warnings(config, limit: int = 10) -> list[str]:
+    """Cell and slope closures that record no revision (#34).
+
+    Those are the closures whose reach is bounded -- "refuted at this width",
+    "on this slope" -- so they are the ones a benchmark move can invalidate.
+    One that names no revision, in its pin or its declared applicability,
+    cannot be listed by `ar epochs` when the source moves. One line, however
+    many: a corpus closed before the stamp has hundreds."""
+    from .entries import Store
+    missing = []
+    for entry in Store(config.paths.entries).read_all()[0]:
+        result = entry.result
+        if result is None or result.closure_kind not in ("cell", "slope"):
+            continue
+        declared = result.applicability.source_revision if result.applicability else ""
+        if (result.pin or {}).get("source_revision") or declared:
+            continue
+        missing.append(entry.id)
+    if not missing:
+        return []
+    shown = ", ".join(missing[:limit]) + (" ..." if len(missing) > limit else "")
+    return [f"{len(missing)} cell/slope closure(s) record no source revision "
+            f"({shown}) -- a benchmark move cannot say whether they still "
+            f"hold; name it with `ar close ... --source-revision` when closing"]
+
+
+def epoch_warnings(config) -> list[str]:
+    """One line when rows from a superseded epoch are in the ledger (#36,
+    #40): they no longer compete for best, and closures decided on them may
+    need a second look."""
+    from . import epochs
+    from .runs import read_all
+    try:
+        listed = epochs.segment(config, read_all(config.paths.runs))
+    except Exception:                   # a failing revision command is named elsewhere
+        return []
+    old = [e for e in listed if not e.current and e.rows]
+    if not old or not any(e.current for e in listed):
+        return []
+    count = sum(len(e.rows) for e in old)
+    return [f"{count} row(s) were measured under a superseded evaluator or "
+            f"benchmark ({len(old)} earlier epoch(s)); they no longer compete "
+            f"for best -- `ar epochs` lists closures that may need reopening"]
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.

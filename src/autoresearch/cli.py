@@ -407,14 +407,91 @@ def cmd_board(args):
     except AutoresearchError as exc:
         print(f"(target unavailable: {exc})", file=sys.stderr)
         target = None
-    best, excluded = runs_mod.frontier(store, all_runs, config.goal)
+    # The frontier compares one instrument's rows (#40): the current epoch,
+    # or the one `--epoch` names. Every other epoch keeps its best row on the
+    # board under its own heading, never on the frontier.
+    from . import epochs as epochs_mod
+    listed = epochs_mod.segment(config, all_runs)
+    chosen = epochs_mod.current_rows(config, all_runs,
+                                     label=getattr(args, "epoch", None))
+    best, excluded = runs_mod.frontier(store, chosen, config.goal)
     print(render.board(config, entries, all_runs, target,
                        (best[0], best[1].entry or best[1].id) if best else None,
                        skipped, best_metrics=best[1].metrics if best else None,
                        unmet_required_gates=budget_mod.unmet_required_gates(
                            config.goal, store, best),
                        excluded_best=excluded))
+    others = [e for e in listed if e.rows and e.rows is not chosen]
+    if others:
+        print("## Previous epochs" if getattr(args, "epoch", None) is None
+              else "## Other epochs")
+        for epoch in others:
+            top, _ = runs_mod.frontier(store, epoch.rows, config.goal)
+            print("  " + _epoch_line(epoch)
+                  + (f"  best {render._fmt(top[0])} ({top[1].entry or top[1].id})"
+                     if top else "  no valid row"))
+        print("  (`ar board --epoch N` reads one; `ar epochs` lists what a move "
+              "may have invalidated)")
     return 0
+
+
+def cmd_epochs(args):
+    """The ledger's epochs, and the closures pinned to a superseded one.
+
+    A closure decided under an evaluator or benchmark that has since moved
+    may no longer hold; its stored reopen condition says what would reopen
+    it. This lists those candidates for a person or curator to judge -- it
+    never reopens anything (#40, #34)."""
+    config = _load(args)
+    from . import epochs as epochs_mod
+    current = epochs_mod.current_key(config)
+    listed = epochs_mod.segment(config, runs_mod.read_all(config.paths.runs),
+                                current=current)
+    print("epochs")
+    for epoch in listed or [epochs_mod.Epoch("1", current, True)]:
+        print("  " + _epoch_line(epoch))
+    superseded, unpinned = [], 0
+    for entry in _store(config).read_all()[0]:
+        if entry.result is None:
+            continue
+        try:
+            terminal = config.track_for(entry.id).machine.status(
+                entry.result.verdict).terminal
+        except AutoresearchError:
+            continue
+        if not terminal:
+            continue
+        key = epochs_mod.pin_key(entry.result.pin)
+        if key is None:
+            unpinned += 1
+        elif key != current:
+            superseded.append(entry)
+    print()
+    if superseded:
+        print(f"closures pinned to a superseded epoch ({len(superseded)}) -- "
+              "candidates to reopen, not reopened:")
+        for entry in superseded:
+            kind = f"/{entry.result.closure_kind}" if entry.result.closure_kind else ""
+            reopen = entry.result.reopen_condition or "(no reopen condition stated)"
+            print(f"  {entry.id}  {entry.result.verdict}{kind}  "
+                  f"evaluator {entry.result.pin.get('evaluator_sha')}  "
+                  f"reopens on: {reopen}")
+    else:
+        print("no closure is pinned to a superseded epoch")
+    if unpinned:
+        print(f"{unpinned} closure(s) carry no pin (closed before #40, or "
+              "without a stamp); they cannot be placed in an epoch")
+    return 0
+
+
+def _epoch_line(epoch) -> str:
+    if epoch.key is None:
+        what = "rows from before the stamp"
+    else:
+        sha, benchmark = epoch.key
+        what = f"evaluator {sha}" + (f", benchmark {benchmark}" if benchmark else "")
+    return (f"epoch {epoch.label}{' (current)' if epoch.current else ''}: "
+            f"{what}; {len(epoch.rows)} row(s)")
 
 
 def cmd_render(args):
@@ -1000,6 +1077,13 @@ def cmd_close(args):
             runs_mod.read_all(config.paths.runs), args.id, config.confirm_runs)
         if evidence:
             raise AutoresearchError("; ".join(evidence))
+    if terminal:
+        # Pinned to what its evidence was measured under, so a later move of
+        # the evaluator or benchmark can list it as a reopen candidate (#40).
+        from . import epochs as epochs_mod
+        result.pin = epochs_mod.pin(
+            config, runs_mod.read_all(config.paths.runs), args.id,
+            source_revision_override=getattr(args, "source_revision", None) or "")
     entry.apply(track.machine, args.status, who=args.session, why=args.why or "",
                 result=result,
                 memo_exists=lambda m: (memo_root / m).exists())
@@ -1158,6 +1242,17 @@ def cmd_measure(args):
     record.provenance["evaluator_sha"] = evaluator_sha
     if isinstance(record.cost, dict):
         record.cost["wall_seconds"] = round(wall_seconds, 3)
+    # What the row was measured under (#40): the benchmark revision keys its
+    # epoch with the evaluator hash; the source revision names the tree.
+    from . import epochs as epochs_mod
+    from .skills import core_version
+    revision, dirty = epochs_mod.source_revision(
+        config, candidate or config.paths.root)
+    record.provenance.update(
+        benchmark_revision=epochs_mod.benchmark_revision(config),
+        source_revision=revision, core=core_version())
+    if dirty is not None:
+        record.provenance["source_dirty"] = dirty
     # A throughput figure that does not name its machine is not a measurement,
     # and two rows from different machines are not comparable without saying so.
     # The domain does not have to remember to record this; core does it.
@@ -1305,7 +1400,9 @@ def cmd_budget(args):
         target = _probe_target(config)
     except AutoresearchError:
         target = None
-    best, excluded = runs_mod.frontier(store, all_runs, config.goal)
+    from . import epochs as epochs_mod
+    epoch_runs = epochs_mod.current_rows(config, all_runs)
+    best, excluded = runs_mod.frontier(store, epoch_runs, config.goal)
     # The same yield series the loop feeds its stop decision; without it the
     # yield floor could never fire here, so budget and loop disagreed (#19).
     try:
@@ -1323,7 +1420,7 @@ def cmd_budget(args):
         unmet_required_gates=budget_mod.unmet_required_gates(
             config.goal, store, best),
         independent_confirmation=budget_mod.independent_confirmation(
-            config.goal, best, all_runs, target))
+            config.goal, best, epoch_runs, target))
 
     if getattr(args, "json", False):
         # Non-finite objective/target values serialise as bare Infinity/NaN,
@@ -1595,6 +1692,8 @@ def cmd_validate(args):
                 + validate_mod.closure_warnings(config)
                 + validate_mod.output_warnings(config)
                 + validate_mod.measurement_warnings(config)
+                + validate_mod.revision_warnings(config)
+                + validate_mod.epoch_warnings(config)
                 + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):
@@ -1958,8 +2057,14 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                      help="what backs the Gate 0 assertion, or what is missing")
     esc.set_defaults(func=cmd_escalate)
 
-    sub.add_parser("board", help="one screen: goal, queues, claims, measurements"
-                   ).set_defaults(func=cmd_board)
+    boardp = sub.add_parser("board", help="one screen: goal, queues, claims, measurements")
+    boardp.add_argument("--epoch", help="read the frontier of this epoch (a number "
+                                        "from `ar epochs`, or `unpinned`) "
+                                        "instead of the current one")
+    boardp.set_defaults(func=cmd_board)
+    sub.add_parser("epochs", help="the ledger's measurement epochs, and closures "
+                                  "pinned to a superseded one"
+                   ).set_defaults(func=cmd_epochs)
     sub.add_parser("render", help="write the generated queue views"
                    ).set_defaults(func=cmd_render)
     validatep = sub.add_parser("validate", help="check records, views, runs and policy")
@@ -2210,6 +2315,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                        help="how far a refutation reaches")
     close.add_argument("--reopen-condition", dest="reopen_condition",
                        help="required for slope/cell closures")
+    close.add_argument("--source-revision", dest="source_revision",
+                       help="the revision this closure was decided at, for a "
+                            "closure with no stamped rows of its own (an "
+                            "external or static one); recorded in its pin (#40)")
     close.add_argument("--why")
     close.add_argument("--reopen", action="store_true")
     close.add_argument("--relabel", choices=sorted(CLOSURE_KINDS))

@@ -259,6 +259,7 @@ ar release     hand a claim back, with a reason
 ar reap        free an expired claim or repair an in-progress orphan
 ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
+ar epochs      the ledger's measurement epochs; closures pinned to a superseded one
 ar research    spin up targeted research agents; their ideas land in the record
 ar harness     check for and pull the latest core; export defects upstream
 ar doctor      which core answered, and whether it meets the domain's floor
@@ -1042,6 +1043,19 @@ Two verbs make an execution budget real rather than declarative:
   under `.ar/receipts/`. A measure script must therefore find the candidate
   through its working directory or `$AR_CANDIDATE`, never through
   `__file__`, which now names the primary's copy.
+- **Measurement epochs.** Every row also records `benchmark_revision`
+  (from an optional `[commands] benchmark_revision`), `source_revision`
+  (git HEAD of the measured tree plus `source_dirty`, or an optional
+  `[commands] source_revision`) and `core`. An epoch is a distinct
+  `(evaluator_sha, benchmark_revision)` pair, derived from the rows. The
+  frontier, `ar budget`, the stop decision and independent confirmation read
+  only the current epoch; older epochs stay on `ar board` under "Previous
+  epochs" (`ar board --epoch N` reads one). Rows from before the stamp form
+  an `unpinned` epoch, which stands as current only while no row is stamped.
+  Closures are pinned the same way (`result.pin`; `ar close
+  --source-revision` names the revision for a closure with no rows of its
+  own), and `ar epochs` lists closures pinned to a superseded epoch with
+  their reopen conditions. It lists; it never reopens.
 
 ### Native dispatch: the loop hands off, native agents do the work
 
