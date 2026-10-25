@@ -1003,12 +1003,17 @@ def cmd_claim(args):
     _render_views(config)
     print(f"{entry.id} claimed by {args.session} "
           f"(ceiling: {entry.claim.max_runs} runs / {entry.claim.max_hours} h)")
+    # Printed once and stored nowhere but its hash (#33): the token is what
+    # proves this claim is yours, under any session name.
+    print(f"token {claims.issued[entry.id]}  (pass --claim-token or export "
+          f"AR_CLAIM_TOKEN to release or update this claim)")
     return 0
 
 
 def cmd_release(args):
     config = _load(args)
-    entry = Claims(_store(config), config, args.session).release(args.id, args.why)
+    entry = Claims(_store(config), config, args.session,
+                   token=getattr(args, "claim_token", None)).release(args.id, args.why)
     _render_views(config)
     print(f"{entry.id} released back to {entry.status}: {args.why}")
     return 0
@@ -2099,6 +2104,11 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     ap.add_argument("--session", default=os.environ.get("AR_SESSION", "cli"),
                     help="who is acting; recorded on every state change "
                          "(default: $AR_SESSION, else 'cli')")
+    ap.add_argument("--claim-token", dest="claim_token",
+                    default=os.environ.get("AR_CLAIM_TOKEN"),
+                    help="the token `ar claim` printed; proves ownership of "
+                         "that claim under any session name (default: "
+                         "$AR_CLAIM_TOKEN)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     ini = sub.add_parser("init", help="scaffold a new domain")

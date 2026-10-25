@@ -50,12 +50,13 @@ def test_second_claim_on_a_held_entry_is_refused(sandbox, store):
 
 def test_release_requires_a_reason_and_only_by_the_holder(sandbox, store):
     make_entry(store)
-    Claims(store, sandbox, "a").claim("Q1")
+    holder = Claims(store, sandbox, "a")      # holds the token it was issued (#33)
+    holder.claim("Q1")
     with pytest.raises(ClaimError, match="requires a reason"):
-        Claims(store, sandbox, "a").release("Q1", why="")
+        holder.release("Q1", why="")
     with pytest.raises(ClaimError, match="not by 'b'"):
         Claims(store, sandbox, "b").release("Q1", why="mine now")
-    entry = Claims(store, sandbox, "a").release("Q1", why="needs a measuring session")
+    entry = holder.release("Q1", why="needs a measuring session")
     assert entry.status == "queued" and entry.claim is None
     assert any(ev.kind == "released" for ev in entry.history)
 

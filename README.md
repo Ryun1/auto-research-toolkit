@@ -296,7 +296,8 @@ ar loop        run the coordinator until it stops
 ar skill       list, find, show, check, distil and retire the domain's skills
 ar entry       file, show, amend, reprice and list entries
                (entry graph: the hypothesis tree as a mermaid diagram)
-ar claim       take one entry (serialised, always with a ceiling)
+ar claim       take one entry (serialised, always with a ceiling); prints
+               the token that proves the claim is yours (--claim-token)
 ar release     hand a claim back, with a reason
 ar reap        free an expired claim or repair an in-progress orphan
 ar close       close, reopen, or relabel a closure

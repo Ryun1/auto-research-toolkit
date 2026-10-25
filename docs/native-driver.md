@@ -31,8 +31,12 @@ generation, ranking and distillation on a cadence; run `ar rank` and
 ## What the outer harness must honour
 
 **Claims are the only write ticket.** An agent works inside a claim or not at
-all; `ar claim` names the entry, the ceiling and the session. A verdict
-applied without a claim is exactly the race the claim lock exists to prevent.
+all; `ar claim` names the entry, the ceiling and the session, and prints a
+token. The token, not the session name, proves the claim is yours: pass it
+as `--claim-token` (or `AR_CLAIM_TOKEN`) to release or update the claim,
+under whatever session name you act as. A domain that wants name ownership
+back sets `[coordinator] claim_tokens = false`. A verdict applied without a
+claim is exactly the race the claim lock exists to prevent.
 
 **Every spend is still a spend.** Model calls made by an outer harness are
 out-of-band spend and invisible to the money ceiling unless recorded:

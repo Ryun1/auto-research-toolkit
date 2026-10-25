@@ -267,8 +267,10 @@ def test_entry_new_attaches_the_tracks_gates(sandbox, store, capsys):
     entry = store.load("Q1")
     assert [(g.name, g.state, g.required) for g in entry.gates] == [
         ("kernel-proof", "pending", True), ("review", "pending", False)]
+    capsys.readouterr()
     assert _ar(sandbox, "--session", "s", "claim", "Q1", "--why", "x") == 0
-    assert _ar(sandbox, "--session", "s", "gates", "update", "Q1",
+    token = capsys.readouterr().out.split("token ")[1].split()[0]
+    assert _ar(sandbox, "--session", "s", "--claim-token", token, "gates", "update", "Q1",
                "kernel-proof", "--state", "blocked", "--why", "x") == 0
 
 

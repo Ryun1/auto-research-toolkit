@@ -286,7 +286,7 @@ def test_a_legacy_refused_receipt_never_poisons_a_retry(coordinator, store):
                                json.dumps({"assignment": identity,
                                            "verdict": "refused"})))
     store.save(entry)
-    attempts.claims(coordinator.config, "coordinator").release(
+    coordinator.claims.release(          # the claimer holds its token (#33)
         "Q1", why="legacy refusal released the claim")
     from autoresearch.errors import AutoresearchError
     with pytest.raises(AutoresearchError, match="claim identity changed"):

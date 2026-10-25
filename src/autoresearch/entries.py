@@ -146,6 +146,11 @@ class Claim:
     #: hard ceilings the claim is metered against; free text was H125's defect
     max_runs: int | None = None
     max_hours: float | None = None
+    #: sha256 of the token `ar claim` handed out (#33). Ownership is proved
+    #: by presenting the token, not by typing a session name; only the hash
+    #: is stored, so reading the record does not reveal it. Empty on claims
+    #: from before tokens, which keep name ownership.
+    token_sha: str = ""
 
 
 @dataclass

@@ -374,5 +374,6 @@ def test_a_filed_entry_carries_the_tracks_gates(sandbox, store, capsys):
     entry_id = sorted(e.id for e in store.all())[-1]
     assert [g.name for g in store.load(entry_id).gates] == [GATE]
     assert cli.main([*root, "claim", entry_id, "--why", "proving it"]) == 0
-    assert cli.main([*root, "gates", "update", entry_id, GATE, "--state",
+    token = capsys.readouterr().out.split("token ")[1].split()[0]
+    assert cli.main([*root, "--claim-token", token, "gates", "update", entry_id, GATE, "--state",
                      "passed", "--evidence", "proof.lean", "--why", "kernel-checked"]) == 0

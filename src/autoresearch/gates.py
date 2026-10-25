@@ -93,7 +93,8 @@ def _command(args):
     if args.gates_action == "show":
         entry = store.load(args.id)
     else:
-        claims = Claims(store, config, args.session)
+        claims = Claims(store, config, args.session,
+                        token=getattr(args, "claim_token", None))
         if args.gates_action == "configure":
             entry = claims.mutate(args.id, "gates-configured", args.why,
                                   lambda e: configure(e, config.track_for(e.id).gates))

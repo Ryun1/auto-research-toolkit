@@ -29,7 +29,9 @@ one entry at a time, and it says which claim it took and why.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
+import secrets
 import os
 import pathlib
 import time
@@ -129,6 +131,10 @@ class Lock:
 
 
 
+def _token_sha(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def claim_state_problems(entry, machine) -> list[str]:
     """Report active-work records that no session can currently own."""
     if entry.status != "in-progress" or entry.claim is not None:
@@ -152,8 +158,16 @@ def claim_state_problems(entry, machine) -> list[str]:
 class Claims:
     """Claim, release and reap, over an entry store."""
 
-    def __init__(self, store, config, session: str):
+    def __init__(self, store, config, session: str, token: str | None = None,
+                 pinned: dict | None = None):
+        """`token` is a claim token the caller presents (`--claim-token`);
+        `pinned` maps entry ids to the `claim.at` a coordinator-owned
+        assignment recorded, which proves the claim it issued (#33)."""
         self.store, self.config, self.session = store, config, session
+        self.token, self.pinned = token or None, dict(pinned or {})
+        #: tokens this instance handed out, so the process that claimed --
+        #: the coordinator -- acts on its own claims without being told them
+        self.issued: dict[str, str] = {}
         self.lock_path = config.paths.claims / "lock"
 
     def _lock(self) -> Lock:
@@ -181,8 +195,11 @@ class Claims:
                     f"{entry_id} is already held by {entry.claim.session!r} "
                     f"(since {entry.claim.at}). If that session is gone, "
                     f"`ar reap {entry_id}` frees it on a TTL.")
+            token = secrets.token_hex(16)
+            self.issued[entry_id] = token
             entry.claim = Claim(
                 session=self.session, at=_now_iso(), why=why, budget=budget,
+                token_sha=_token_sha(token),
                 max_runs=int(max_runs if max_runs is not None
                              else self.config.budgets.get("claim_max_runs", 20)),
                 max_hours=float(max_hours if max_hours is not None
@@ -214,13 +231,50 @@ class Claims:
         return entry
 
     def require_owner(self, entry, expected_claim_at=None):
-        if not entry.claim or entry.claim.session != self.session:
-            holder = entry.claim.session if entry.claim else "nobody"
+        """Refuse unless this caller owns `entry`'s claim (#33).
+
+        A claim with a token is owned by whoever presents the token, under any
+        session name -- the fix for a session that claimed as `cli` and acted
+        as itself. Without the token, a coordinator-owned identity pinned to
+        the claim's `at` still owns it; a bare session name does not, unless
+        the domain set `[coordinator] claim_tokens = false`. A claim from
+        before tokens keeps name ownership."""
+        claim = entry.claim
+        if not claim:
+            raise ClaimError(f"{entry.id} holds no claim; nothing to act on")
+        presented = self.token or self.issued.get(entry.id)
+        pinned = expected_claim_at or self.pinned.get(entry.id)
+        if claim.token_sha and presented:
+            if _token_sha(presented) != claim.token_sha:
+                raise ClaimError(
+                    f"{entry.id}: the claim token presented does not match the "
+                    f"claim {claim.session!r} holds")
+        elif claim.session != self.session:
+            raise ClaimError(self._not_yours(entry))
+        elif (claim.token_sha and not pinned
+                and self.config.coordinator.get("claim_tokens", True)):
             raise ClaimError(
-                f"{entry.id} is held by {holder!r}, not by {self.session!r}; "
-                "a session may change only its own claim")
-        if expected_claim_at is not None and entry.claim.at != expected_claim_at:
+                f"{entry.id} is held by {claim.session!r}, and that is your "
+                "session name -- but the claim is bound to a token, and a name "
+                "anyone can type does not prove it is yours. Pass the token "
+                "`ar claim` printed: `--claim-token TOKEN` or AR_CLAIM_TOKEN")
+        if expected_claim_at is not None and claim.at != expected_claim_at:
             raise ClaimError(f"{entry.id}: claim changed since assignment")
+
+    def _not_yours(self, entry) -> str:
+        """Which of the ways a claim is not this caller's, with its remedy."""
+        claim = entry.claim
+        age = _age_hours(claim.at)
+        ttl = float(self.config.budgets.get("claim_ttl_hours", 6))
+        if age > ttl:
+            return (f"{entry.id} is held by {claim.session!r}, silent {age:.1f} h "
+                    f"-- past the {ttl:g} h TTL, so its holder is presumed gone. "
+                    f"`ar reap {entry.id}` frees it")
+        return (f"{entry.id} is held by {claim.session!r} (claimed {age:.2f} h "
+                f"ago, inside the {ttl:g} h TTL), not by {self.session!r}. If "
+                f"you are {claim.session!r} under another name, pass its claim "
+                f"token (`--claim-token`, printed by `ar claim`); otherwise the "
+                f"work is someone else's -- pick another entry")
 
     def mutate(self, entry_id: str, kind: str, why: str, change,
                expected_claim_at=None):

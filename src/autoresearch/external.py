@@ -15,7 +15,7 @@ import shlex
 from pathlib import Path
 
 from . import attempts, budget, evaluator, holdout, runs, tamper
-from .claims import Lock
+from .claims import Claims, Lock
 from .driver.loop import Coordinator, Phase
 from .entries import Event, Store
 from .errors import AutoresearchError
@@ -303,7 +303,10 @@ def complete(config, identity, session, report):
             coordinator = Coordinator.__new__(Coordinator)
             coordinator.config, coordinator.session = config, session
             coordinator.store = store
-            coordinator.claims = attempts.claims(config, session)
+            # Pinned to the claim this assignment recorded (#33): the claim's
+            # token went to whoever ran `ar claim`, not to this process.
+            coordinator.claims = Claims(store, config, session,
+                                        pinned={row["entry"]: row["claim_at"]})
             phase = Phase("external-complete")
             hunks = (tamper.scan_tree(config, workspace, row["base"])
                      if report.get("verdict") == "confirmed" and row.get("base")
