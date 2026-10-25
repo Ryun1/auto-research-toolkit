@@ -10,7 +10,7 @@ from autoresearch.driver.brain import Reply, Role
 from autoresearch.driver.loop import Coordinator, Iteration
 from autoresearch.runs import RunRecord, append, read_all
 from autoresearch.workspaces import Pool
-from conftest import make_entry
+from conftest import append_measured, make_entry
 
 VERIFIED = {"reread": True, "claims_checked": ["audited result"]}
 
@@ -67,7 +67,7 @@ def test_new_records_outputs_and_memo_survive_cleanup(sandbox, store, git):
         (workspace / "data/artifacts/raw.txt").write_text("raw audit output")
         (workspace / "inbox").mkdir(exist_ok=True)
         (workspace / "inbox/result.md").write_text("measured 30 ops, peak 2")
-        append(workspace / "data/custom-runs/session.jsonl", produced)
+        append_measured(sandbox, workspace / "data/custom-runs/session.jsonl", produced)
         return report()
 
     coordinator, iteration = dispatch(sandbox, store, worker)
@@ -135,7 +135,7 @@ def test_unsafe_evidence_is_retained_not_published(sandbox, store, failure):
         if failure == "malformed":
             (workspace / "data/runs/broken.jsonl").write_text('{"schema":')
         else:
-            append(workspace / "data/runs/new.jsonl", row)
+            append_measured(sandbox, workspace / "data/runs/new.jsonl", row)
         return report()
 
     _, iteration = dispatch(sandbox, store, worker)
@@ -152,7 +152,7 @@ def test_worker_exception_retains_valid_rows_and_workspace(sandbox, store):
     produced = record(cost={"gpu_hours": 0.25})
 
     def worker(workspace, brief):
-        append(workspace / "data/runs/new.jsonl", produced)
+        append_measured(sandbox, workspace / "data/runs/new.jsonl", produced)
         (workspace / "inbox/unreported.md").write_text("unfinished audit")
         raise RuntimeError("worker crashed after writing its row")
 
@@ -174,9 +174,9 @@ def test_inherited_rows_cannot_support_new_measurement_claims(sandbox, store, ch
         (workspace / "inbox/result.md").write_text("claimed fresh evidence")
         if change == "rewrite":
             (workspace / "data/runs/seed.jsonl").write_text("")
-            append(workspace / "data/runs/seed.jsonl", record(id="rewritten"))
+            append_measured(sandbox, workspace / "data/runs/seed.jsonl", record(id="rewritten"))
         elif change == "partial":
-            append(workspace / "data/runs/new.jsonl", record())
+            append_measured(sandbox, workspace / "data/runs/new.jsonl", record())
         return report(runs=2 if change == "partial" else 1)
 
     _, iteration = dispatch(sandbox, store, worker)
@@ -192,7 +192,7 @@ def test_settlement_refuses_rows_written_under_another_session(sandbox, store):
     from autoresearch import attempts
 
     def worker(workspace, brief):
-        append(workspace / "data/runs/new.jsonl", record(session="some-other-worker"))
+        append_measured(sandbox, workspace / "data/runs/new.jsonl", record(session="some-other-worker"))
         return report()
 
     coordinator, iteration = dispatch(sandbox, store, worker)

@@ -16,7 +16,7 @@ from autoresearch import attempts, external
 from autoresearch.driver.brain import ScriptedBrain
 from autoresearch.driver.loop import Coordinator
 from autoresearch.runs import RunRecord, append
-from conftest import make_entry
+from conftest import append_measured, make_entry
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def test_the_handoff_manifest_is_settled_by_external_complete(coordinator, store
     it = coordinator.run_iteration(1)
     identity = it.attempt_ids[0]
     workspace = attempts.load(coordinator.config, identity)["workspace"]
-    append(pathlib.Path(workspace) / "data/runs/owner.jsonl", RunRecord(
+    append_measured(coordinator.config, pathlib.Path(workspace) / "data/runs/owner.jsonl", RunRecord(
         id="native-run", entry="Q1", session="coordinator",
         metrics={"ops": 30, "peak": 2}, provenance={"source": "worker"}))
     report = {"runs": 1, "verdict": "confirmed",
@@ -67,7 +67,7 @@ def test_the_next_native_iteration_curates_what_complete_returned(
     it = coordinator.run_iteration(1)
     identity = it.attempt_ids[0]
     workspace = attempts.load(coordinator.config, identity)["workspace"]
-    append(pathlib.Path(workspace) / "data/runs/owner.jsonl", RunRecord(
+    append_measured(coordinator.config, pathlib.Path(workspace) / "data/runs/owner.jsonl", RunRecord(
         id="native-run", entry="Q1", session="coordinator",
         metrics={"ops": 30, "peak": 2}, provenance={"source": "worker"}))
     (pathlib.Path(workspace) / "inbox/native.md").write_text("the bar was met")
@@ -94,7 +94,7 @@ def test_a_settled_verdict_reaches_the_dispatching_iteration_record(
     it = coordinator.run_iteration(1)
     identity = it.attempt_ids[0]
     workspace = attempts.load(coordinator.config, identity)["workspace"]
-    append(pathlib.Path(workspace) / "data/runs/coordinator.jsonl", RunRecord(
+    append_measured(coordinator.config, pathlib.Path(workspace) / "data/runs/coordinator.jsonl", RunRecord(
         id="native-run", entry="Q1", session="coordinator",
         metrics={"ops": 30, "peak": 2}, provenance={"source": "worker"}))
     (pathlib.Path(workspace) / "inbox/native.md").write_text("the bar was met")
@@ -145,7 +145,7 @@ def _assigned_assignment(coordinator):
     it = coordinator.run_iteration(1)
     identity = it.attempt_ids[0]
     workspace = pathlib.Path(attempts.load(coordinator.config, identity)["workspace"])
-    append(pathlib.Path(workspace) / "data/runs/owner.jsonl", RunRecord(
+    append_measured(coordinator.config, pathlib.Path(workspace) / "data/runs/owner.jsonl", RunRecord(
         id="native-run", entry="Q1", session="coordinator",
         metrics={"ops": 30, "peak": 2}, provenance={"source": "worker"}))
     return identity, workspace

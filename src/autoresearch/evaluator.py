@@ -1,0 +1,141 @@
+"""The evaluator a run is scored by, and the receipt that says core scored it.
+
+#36. A worker measured with `ar --domain <slot> measure`, so the command,
+the `[policy]` it was checked against and the script that produced the number
+were all files in the worker's own workspace. The script hashed itself into
+`provenance.measure_sha`, so an edited script reported whatever hash it
+liked. And harvest admitted any schema-valid line under the slot's runs
+directory, so a row nobody measured read as evidence. METR's o3 runs patched
+`time.time`, monkey-patched the grader and overrode `__eq__`; a loop that
+optimises hard finds the scorer if the scorer is in reach.
+
+So a candidate is measured from the primary checkout (`ar measure
+--candidate <slot>`): the command, policy and evaluator files come from the
+primary, the candidate tree from the slot, and the slot's copies of the
+evaluator must be byte-identical to the primary's. Core hashes the evaluator
+itself, and writes a receipt for each row it records into coordinator state
+outside the slot. Harvest admits a row only against a matching receipt.
+
+Not a sandbox: a worker that can write anywhere on the machine can write a
+receipt. This closes the in-workspace edits, which are the ones a worker
+makes without leaving the directory it was handed.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import pathlib
+
+from .errors import AutoresearchError, ConfigError
+
+
+def files(config) -> list[str]:
+    """The evaluator: `[evaluator] files`, or by default every token of the
+    measure command that names a file in the domain root -- `bin/measure`,
+    or the script in `python bin/measure.py`."""
+    if config.evaluator_files is not None:
+        return list(config.evaluator_files)
+    command = config.commands.get("measure", "")
+    return [token for token in command.split()
+            if _inside(config.paths.root, token)
+            and (config.paths.root / token).is_file()]
+
+
+def _inside(root, name) -> bool:
+    path = pathlib.Path(name)
+    return (not path.is_absolute() and ".." not in path.parts
+            and (pathlib.Path(root) / path).resolve().is_relative_to(
+                pathlib.Path(root).resolve()))
+
+
+def _file_digest(path) -> str:
+    try:
+        return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return "missing"
+
+
+def identity(config, root=None) -> str:
+    """One hash over the evaluator files, read from `root` (default: the
+    domain root). Names are part of it, so moving a file is a change."""
+    root = pathlib.Path(root or config.paths.root)
+    digest = hashlib.sha256()
+    for name in sorted(files(config)):
+        digest.update(f"{name}\0{_file_digest(root / name)}\n".encode())
+    return digest.hexdigest()[:16]
+
+
+def drift(config, candidate) -> list[str]:
+    """Evaluator files whose bytes in `candidate` differ from the primary's."""
+    return [name for name in sorted(files(config))
+            if _file_digest(pathlib.Path(candidate) / name)
+            != _file_digest(config.paths.root / name)]
+
+
+def command(config) -> list[str]:
+    """The measure command with every token naming a file in the primary root
+    made absolute, so it runs the primary's copy from inside a candidate."""
+    root = config.paths.root
+    return [str(root / token) if _inside(root, token) and (root / token).exists()
+            else token for token in config.command("measure").split()]
+
+
+def candidate(config, path) -> pathlib.Path:
+    """A candidate tree is a workspace this domain's pool holds; anywhere else
+    is a directory the coordinator never handed out."""
+    path = pathlib.Path(path).resolve()
+    pool = config.paths.workspaces.resolve()
+    if not path.is_dir() or not path.is_relative_to(pool) or path == pool:
+        raise AutoresearchError(
+            f"--candidate {path} is not a workspace under {pool}; a candidate "
+            "is a slot the coordinator handed out")
+    return path
+
+
+def _row_digest(record) -> str:
+    return hashlib.sha256(json.dumps(record.to_dict(), sort_keys=True)
+                          .encode()).hexdigest()
+
+
+def write_receipt(directory, record, candidate_path) -> pathlib.Path:
+    """One file per row, created exclusively: a run id is receipted once."""
+    directory = pathlib.Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{record.id}.json"
+    body = json.dumps({"run": record.id, "digest": _row_digest(record),
+                       "session": record.session,
+                       "candidate": str(candidate_path)}, sort_keys=True)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(body + "\n")
+    return path
+
+
+def receipt_problem(directory, record) -> str | None:
+    """Why `record` is not a row `ar measure` recorded, or None if it is."""
+    path = pathlib.Path(directory) / f"{record.id}.json"
+    try:
+        receipt = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return (f"row {record.id!r} has no measurement receipt: it was not "
+                "recorded by `ar measure --candidate` from the primary checkout")
+    if receipt.get("digest") != _row_digest(record):
+        return (f"row {record.id!r} does not match its receipt: it was "
+                "changed after `ar measure` recorded it")
+    return None
+
+
+def has_receipt(config, record) -> bool:
+    return receipt_problem(config.paths.receipts, record) is None
+
+
+def may_edit(config, entry_id) -> bool:
+    """Harness debt may change the evaluator: that is what fixing a scorer
+    looks like. Every other entry is scored by it, so may not."""
+    if not entry_id:
+        return False
+    try:
+        return config.track_for(entry_id).requires_defect_evidence
+    except ConfigError:
+        return False

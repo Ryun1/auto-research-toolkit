@@ -11,9 +11,10 @@ import dataclasses
 import datetime as dt
 import json
 import os
+import shlex
 from pathlib import Path
 
-from . import attempts, budget, runs
+from . import attempts, budget, evaluator, runs
 from .claims import Lock
 from .driver.loop import Coordinator, Phase
 from .entries import Event, Store
@@ -78,6 +79,14 @@ def assign(config, entry_id, session, seconds, max_runs):
                            snapshot={str(k): [v[0], v[1].hex()] for k, v in before.items()},
                            brief=dataclasses.asdict(entry),
                            scopes={"root": str(slot.path), "workspace": str(slot.path)},
+                           # The one way a run counts (#36): measured from the
+                           # primary checkout against this workspace, leaving
+                           # the receipt `complete` checks for every row.
+                           record_command=shlex.join([
+                               "ar", "--domain", str(config.paths.root),
+                               "--session", session, "measure",
+                               "--candidate", str(slot.path),
+                               "--entry", entry_id, "--"]),
                            ceiling={"runs": max_runs, "seconds": row["timeout_seconds"],
                                     "expires": (dt.datetime.fromisoformat(row["created"]) +
                                                 dt.timedelta(seconds=row["timeout_seconds"])).isoformat()},
@@ -256,15 +265,22 @@ def complete(config, identity, session, report):
                 raise AutoresearchError(f"invalid measurement GPU usage for {record.id}: {exc}") from exc
         gpu_hours = max(gpu_hours, measured_gpu_hours)
         paths = config.paths
+        drifted = evaluator.drift(config, workspace)
+        if drifted and not evaluator.may_edit(config, row["entry"]):
+            raise AutoresearchError(
+                f"the assignment workspace edited the evaluator ({', '.join(drifted)}); "
+                "only harness debt may change what scores a run. Evidence retained, "
+                "restore the files or cancel")
         protected = (paths.entries, paths.claims, paths.runs, paths.iterations, paths.workspaces,
-                     attempts.directory(config))
+                     attempts.directory(config), paths.receipts,
+                     *(paths.root / name for name in evaluator.files(config)))
         with attempts.claims(config, session)._lock():
             attempts.live_claim(config, row)
             if dt.datetime.now(dt.UTC) > dt.datetime.fromisoformat(row["ceiling"]["expires"]):
                 raise AutoresearchError("assignment deadline exhausted; cancel and preserve evidence")
             harvest = runs.harvest(directory, before, paths.runs, workspace=workspace,
                                    root=paths.root, goal=config.goal, lanes=config.lanes,
-                                   protected=protected)
+                                   receipts=paths.receipts, protected=protected)
             if harvest.problems:
                 raise AutoresearchError("; ".join(harvest.problems))
             if report.get("memo"):

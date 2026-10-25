@@ -300,7 +300,7 @@ sequenceDiagram
     end
 
     C->>C: harvest new run rows, outputs and memo serially
-    Note over C: missing/colliding evidence → refuse verdict, retain slot<br/>successful harvest → release slot
+    Note over C: slot edited the evaluator → nothing harvested, retain slot<br/>row without a measure receipt → refused<br/>missing/colliding evidence → refuse verdict, retain slot<br/>successful harvest → release slot
     C->>C: _apply_verdict per entry
     Note over C: already closed → success, not a race<br/>no verification block → refused, claim released<br/>close refused → release the claim, do not close
     C->>P: release_all() (finally)

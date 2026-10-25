@@ -126,3 +126,13 @@ def race_next_id(monkeypatch, title="theirs"):
 
     monkeypatch.setattr(Store, "next_id", racing)
     return taken
+
+
+def append_measured(config, path, record):
+    """A row as `ar measure --candidate` leaves it: appended in the slot, with
+    the receipt harvest checks (#36). For tests about what happens to a
+    measured row after it exists, not about how it was measured."""
+    from autoresearch import evaluator
+    from autoresearch.runs import append
+    append(path, record)
+    evaluator.write_receipt(config.paths.receipts, record, pathlib.Path(path).parent)

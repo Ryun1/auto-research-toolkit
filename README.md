@@ -1031,6 +1031,17 @@ Two verbs make an execution budget real rather than declarative:
   unharvested evidence. This is a handoff protocol, not a sandbox: policy
   checking and human-only gates are unchanged, and the coordinator that
   dispatches the work remains responsible for what it dispatches.
+- **Workers measure from the primary checkout.** A worker's brief (and an
+  external assignment's `record_command`) runs `ar --domain <primary>
+  measure --candidate <slot>`: the measure command, `[policy]` and the
+  evaluator files (`[evaluator] files`, default the measure script) come from
+  the primary, the tree under test from the slot, run with the slot as `cwd`
+  and in `$AR_CANDIDATE`. A slot whose copy of the evaluator differs is not
+  measured, core stamps `provenance.evaluator_sha` and `cost.wall_seconds`
+  itself, and harvest admits only rows with the receipt `ar measure` left
+  under `.ar/receipts/`. A measure script must therefore find the candidate
+  through its working directory or `$AR_CANDIDATE`, never through
+  `__file__`, which now names the primary's copy.
 
 ### Native dispatch: the loop hands off, native agents do the work
 

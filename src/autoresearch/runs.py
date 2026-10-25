@@ -606,12 +606,19 @@ class Harvest:
 
 
 def harvest(directory, before, destination, *, workspace, root, goal, lanes,
-            protected=()) -> Harvest:
+            receipts, protected=()) -> Harvest:
     """Retain appended records and their declared local outputs before teardown.
 
     Bad rows stay in the workspace for audit, never become manufactured records.
     Callers serialize harvests and retain the workspace when problems are present.
+
+    A row is admitted only against a receipt in `receipts` that `ar measure
+    --candidate` wrote when it recorded that exact row (#36). Without one, a
+    line the worker appended by hand and a measurement were indistinguishable
+    -- "only toolkit-recorded rows are measurement evidence" was a sentence in
+    the brief, and nothing read it.
     """
+    from . import evaluator
     directory, destination = pathlib.Path(directory), pathlib.Path(destination)
     result = Harvest()
     existing = {}
@@ -652,6 +659,9 @@ def harvest(directory, before, destination, *, workspace, root, goal, lanes,
                             or not isinstance(record.session, str)):
                         raise SchemaError("metrics/provenance must be objects and session a string")
                     record.validate(goal)
+                    unreceipted = evaluator.receipt_problem(receipts, record)
+                    if unreceipted:
+                        raise SchemaError(unreceipted)
                     if not isinstance(record.outputs, list) or not all(
                             isinstance(name, str) for name in record.outputs):
                         raise SchemaError("outputs must be a list of local paths")

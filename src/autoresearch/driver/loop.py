@@ -967,8 +967,12 @@ class Coordinator:
         phase.read = len(jobs)
 
         paths = self.config.paths
+        from .. import evaluator as evaluator_mod
+        # The evaluator is coordinator-owned too (#36): a worker's declared
+        # output must never land on the files that score the next worker.
         protected = (paths.entries, paths.claims, paths.runs,
-                     paths.iterations, paths.workspaces)
+                     paths.iterations, paths.workspaces, paths.receipts,
+                     *(paths.root / name for name in evaluator_mod.files(self.config)))
 
         def work(entry_id):
             slot = pool.acquire(f"it{it.n}-{entry_id}")
@@ -981,8 +985,13 @@ class Coordinator:
                     raise AutoresearchError("configured runs directory escapes workspace")
                 before = runs_mod.snapshot(directory)
                 entry = self.store.load(entry_id)
-                command = ["ar", "--domain", str(slot.path), "--session",
-                           slot.name, "measure", "--entry", entry_id, "--"]
+                # Measured from the primary checkout against the slot (#36):
+                # the command, policy and evaluator are the primary's, so
+                # nothing the worker edits in its slot decides its score.
+                command = ["ar", "--domain", str(self.config.paths.root),
+                           "--session", slot.name, "measure",
+                           "--candidate", str(slot.path),
+                           "--entry", entry_id, "--"]
                 brief = self._brief(
                     Role.WORKER, it, entry=dataclasses.asdict(entry),
                     workspace=str(slot.path),
@@ -999,7 +1008,12 @@ class Coordinator:
                         "Test this entry against its own pre-registered bar. "
                         "Run measurements through record_command (append domain "
                         "arguments after --), not the raw measure_command; only "
-                        "toolkit-recorded rows are measurement evidence. Declare "
+                        "toolkit-recorded rows are measurement evidence, and a "
+                        "row without the receipt record_command leaves is "
+                        "refused at harvest. The evaluator files "
+                        f"({', '.join(evaluator_mod.files(self.config)) or 'none declared'}) "
+                        "are not yours to edit: a slot that changes them is "
+                        "not measured. Declare "
                         "all audit outputs as workspace-relative findings paths "
                         "in each record's outputs. Write a memo under the "
                         "configured memos directory; then re-read your own memo "
@@ -1035,13 +1049,22 @@ class Coordinator:
             if reply is not None:
                 self._charge(it, reply)
             evidence = runs_mod.Harvest()
-            if slot is not None and before is not None:
+            drifted = (evaluator_mod.drift(self.config, slot.path)
+                       if slot is not None else [])
+            if drifted and not evaluator_mod.may_edit(self.config, entry_id):
+                # Nothing is harvested from a slot that edited what scores
+                # it (#36); the slot is retained below for audit.
+                evidence.problems.append(
+                    f"the slot edited the evaluator ({', '.join(drifted)}); "
+                    "only harness debt may change what scores a run")
+            elif slot is not None and before is not None:
                 try:
                     evidence = runs_mod.harvest(
                         slot.path / self.config.paths.runs.relative_to(self.config.paths.root),
                         before, self.config.paths.runs, workspace=slot.path,
                         root=self.config.paths.root, goal=self.config.goal,
-                        lanes=self.config.lanes, protected=protected)
+                        lanes=self.config.lanes, receipts=paths.receipts,
+                        protected=protected)
                     if report.get("memo"):
                         runs_mod.retain_output(slot.path, self.config.paths.root,
                                                report["memo"], self.config.lanes,

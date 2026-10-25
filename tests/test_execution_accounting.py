@@ -14,7 +14,7 @@ from autoresearch.driver.loop import Coordinator, Iteration
 from autoresearch.errors import AutoresearchError
 from autoresearch.runs import RunRecord, append, read_all
 from autoresearch.workspaces import Pool
-from conftest import close, make_entry
+from conftest import append_measured, close, make_entry
 
 SOURCE = str(Path(__file__).resolve().parents[1] / "src")
 
@@ -141,7 +141,7 @@ def test_external_gpu_usage_survives_restart_without_recharging_dispatch(
     claim(sandbox, store)
     assigned = external.assign(sandbox, "Q1", "owner", 30, 1)
     workspace = Path(assigned["workspace"])
-    append(workspace / "data/runs/owner.jsonl", RunRecord(
+    append_measured(sandbox, workspace / "data/runs/owner.jsonl", RunRecord(
         id="external-run", entry="Q1", session="owner", metrics={"ops": 30, "peak": 2},
         provenance={"source": "worker"}, cost={"gpu_hours": measured}))
     report = {"runs": 1, "gpu_hours": reported, "verdict": "inconclusive",

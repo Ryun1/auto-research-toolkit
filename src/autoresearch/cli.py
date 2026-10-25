@@ -25,6 +25,7 @@ import pathlib
 import subprocess
 import sys
 import textwrap
+import time
 
 from . import attempts as attempts_mod
 from . import budget as budget_mod
@@ -1115,12 +1116,25 @@ def cmd_measure(args):
                 f"{entry.id} is closed ({entry.status}); a measurement filed "
                 f"against it reads as its evidence. File the run under an "
                 f"open entry, or reopen {entry.id} first")
-    command = config.command("measure").split() + list(args.rest)
+    # #36: the command, the policy above and the evaluator all come from this
+    # domain root. A candidate (a worker's slot) supplies only the tree being
+    # measured -- its own domain.toml and its copy of the evaluator are files
+    # the worker can edit, so they are never what scores it.
+    from . import evaluator as evaluator_mod
+    candidate = (evaluator_mod.candidate(config, args.candidate)
+                 if getattr(args, "candidate", None) else None)
+    _refuse_evaluator_drift(config, candidate, args.entry, "before")
+    evaluator_sha = evaluator_mod.identity(config)
+    command = evaluator_mod.command(config) + list(args.rest)
     env_note = f"entry={args.entry} " if args.entry else ""
-    proc = subprocess.run(command, cwd=config.paths.root, capture_output=True,
-                          text=True,
+    clock = time.monotonic()
+    proc = subprocess.run(command, cwd=candidate or config.paths.root,
+                          capture_output=True, text=True,
                           env={**_env(), "AR_SESSION": args.session,
-                               **({"AR_ENTRY": args.entry} if args.entry else {})})
+                               **({"AR_ENTRY": args.entry} if args.entry else {}),
+                               **({"AR_CANDIDATE": str(candidate)}
+                                  if candidate else {})})
+    wall_seconds = time.monotonic() - clock
     if proc.returncode != 0:
         raise AutoresearchError(
             f"measure failed ({proc.returncode}) {env_note}: {proc.stderr.strip()[:500]}")
@@ -1132,6 +1146,18 @@ def cmd_measure(args):
             f"got: {proc.stdout[:300]!r}") from exc
     record = runs_mod.RunRecord.from_dict(payload)
     record.session = args.session
+    # Read again after the run: an evaluator edited while it ran scored this
+    # row with something other than what was hashed.
+    _refuse_evaluator_drift(config, candidate, args.entry, "during")
+    if evaluator_mod.identity(config) != evaluator_sha:
+        raise AutoresearchError(
+            "the evaluator changed while it ran; no row recorded")
+    # Core's numbers, not the script's: a script-written `measure_sha` hashes
+    # whatever the script says it is, and a patched `time.time` inside the
+    # candidate moves `started`/`finished` but not this clock.
+    record.provenance["evaluator_sha"] = evaluator_sha
+    if isinstance(record.cost, dict):
+        record.cost["wall_seconds"] = round(wall_seconds, 3)
     # A throughput figure that does not name its machine is not a measurement,
     # and two rows from different machines are not comparable without saying so.
     # The domain does not have to remember to record this; core does it.
@@ -1139,15 +1165,45 @@ def cmd_measure(args):
     if args.entry:
         record.entry = args.entry
     record.validate(config.goal)
-    path = runs_mod.append(config.paths.runs / f"{args.session}.jsonl", record)
+    runs_dir = (candidate / config.paths.runs.relative_to(config.paths.root)
+                if candidate else config.paths.runs)
+    if candidate:
+        # The proof harvest asks for, kept where the slot cannot write it.
+        # Taken before the row is appended: a run id is receipted once, so a
+        # script that reuses one is refused here, not at harvest.
+        try:
+            evaluator_mod.write_receipt(config.paths.receipts, record, candidate)
+        except FileExistsError:
+            raise AutoresearchError(
+                f"run id {record.id!r} was already recorded; a measure script "
+                "must mint a fresh id per run") from None
+    path = runs_mod.append(runs_dir / f"{args.session}.jsonl", record)
     value = (config.goal.objective_value(record.metrics)
              if record.status == "ok" else None)
     # H2: `,.0f` rounded a 0.701 objective to `1` -- a display 1000x off that
     # masks pass/fail against the target. The house format is render._fmt.
+    shown = (path.relative_to(config.paths.root)
+             if path.is_relative_to(config.paths.root) else path)
     print(f"{record.id} {record.status}"
           + (f"  objective={render._fmt(value)}" if value is not None else "")
-          + f"  -> {path.relative_to(config.paths.root)}")
+          + f"  -> {shown}")
     return 0
+
+
+def _refuse_evaluator_drift(config, candidate, entry_id, when):
+    """A candidate whose copy of the evaluator differs from the primary's is
+    not measured (#36) -- unless the entry is harness debt, whose work may be
+    the evaluator itself. The primary's copy is what runs either way."""
+    if candidate is None:
+        return
+    from . import evaluator as evaluator_mod
+    drifted = evaluator_mod.drift(config, candidate)
+    if drifted and not evaluator_mod.may_edit(config, entry_id):
+        raise AutoresearchError(
+            f"the candidate's evaluator differs from the primary's "
+            f"({when} the run): {', '.join(drifted)}. A worker is not scored "
+            "by an evaluator it edited; restore those files in the slot, or "
+            "file the change as harness debt")
 
 
 def _score_row(score) -> dict:
@@ -1538,6 +1594,7 @@ def cmd_validate(args):
                 + validate_mod.core_warnings(config)
                 + validate_mod.closure_warnings(config)
                 + validate_mod.output_warnings(config)
+                + validate_mod.measurement_warnings(config)
                 + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):
@@ -2167,6 +2224,11 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     meas = sub.add_parser("measure", help="run the domain's measurement, record the row")
     meas.add_argument("--entry")
+    meas.add_argument("--candidate", type=pathlib.Path,
+                      help="a workspace slot to measure: the command, policy "
+                           "and evaluator come from this domain, the tree "
+                           "from the slot, and the row lands in the slot "
+                           "with a receipt harvest checks (#36)")
     meas.add_argument("rest", nargs="*",
                       help="passed through to the domain command, flags included")
     meas.set_defaults(func=cmd_measure)
@@ -2332,9 +2394,9 @@ def _measure_passthrough(argv):
         return argv
     j = i + 1
     while j < len(argv):
-        if argv[j] == "--entry":
+        if argv[j] in ("--entry", "--candidate"):
             j += 2
-        elif argv[j].startswith("--entry="):
+        elif argv[j].startswith(("--entry=", "--candidate=")):
             j += 1
         else:
             break

@@ -123,6 +123,51 @@ def output_warnings(config) -> list[str]:
     return out
 
 
+#: How far a row's self-reported duration may fall short of the wall clock
+#: `ar measure` kept around it before validate says so. Generous on purpose:
+#: interpreter start-up and imports sit outside `started`/`finished` and are
+#: real, so only a gap that is both large and most of the run is named. A
+#: duration longer than the wall clock is impossible and needs no margin
+#: beyond rounding.
+WALL_CLOCK_SLACK_SECONDS = 30.0
+WALL_CLOCK_SLACK_SHARE = 0.5
+
+
+def measurement_warnings(config) -> list[str]:
+    """Rows whose own timestamps disagree with the wall clock core kept.
+
+    #36: `started` and `finished` are written by the measure script, inside
+    the candidate's process -- a patched `time.time` (METR found o3 doing
+    exactly this) moves them. `cost.wall_seconds` is timed by core around the
+    subprocess and does not move. A row with no `wall_seconds` predates the
+    stamp and is not judged."""
+    from .runs import read_all
+    try:
+        records = read_all(config.paths.runs)
+    except Exception:                   # output_warnings already names it
+        return []
+    out = []
+    for record in records:
+        cost = record.cost if isinstance(record.cost, dict) else {}
+        wall = cost.get("wall_seconds")
+        if not isinstance(wall, (int, float)) or record.finished is None:
+            continue
+        try:
+            reported = float(record.finished) - float(record.started)
+        except (TypeError, ValueError):
+            continue
+        short = wall - reported
+        if reported > wall + 1.0 or (short > WALL_CLOCK_SLACK_SECONDS
+                                     and short > WALL_CLOCK_SLACK_SHARE * wall):
+            out.append(
+                f"run {record.id}: reports a {reported:.1f}s run, but `ar "
+                f"measure` timed {wall:.1f}s around it -- the row's own clock "
+                f"disagrees with core's (a patched timer inside the candidate "
+                f"reads like this); inspect the candidate before trusting the "
+                f"row")
+    return out
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.

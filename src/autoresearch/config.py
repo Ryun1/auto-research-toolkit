@@ -52,7 +52,7 @@ DISTIL_EVERY = 5
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
               "skills", "upstream", "brain", "plugins", "session",
-              "challenge"}
+              "challenge", "evaluator"}
 
 #: Option keys a `[brain]` table may carry for the built-in TypeSafe brain
 #: (`value = "typesafe"`), beyond `default` / role names / `authorize_spend`.
@@ -248,6 +248,10 @@ class Paths:
     memos: pathlib.Path
     iterations: pathlib.Path
     workspaces: pathlib.Path
+    #: one receipt per row `ar measure` recorded against a candidate (#36).
+    #: Coordinator state, outside every workspace: a slot cannot hold the
+    #: proof that its own rows were measured.
+    receipts: pathlib.Path
 
 
 @dataclass
@@ -339,6 +343,9 @@ class DomainConfig:
     upstream: Upstream = field(default_factory=Upstream)
     #: the public challenge this domain chases, when it chases one
     challenge: Challenge = field(default_factory=Challenge)
+    #: `[evaluator] files`: what a run is scored by (#36). None means the
+    #: measure command's own script -- see `evaluator.files`.
+    evaluator_files: tuple[str, ...] | None = None
     description: str = ""
 
     # -- lookup -----------------------------------------------------------
@@ -462,7 +469,8 @@ class DomainConfig:
             runs=root / state.get("runs", "data/runs"),
             memos=root / state.get("memos", "inbox"),
             iterations=root / state.get("iterations", "state/iterations"),
-            workspaces=root / state.get("workspaces", ".ar/workspaces"))
+            workspaces=root / state.get("workspaces", ".ar/workspaces"),
+            receipts=root / state.get("receipts", ".ar/receipts"))
 
         goal_rel = domain.get("goal", "goal.yaml")
         goal_path = root / goal_rel
@@ -534,7 +542,30 @@ class DomainConfig:
             remote=[RemoteClass.from_dict(spec)
                     for spec in (data.get("remote") or [])],
             upstream=Upstream.from_dict(dict(data.get("upstream") or {})),
-            challenge=Challenge.from_dict(dict(data.get("challenge") or {})))
+            challenge=Challenge.from_dict(dict(data.get("challenge") or {})),
+            evaluator_files=_evaluator_files(data.get("evaluator") or {}))
+
+
+def _evaluator_files(spec) -> tuple[str, ...] | None:
+    """`[evaluator] files`: the files a run is scored by (#36). Absent means
+    the measure command's own script. Paths are relative to the domain root."""
+    unknown = set(spec) - {"files"}
+    if unknown:
+        raise ConfigError(f"[evaluator] has unknown key(s) {sorted(unknown)}; "
+                          "known: ['files']")
+    if "files" not in spec:
+        return None
+    names = spec["files"]
+    if (not isinstance(names, list) or not names
+            or not all(isinstance(n, str) and n for n in names)):
+        raise ConfigError("[evaluator] files must be a non-empty list of paths "
+                          "relative to the domain root")
+    for name in names:
+        path = pathlib.PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts:
+            raise ConfigError(f"[evaluator] file {name!r} must be relative to "
+                              "the domain root and stay inside it")
+    return tuple(names)
 
 
 def _brain_spec(data) -> dict:
