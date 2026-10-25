@@ -213,6 +213,40 @@ def epoch_warnings(config) -> list[str]:
             f"for best -- `ar epochs` lists closures that may need reopening"]
 
 
+def git_warnings(config, limit: int = 15) -> list[str]:
+    """Entry and run files the last commit does not hold (#25).
+
+    provably.fast found 13 entry files from a night's measurements untracked
+    while `validate` read clean: the record validated was not the record a
+    clone would get. Named in one warning, never a problem -- mid-session the
+    working tree is legitimately ahead of the last commit. Gitignored paths
+    are the domain's choice and are not named; outside git there is nothing
+    to say."""
+    import subprocess
+    root = config.paths.root
+    scopes = [str(p.relative_to(root)) for p in (config.paths.entries,
+                                                 config.paths.runs)
+              if p.is_relative_to(root)]
+
+    def git(*args):
+        proc = subprocess.run(["git", *args, "--", *scopes], cwd=root,
+                              capture_output=True, text=True)
+        return proc.stdout.splitlines() if proc.returncode == 0 else None
+
+    untracked = git("ls-files", "--others", "--exclude-standard")
+    if untracked is None or not scopes:
+        return []
+    modified = git("ls-files", "--modified") or []
+    staged = git("diff", "--cached", "--name-only", "--relative") or []
+    names = sorted(set(untracked) | set(modified) | set(staged))
+    if not names:
+        return []
+    shown = ", ".join(names[:limit]) + (" ..." if len(names) > limit else "")
+    return [f"{len(names)} record file(s) are not committed ({shown}) -- the "
+            f"record validated here is not the one a clone gets; commit them "
+            f"(or gitignore what is meant to stay local)"]
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.

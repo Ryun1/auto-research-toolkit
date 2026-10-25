@@ -1791,6 +1791,7 @@ def cmd_validate(args):
                 + validate_mod.measurement_warnings(config)
                 + validate_mod.revision_warnings(config)
                 + validate_mod.epoch_warnings(config)
+                + validate_mod.git_warnings(config)
                 + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):
