@@ -355,3 +355,28 @@ def test_a_slot_cannot_measure_a_candidate_as_if_it_were_the_primary(domain, cap
         rc = cli.main(["--domain", str(slot), "measure", "--candidate", str(slot)])
     assert rc == 2
     assert "is itself a workspace slot" in capsys.readouterr().err
+
+
+# -- holdout (#42) -----------------------------------------------------------
+
+def test_a_session_worktree_never_receives_the_holdout(domain):
+    """#38 stripped the holdout from pool slots; `ar session` worktrees were
+    created separately and still received it."""
+    root = domain.paths.root
+    (root / "holdout").mkdir()
+    (root / "holdout" / "bin").write_text("#!/bin/sh\nexit 1\n")
+    (root / "holdout" / "data.csv").write_text("secret\n")
+    toml = root / "domain.toml"
+    toml.write_text(toml.read_text().replace(
+        "[commands]\n", '[commands]\nholdout = "holdout/bin"\n')
+        + '\n[holdout]\nfiles = ["holdout/data.csv"]\n')
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "holdout", cwd=root)
+    config = DomainConfig.load(root)
+    session_mod.create(config, "loop-a")
+    wt = worktree_of(config, "loop-a")
+    assert not (wt / "holdout" / "bin").exists()
+    assert not (wt / "holdout" / "data.csv").exists()
+    # skip-worktree: a session's `commit -a` cannot delete it from the primary
+    git("commit", "-qam", "session work", "--allow-empty", cwd=wt)
+    assert "holdout/data.csv" in git("ls-tree", "-r", "--name-only", "HEAD", cwd=wt)

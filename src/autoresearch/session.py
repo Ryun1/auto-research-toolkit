@@ -210,6 +210,11 @@ def create(config, name) -> dict:
     base = _git(root, "rev-parse", "HEAD").stdout.strip()
     parent.mkdir(parents=True, exist_ok=True)
     _git(root, "worktree", "add", str(worktree), "HEAD")
+    # The holdout never reaches a session either (#42): the same strip the
+    # workspace pool applies, skip-worktree included, so the session's own
+    # `commit -a` cannot delete it from the primary on merge.
+    from . import holdout
+    holdout.strip(config, worktree, worktree=True)
     record = {
         "name": name,
         "path": str(worktree),
