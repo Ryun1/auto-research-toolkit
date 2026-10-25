@@ -339,7 +339,9 @@ def rank(entries, config, *, prior_weight: float = 3.0,
         card.score = confidence * impact / cost * staleness * overlap
         if touching:
             card.terms["soft_dead"] = float(len(touching))
-        card.novel = entry.parent == ""
+        # A follow-up filed with --derived-from is lineage, not new
+        # territory, even though the depth cap kept it off the tree (#23).
+        card.novel = entry.parent == "" and not entry.derived_from
         scored.append(card)
 
     scored.sort(key=lambda s: -s.score)

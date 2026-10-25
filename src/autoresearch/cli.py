@@ -700,6 +700,8 @@ def cmd_entry_new(args):
     # The same gate the coordinator's generate phase runs: a human or a
     # native-dispatch agent files through the identical tree rules, so the
     # CLI path and the loop path cannot diverge into different trees.
+    tree.check_derived(store, getattr(args, "derived_from", None) or "",
+                       args.parent or "", track.id)
     tree.check_branch(config, store, args.parent or "", args.kind or "",
                       track.id)
     entry = Entry(
@@ -707,6 +709,7 @@ def cmd_entry_new(args):
         track=track.id, title=args.title,
         status=track.machine.initial,
         parent=args.parent or "", kind=args.kind or "",
+        derived_from=getattr(args, "derived_from", None) or "",
         hypothesis=args.hypothesis or "", prediction=args.prediction or "",
         bar=args.bar or "", why_filed=args.why or "",
         confidence=args.confidence, impact=args.impact, cost=args.cost,
@@ -2346,6 +2349,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                                       "for a novel root")
     new.add_argument("--kind", help="branch intent: improve, debug or probe "
                                     "(branches only)")
+    new.add_argument("--derived-from", dest="derived_from",
+                     help="the entry this follows up when a --parent branch "
+                          "would pass tree_max_depth: lineage the graph draws "
+                          "and ranking reads, outside the depth count (#23)")
     new.add_argument("--core", help="core version the defect was observed on "
                                     "(stamped automatically when the loop files it)")
     new.add_argument("--repro", help="command or path that demonstrates the defect")

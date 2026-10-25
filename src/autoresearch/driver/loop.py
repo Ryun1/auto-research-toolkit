@@ -771,6 +771,8 @@ class Coordinator:
         parent = str(proposal.get("parent", "") or "")
         kind = str(proposal.get("kind", "") or "")
         from .. import tree
+        derived_from = str(proposal.get("derived_from", "") or "")
+        tree.check_derived(self.store, derived_from, parent, track.id)
         tree.check_branch(self.config, self.store, parent, kind, track.id)
         entry = Entry(
             id=self.store.next_id(track.prefix), track=track.id,
@@ -778,6 +780,7 @@ class Coordinator:
             status=track.machine.initial,
             parent=parent,
             kind=kind,
+            derived_from=derived_from,
             hypothesis=str(proposal.get("hypothesis", "")),
             prediction=str(proposal.get("prediction", "")),
             bar=str(proposal.get("bar", "")),

@@ -15,6 +15,28 @@ from .entries import KINDS
 from .errors import AutoresearchError
 
 
+def check_derived(store, derived_from: str, parent: str, track_id: str) -> None:
+    """Refuse a `derived_from` that names nothing, crosses tracks, or doubles
+    a `parent` (#23). It is the tree's lineage without the tree's budgets, so
+    it carries none of `check_branch`'s depth or sibling checks."""
+    if not derived_from:
+        return
+    if parent:
+        raise AutoresearchError(
+            "--parent and --derived-from are one or the other: a branch is "
+            "already lineage, and a derivation is for work the cap kept off "
+            "the tree")
+    try:
+        source = store.load(derived_from)
+    except Exception as exc:
+        raise AutoresearchError(
+            f"cannot derive from {derived_from!r}: no such entry") from exc
+    if source.track != track_id:
+        raise AutoresearchError(
+            f"cannot derive from {derived_from!r} on track {track_id!r}: "
+            "lineage stays on its track")
+
+
 def check_branch(config, store, parent: str, kind: str,
                  track_id: str) -> None:
     """Refuse an invalid branch filing, or return None when it may proceed.
@@ -55,7 +77,8 @@ def check_branch(config, store, parent: str, kind: str,
     if max_depth and depth > max_depth:
         raise AutoresearchError(
             f"branch depth {depth} exceeds tree_max_depth={max_depth}; "
-            "deepen the record by closing work, or raise the cap")
+            f"file it with `--derived-from {parent}` instead (the lineage is "
+            "kept and drawn, the depth is not counted), or raise the cap")
     max_children = config.tree_max_children
     if max_children:
         siblings = sum(1 for e in store.all() if e.parent == parent)

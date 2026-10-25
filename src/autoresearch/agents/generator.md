@@ -109,6 +109,10 @@ A branch stays on its parent's track; depth and sibling counts are capped by
 the domain's `tree_max_depth` and `tree_max_children`, and a proposal past
 either cap is refused at filing with a reason. A refusal is information: it
 means the board wants that parent's children spent on a different exchange.
+A follow-up the depth cap keeps off the tree is filed with `derived_from`
+(the entry it follows up) instead of `parent`: its lineage is drawn and it is
+not ranked as novel, but it does not count toward depth. Never file it as a
+bare root that cites its source only in prose.
 The same is true of `branch_stagnation`: when enough of a parent's children
 have closed `refuted` with none `confirmed`, a new child of it is refused —
 branch that parent's *record*, not its lineage. If the refutations name a

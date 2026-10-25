@@ -486,6 +486,9 @@ def graph_view(track, entries, circles=False, direction="TD") -> str:
             edge_pairs.append(
                 (e.parent, e.id, f' -->|"{e.kind}"| ' if e.kind else " --> "))
     for e in mine:
+        if e.derived_from and e.derived_from in ids:
+            edge_pairs.append((e.derived_from, e.id, ' -.->|"derived"| '))
+    for e in mine:
         for old in sorted(e.supersedes):
             if old in ids:
                 edge_pairs.append((old, e.id, ' ==>|"superseded by"| '))

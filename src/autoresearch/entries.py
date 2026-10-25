@@ -303,6 +303,11 @@ class Entry:
     #: verdicts, which pushes diversity instead of mode collapse. Empty on
     #: roots (a root is a probe by construction).
     kind: str = ""
+    #: Lineage the tree cap does not count (#23): the entry this follows up,
+    #: recorded when a `--parent` branch would pass `tree_max_depth`. The
+    #: graph draws it and ranking reads the entry as not novel; depth and
+    #: sibling budgets ignore it. Empty on roots and on ordinary branches.
+    derived_from: str = ""
 
     claim: Claim | None = None
     result: Result | None = None
