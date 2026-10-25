@@ -97,3 +97,19 @@ def test_a_terminal_close_without_a_summary_is_refused(sandbox, store, capsys):
     assert cli.main([*root, "close", "Q1", "confirmed", "--memo", "inbox/Q1.md",
                      "--summary", "measured 3.1% below the record"]) == 0
     assert store.load("Q1").result.summary == "measured 3.1% below the record"
+
+
+def test_a_mechanism_closure_names_the_entries_it_hides_from_rank(
+        sandbox, store, capsys):
+    """#13: a mechanism refutation silently removed sibling entries from
+    `ar rank`; curators found it by hand and relabelled to `cell`."""
+    make_entry(store, "Q1", mechanisms=["port"])
+    make_entry(store, "Q2", mechanisms=["port"])
+    make_entry(store, "Q3", mechanisms=["other"])
+    code = _claim_and_close(sandbox, "Q1", "refuted",
+                            "--closure", "mechanism", "--summary", "no gain",
+                            "--memo", memo(sandbox))
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "now excluded from `ar rank` by this mechanism closure: Q2 " in out, out
+    assert "Q3" not in out

@@ -938,6 +938,19 @@ def cmd_close(args):
           + (f" ({args.closure})" if args.closure else "")
           + (f" — superseded by {replacement.id}" if replacement else "")
           + f" — evidence: {result.memo}")
+    if args.status == "refuted" and args.closure == "mechanism":
+        # A mechanism closure removes every open entry sharing the mechanism
+        # from `ar rank`. Said nowhere, curators found it by hand five times in
+        # a week and relabelled to `cell` (#13) -- so name them as it happens.
+        dead = set(entry.closure_mechanisms())
+        hidden = [e.id for e in store.all()
+                  if e.id != entry.id
+                  and not config.track_for(e.id).machine.status(e.status).terminal
+                  and dead & set(e.mechanisms) and entry.result_applies_to(e)]
+        if hidden:
+            print(f"  now excluded from `ar rank` by this mechanism closure: "
+                  f"{', '.join(hidden)} -- if the refutation does not reach "
+                  f"them, `ar close {entry.id} --relabel cell`")
     if not track.machine.status(entry.status).terminal:
         # Which statuses are terminal is per-track machine config (a defect
         # track closes `fixed`, not `confirmed`), and the first real domain
