@@ -272,6 +272,11 @@ def test_a_zero_objective_from_one_zero_factor_is_flagged():
         record(metrics={"ops": 0.0, "peak": 7.0}).validate(GOAL)
     # maximise: zero is the worst score, not a perfect one
     record(metrics={"ops": 0.0, "peak": 7.0}).validate(MAXIMISE)
+    # a goal whose target is legitimately zero opts out, as it does elsewhere
+    zero_ok = Goal.from_dict({"goal": {
+        "id": "g", "objective": "ops * peak", "metrics": {"ops": {}, "peak": {}},
+        "target": {"value": 0}, "allow_degenerate_target": True}})
+    record(metrics={"ops": 0.0, "peak": 7.0}).validate(zero_ok)
 
 
 def test_frontier_leaves_out_rows_failing_a_constraint_or_marked_scaffold(sandbox, store):

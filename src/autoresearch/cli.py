@@ -934,7 +934,8 @@ def cmd_close(args):
     # `confirmed`, and nothing tied the two (#17). Name them on the closure.
     try:
         from . import attempts as attempts_mod
-        cancelled = [r["id"] for r in attempts_mod.records(config)
+        cancelled = [] if not track.machine.status(args.status).terminal else [
+                     r["id"] for r in attempts_mod.records(config)
                      if r.get("kind") == "external" and r.get("entry") == entry.id
                      and r.get("status") == "cancelled"]
     except AutoresearchError:
@@ -1010,8 +1011,12 @@ def cmd_measure(args):
         # A row on a closed entry lands on the board as that entry's evidence
         # -- an integration run on an already-confirmed entry printed as best,
         # GOAL MET, after its `ar claim` had been refused (mldsa87, #9).
-        entry = _store(config).load(args.entry)
-        if config.track_for(entry.id).machine.status(entry.status).terminal:
+        try:
+            entry = _store(config).load(args.entry)
+        except AutoresearchError:
+            entry = None             # an unfiled id is not this check's call
+        if entry is not None and config.track_for(entry.id).machine.status(
+                entry.status).terminal:
             raise AutoresearchError(
                 f"{entry.id} is closed ({entry.status}); a measurement filed "
                 f"against it reads as its evidence. File the run under an "
@@ -2204,9 +2209,13 @@ def _measure_passthrough(argv):
     domain's flags only got through after a `--` the help never mentioned
     (falcon H1). Everything after measure's own `--entry` is the domain's, so
     the separator is supplied here."""
+    # The subcommand is the first token past the global options; "measure"
+    # appearing later is some other verb's argument (a title, a summary).
     i = 0
-    while i < len(argv) and argv[i] != "measure":
+    while i < len(argv) and argv[i].startswith("-"):
         i += 2 if argv[i] in ("--domain", "--session") else 1
+    if i >= len(argv) or argv[i] != "measure":
+        return argv
     j = i + 1
     while j < len(argv):
         if argv[j] == "--entry":
@@ -2215,7 +2224,7 @@ def _measure_passthrough(argv):
             j += 1
         else:
             break
-    if i < len(argv) and j < len(argv) and argv[j] not in ("--", "-h", "--help"):
+    if j < len(argv) and argv[j] not in ("--", "-h", "--help"):
         return argv[:j] + ["--"] + argv[j:]
     return argv
 

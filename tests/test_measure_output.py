@@ -62,3 +62,8 @@ def test_measure_passes_domain_flags_through_without_a_separator():
     # measure's own help is still measure's, and other verbs are untouched
     assert cli._measure_passthrough(["measure", "--help"]) == ["measure", "--help"]
     assert cli._measure_passthrough(["board"]) == ["board"]
+    # "measure" as another verb's argument is not the measure verb
+    for argv in (["entry", "new", "measure", "--parent", "Q1"],
+                 ["--session", "s", "close", "Q1", "refuted", "--summary",
+                  "measure", "--memo", "m"]):
+        assert cli._measure_passthrough(argv) == argv

@@ -158,6 +158,9 @@ def citation_warnings(config, limit: int = 20) -> list[str]:
                       rf"(?:\s*(?:,|and|/|&)\s*{hexid})*")
     token = re.compile(rf"\b[0-9a-f]{{{width}}}\b")
     out = []
+    root = pathlib.Path(config.paths.root)
+    runs = pathlib.Path(config.paths.runs)
+    ledger = runs.relative_to(root) if runs.is_relative_to(root) else runs
     sources = [*pathlib.Path(config.paths.memos).rglob("*.md"),
                *pathlib.Path(config.paths.entries).glob("*.yaml")]
     for path in sorted(p for p in sources if p.is_file()):
@@ -165,9 +168,9 @@ def citation_warnings(config, limit: int = 20) -> list[str]:
         missing = sorted({t for m in cite.finditer(text)
                           for t in token.findall(m.group()) if t not in ids})
         if missing:
-            out.append(f"{path.relative_to(config.paths.root)} cites run(s) "
-                       f"{', '.join(missing)} with no row in "
-                       f"{pathlib.Path(config.paths.runs).relative_to(config.paths.root)}")
+            shown = path.relative_to(root) if path.is_relative_to(root) else path
+            out.append(f"{shown} cites run(s) {', '.join(missing)} with no "
+                       f"row in {ledger}")
     if len(out) > limit:
         out = out[:limit] + [f"... and {len(out) - limit} more file(s) citing unrecorded runs"]
     return out

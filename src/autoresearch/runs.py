@@ -110,6 +110,7 @@ class RunRecord:
             # A product objective is zero when *one* factor is: `round(T) * Q`
             # with T=0 scored a perfect 0 past the all-zero test (ecdsa H169).
             elif (self.status == OK and goal.direction == "minimise"
+                  and not goal.allow_degenerate_target
                   and not missing and _objective_is_zero(goal, self.metrics)):
                 out.append(
                     "status is 'ok' but the objective evaluates to zero, a "
