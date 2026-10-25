@@ -479,6 +479,11 @@ def cmd_entry_new(args):
         gate=args.gate or "", scaffold=bool(args.scaffold),
         core=_core_version(args.core), repro=args.repro or "",
         observed=args.observed or "", expected=args.expected or "")
+    if track.gates:
+        # Filed with the track's declared gates attached, so `ar gates update`
+        # works on a fresh entry without a `gates configure` first (#20).
+        from .gates import configure as configure_gates
+        configure_gates(entry, track.gates)
     if store.exists(entry.id):
         raise AutoresearchError(
             f"{entry.id} already exists at {store.path(entry.id)}. Ids are "

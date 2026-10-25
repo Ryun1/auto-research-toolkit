@@ -361,3 +361,18 @@ def test_the_loop_holds_a_win_until_an_independent_row_confirms(sandbox):
     it = Coordinator(sandbox, ScriptedBrain(dict(IDLE))).run_iteration(3)
     assert it.stop == MET
     assert "meets target" in it.stop_detail
+
+
+def test_a_filed_entry_carries_the_tracks_gates(sandbox, store, capsys):
+    """#20: `entry new` attached no gates, so `ar gates update` refused a fresh
+    entry until someone ran `ar gates configure` by hand."""
+    from autoresearch import cli
+    require_gate(sandbox)
+    root = ["--domain", str(sandbox.paths.root), "--session", "s"]
+    assert cli.main([*root, "entry", "new", "a lead", "--track", "research"]) == 0
+    capsys.readouterr()
+    entry_id = sorted(e.id for e in store.all())[-1]
+    assert [g.name for g in store.load(entry_id).gates] == [GATE]
+    assert cli.main([*root, "claim", entry_id, "--why", "proving it"]) == 0
+    assert cli.main([*root, "gates", "update", entry_id, GATE, "--state",
+                     "passed", "--evidence", "proof.lean", "--why", "kernel-checked"]) == 0
