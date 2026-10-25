@@ -153,6 +153,28 @@ goal:
   suspect: {k: 10}
 ```
 
+A domain can also declare a **holdout** the search never sees (`domain.toml`):
+
+```toml
+[commands]
+holdout = "holdout/bin"        # reads $AR_HOLDOUT_ROW, emits one ar-run-1 row
+
+[holdout]
+files = ["holdout/data"]       # stripped from every slot, with the script
+max_consults = 5               # per epoch: every peek leaks a little
+pass_when = "objective <= search * 1.02"   # default: goal.is_met on the row
+on_promotion = false           # true: also consult whenever there is a best
+```
+
+Core consults it only when a win is on the table: at the loop's stop
+decision, as the independent confirmation (a passing holdout satisfies
+`confirm_independently`), and on `ar holdout check`. One config is consulted
+once per epoch. `ar budget` reads the verdict and never consults. The rows
+and verdicts live under `.ar/holdout/`, which no slot receives, and the
+board and `ar budget` show only pass/fail and the consultation count. A
+target met on the search metric that the holdout rejects is
+running-with-reason, not goal-met.
+
 Two guards the *coordinator* owns sit on top of the goal, and both are
 `[coordinator]` keys rather than goal fields because they gate closures and
 ranking, not the stop decision:
@@ -281,6 +303,7 @@ ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
 ar epochs      the ledger's measurement epochs; closures pinned to a superseded one
 ar promote     release a suspect row onto the frontier (a person's call)
+ar holdout     consult the held-out check on the current best config
 ar research    spin up targeted research agents; their ideas land in the record
 ar harness     check for and pull the latest core; export defects upstream
 ar doctor      which core answered, and whether it meets the domain's floor

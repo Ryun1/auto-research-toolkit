@@ -454,7 +454,8 @@ def unmet_required_gates(goal, store, best) -> tuple[str, ...]:
 def should_stop(config, *, measurements=None, target=None,
                 verdicts_per_iteration=None, budgets=(),
                 unmet_required_gates=(),
-                independent_confirmation: bool = True) -> StopDecision:
+                independent_confirmation: bool = True,
+                holdout: str | None = None) -> StopDecision:
     """Met, yielding below the floor, or out of budget -- otherwise keep going.
 
     This is deliberately the only place the loop can decide to end, so "when do
@@ -507,6 +508,13 @@ def should_stop(config, *, measurements=None, target=None,
                         "(different session or entry), must also meet the "
                         "target -- a win only the measuring run has seen is "
                         "the overfitting shape AIRA measured")
+                if holdout:
+                    # #38: the search's own metric said yes; the data it never
+                    # saw has not. The reason names the verdict, never a value.
+                    return StopDecision(
+                        RUNNING,
+                        f"objective {value:.6g} meets target {target:.6g} on "
+                        f"the search metric, but {holdout}")
                 return StopDecision(
                     MET, f"objective {value:.6g} meets target {target:.6g}")
         except Exception:            # a malformed measurement is not a stop

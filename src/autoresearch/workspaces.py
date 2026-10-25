@@ -192,6 +192,10 @@ class Pool:
                                 ".git", "__pycache__", ".ar", ".venv"),
                             symlinks=True)
             slot = Slot(name, path, self.owner, "directory")
+        # The holdout never reaches a worker (#38): a slot is a copy of the
+        # primary, and the primary holds the held-out data.
+        from . import holdout
+        holdout.strip(self.config, path, worktree=slot.kind == "worktree")
         self.slots[name] = slot
         self._record(slot)
         return slot

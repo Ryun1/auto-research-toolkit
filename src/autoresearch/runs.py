@@ -435,6 +435,8 @@ def exclusion_reason(store, record, goal) -> str | None:
             entry = None
     if entry is not None and getattr(entry, "scaffold", False):
         return f"scaffold entry {record.entry} -- a wiring check is not a finding"
+    if (record.config or {}).get("holdout") is True:
+        return "holdout row -- held-out evidence never stands on the frontier"
     if (record.config or {}).get("scaffold") is True:
         return "row declares config.scaffold -- a bench, not a finding"
     failed = goal.violated(record.metrics, record.config)

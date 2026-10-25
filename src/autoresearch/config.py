@@ -52,7 +52,7 @@ DISTIL_EVERY = 5
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
               "skills", "upstream", "brain", "plugins", "session",
-              "challenge", "evaluator"}
+              "challenge", "evaluator", "holdout"}
 
 #: Option keys a `[brain]` table may carry for the built-in TypeSafe brain
 #: (`value = "typesafe"`), beyond `default` / role names / `authorize_spend`.
@@ -252,6 +252,9 @@ class Paths:
     #: Coordinator state, outside every workspace: a slot cannot hold the
     #: proof that its own rows were measured.
     receipts: pathlib.Path
+    #: the holdout's rows and verdicts (#38): coordinator state no slot
+    #: receives, so the search never reads a holdout value.
+    holdout: pathlib.Path
 
 
 @dataclass
@@ -346,6 +349,8 @@ class DomainConfig:
     #: `[evaluator] files`: what a run is scored by (#36). None means the
     #: measure command's own script -- see `evaluator.files`.
     evaluator_files: tuple[str, ...] | None = None
+    #: `[holdout]`: the held-out check a win must pass (#38); see holdout.py.
+    holdout: object = None
     description: str = ""
 
     # -- lookup -----------------------------------------------------------
@@ -470,7 +475,8 @@ class DomainConfig:
             memos=root / state.get("memos", "inbox"),
             iterations=root / state.get("iterations", "state/iterations"),
             workspaces=root / state.get("workspaces", ".ar/workspaces"),
-            receipts=root / state.get("receipts", ".ar/receipts"))
+            receipts=root / state.get("receipts", ".ar/receipts"),
+            holdout=root / state.get("holdout", ".ar/holdout"))
 
         goal_rel = domain.get("goal", "goal.yaml")
         goal_path = root / goal_rel
@@ -543,7 +549,13 @@ class DomainConfig:
                     for spec in (data.get("remote") or [])],
             upstream=Upstream.from_dict(dict(data.get("upstream") or {})),
             challenge=Challenge.from_dict(dict(data.get("challenge") or {})),
-            evaluator_files=_evaluator_files(data.get("evaluator") or {}))
+            evaluator_files=_evaluator_files(data.get("evaluator") or {}),
+            holdout=_holdout(data.get("holdout") or {}))
+
+
+def _holdout(spec):
+    from .holdout import Settings
+    return Settings.from_dict(spec)
 
 
 def _evaluator_files(spec) -> tuple[str, ...] | None:

@@ -421,6 +421,9 @@ def cmd_board(args):
                        unmet_required_gates=budget_mod.unmet_required_gates(
                            config.goal, store, best),
                        excluded_best=excluded))
+    from . import holdout as holdout_mod
+    if holdout_mod.declared(config):
+        print(_holdout_line(holdout_mod.summary(config, best)) + "\n")
     others = [e for e in listed if e.rows and e.rows is not chosen]
     if others:
         print("## Previous epochs" if getattr(args, "epoch", None) is None
@@ -432,6 +435,38 @@ def cmd_board(args):
                      if top else "  no valid row"))
         print("  (`ar board --epoch N` reads one; `ar epochs` lists what a move "
               "may have invalidated)")
+    return 0
+
+
+def _holdout_line(summary) -> str:
+    """Pass/fail and the count: everything the search may know (#38)."""
+    verdict = summary["last"] or "not consulted on the best config"
+    cap = f" of {summary['max']}" if summary["max"] else ""
+    return (f"holdout    {verdict}  ({summary['consults']}{cap} "
+            f"consultation(s) this epoch)")
+
+
+def cmd_holdout_check(args):
+    """Consult the holdout on the current best config, explicitly (#38).
+
+    For a hand-driven campaign with no loop to consult it at the stop
+    decision. One consultation per config per epoch: a second check of the
+    same config reads the recorded verdict. Prints pass/fail and the count,
+    never a value."""
+    config = _load(args)
+    from . import epochs as epochs_mod
+    from . import holdout as holdout_mod
+    if not holdout_mod.declared(config):
+        raise AutoresearchError("this domain declares no [commands] holdout")
+    store = _store(config)
+    best, _ = runs_mod.frontier(
+        store, epochs_mod.current_rows(config, runs_mod.read_all(config.paths.runs)),
+        config.goal)
+    if best is None:
+        raise AutoresearchError("no best row in the current epoch to check")
+    verdict = holdout_mod.consult(config, best[1], _probe_target(config), args.session)
+    print(f"{best[1].id}: {'pass' if verdict.passed else 'fail'} -- {verdict.reason}")
+    print(_holdout_line(holdout_mod.summary(config, best)))
     return 0
 
 
@@ -1464,6 +1499,10 @@ def cmd_budget(args):
                   if i.kind == "iteration"]
     except AutoresearchError:
         yields = None            # a malformed record is validate's to report
+    # Read, never consulted: a budget view that peeked at the holdout would
+    # spend it on every glance (#38).
+    from . import holdout as holdout_mod
+    holdout_reason, holdout_passed = holdout_mod.stop_reason(config, best, target)
     decision = budget_mod.should_stop(
         config,
         measurements=best[1].metrics if best else None,
@@ -1472,8 +1511,9 @@ def cmd_budget(args):
         budgets=[domain],
         unmet_required_gates=budget_mod.unmet_required_gates(
             config.goal, store, best),
-        independent_confirmation=budget_mod.independent_confirmation(
-            config.goal, best, epoch_runs, target))
+        independent_confirmation=holdout_passed or budget_mod.independent_confirmation(
+            config.goal, best, epoch_runs, target),
+        holdout=holdout_reason)
 
     if getattr(args, "json", False):
         # Non-finite objective/target values serialise as bare Infinity/NaN,
@@ -1494,6 +1534,8 @@ def cmd_budget(args):
                 {"id": excluded[1].id, "entry": excluded[1].entry,
                  "objective": finite(excluded[0]), "reason": excluded[2]}
                 if excluded else None),
+            **({"holdout": holdout_mod.summary(config, best)}
+               if holdout_mod.declared(config) else {}),
         }, indent=2))
         return 0
 
@@ -1509,6 +1551,8 @@ def cmd_budget(args):
         if row["overrun"]:
             print(f"    OVERRUN: {row['overrun']}")
 
+    if holdout_mod.declared(config):
+        print("\n" + _holdout_line(holdout_mod.summary(config, best)))
     print(f"\nstop decision: {decision}")
     # The last line repeats the decision above it in the numbers a reader is
     # looking for, so it is derived from that decision rather than from a
@@ -2115,6 +2159,11 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                                         "from `ar epochs`, or `unpinned`) "
                                         "instead of the current one")
     boardp.set_defaults(func=cmd_board)
+    holdoutp = sub.add_parser("holdout", help="the held-out check a win must pass")
+    hsub = holdoutp.add_subparsers(dest="holdout_cmd", required=True)
+    hsub.add_parser("check", help="consult the holdout on the current best "
+                                  "config (once per config per epoch)"
+                    ).set_defaults(func=cmd_holdout_check)
     promotep = sub.add_parser(
         "promote", help="release a suspect row onto the frontier (a person's "
                         "call; list it under [[policy.human_only]])")

@@ -14,7 +14,7 @@ import os
 import shlex
 from pathlib import Path
 
-from . import attempts, budget, evaluator, runs, tamper
+from . import attempts, budget, evaluator, holdout, runs, tamper
 from .claims import Lock
 from .driver.loop import Coordinator, Phase
 from .entries import Event, Store
@@ -275,8 +275,9 @@ def complete(config, identity, session, report):
                 "only harness debt may change what scores a run. Evidence retained, "
                 "restore the files or cancel")
         protected = (paths.entries, paths.claims, paths.runs, paths.iterations, paths.workspaces,
-                     attempts.directory(config), paths.receipts,
-                     *(paths.root / name for name in evaluator.files(config)))
+                     attempts.directory(config), paths.receipts, paths.holdout,
+                     *(paths.root / name for name in evaluator.files(config)),
+                     *(paths.root / name for name in holdout.files(config)))
         with attempts.claims(config, session)._lock():
             attempts.live_claim(config, row)
             if dt.datetime.now(dt.UTC) > dt.datetime.fromisoformat(row["ceiling"]["expires"]):

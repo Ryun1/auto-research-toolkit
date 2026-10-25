@@ -55,6 +55,7 @@ from .. import hardware as hw
 from .. import rank as rank_mod
 from .. import runs as runs_mod
 from .. import skills as skills_mod
+from ..holdout import files as holdout_files
 from ..claims import Claims
 from ..entries import Applicability, Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
@@ -287,6 +288,22 @@ class Coordinator:
         best, _excluded = runs_mod.frontier(
             self.store, self._epoch_rows(), self.config.goal)
         return best
+
+    def _holdout(self, best, target):
+        """`(reason, passed)` from the holdout (#38), consulted only when a
+        win is on the table: the best meets the target, or the domain opted
+        into a check at every promotion. Cached per config and epoch, so a
+        win held across iterations costs one consultation."""
+        from .. import holdout
+        if not holdout.declared(self.config) or best is None:
+            return None, False
+        try:
+            met = self.config.goal.is_met(best[1].metrics, target)
+        except Exception:
+            met = False
+        if not (met or self.config.holdout.on_promotion):
+            return None, False
+        return holdout.stop_reason(self.config, best, target, session=self.session)
 
     def _epoch_rows(self):
         """The current epoch's rows (#40): a row measured by a superseded
@@ -978,7 +995,9 @@ class Coordinator:
         # output must never land on the files that score the next worker.
         protected = (paths.entries, paths.claims, paths.runs,
                      paths.iterations, paths.workspaces, paths.receipts,
-                     *(paths.root / name for name in evaluator_mod.files(self.config)))
+                     paths.holdout,
+                     *(paths.root / name for name in evaluator_mod.files(self.config)),
+                     *(paths.root / name for name in holdout_files(self.config)))
 
         bases = {}
 
@@ -1716,6 +1735,7 @@ class Coordinator:
 
         self._charge_seconds(budget)
         best = self._best()
+        holdout_reason, holdout_passed = self._holdout(best, it.target)
         decision = budget_mod.should_stop(
             self.config,
             measurements=best[1].metrics if best else None,
@@ -1724,8 +1744,11 @@ class Coordinator:
                                     if i.kind == "iteration"] + [it.confirmed],
             budgets=[self.domain_budget],
             unmet_required_gates=self._unmet_required_gates(best),
-            independent_confirmation=budget_mod.independent_confirmation(
-                self.config.goal, best, self._epoch_rows(), it.target))
+            # A passing holdout is the strongest second measurement there is:
+            # data the search never saw (#38).
+            independent_confirmation=holdout_passed or budget_mod.independent_confirmation(
+                self.config.goal, best, self._epoch_rows(), it.target),
+            holdout=holdout_reason)
         outstanding = [e for e, v in it.verdicts.items() if v == "assigned"]
         if self.config.dispatch == "native" and outstanding:
             # The work this iteration dispatched is happening in native
