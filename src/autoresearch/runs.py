@@ -47,6 +47,13 @@ OK, FAILED, INVALID = "ok", "failed", "invalid"
 STATUSES = (OK, FAILED, INVALID)
 
 
+def _objective_is_zero(goal, metrics) -> bool:
+    try:
+        return goal.objective_value(metrics) == 0
+    except AutoresearchError:
+        return False
+
+
 @dataclass
 class RunRecord:
     metrics: dict[str, float]
@@ -100,6 +107,14 @@ class RunRecord:
                     "status is 'ok' but every goal metric is zero; this scores as "
                     "a perfect result and is almost certainly a run that did "
                     "nothing (H134). Mark it 'invalid' or explain it in notes.")
+            # A product objective is zero when *one* factor is: `round(T) * Q`
+            # with T=0 scored a perfect 0 past the all-zero test (ecdsa H169).
+            elif (self.status == OK and goal.direction == "minimise"
+                  and not missing and _objective_is_zero(goal, self.metrics)):
+                out.append(
+                    "status is 'ok' but the objective evaluates to zero, a "
+                    "perfect score; a factor of it measured nothing (H169). "
+                    "Mark it 'invalid' or explain it in notes.")
         if not self.provenance:
             out.append("provenance is empty -- a measurement with no record of "
                        "what was built cannot be reproduced or trusted (H37/H63)")

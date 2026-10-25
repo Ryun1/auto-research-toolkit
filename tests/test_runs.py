@@ -263,3 +263,12 @@ def test_a_row_whose_entry_cannot_be_read_stays_in_the_frontier():
     best, excluded = frontier(_Store(Q2=_entry()), rows, GOAL)
     assert (best[0], best[1].id) == (1.0, "lost")
     assert excluded is None
+
+
+def test_a_zero_objective_from_one_zero_factor_is_flagged():
+    """ecdsa H169: `round(T) * Q` with T=0 scored a perfect 0 because the H134
+    guard only fired when *every* metric was zero."""
+    with pytest.raises(SchemaError, match="H169"):
+        record(metrics={"ops": 0.0, "peak": 7.0}).validate(GOAL)
+    # maximise: zero is the worst score, not a perfect one
+    record(metrics={"ops": 0.0, "peak": 7.0}).validate(MAXIMISE)
