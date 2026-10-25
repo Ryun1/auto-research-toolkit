@@ -515,6 +515,7 @@ def test_a_probe_that_wraps_challenge_target_does_not_recurse(domain, capsys):
     import os
     import stat
     import sys
+
     from autoresearch import cli
     probe = domain.paths.root / "bin" / "probe-target"
     probe.write_text(f"#!/bin/sh\nexec {sys.executable} -m autoresearch "

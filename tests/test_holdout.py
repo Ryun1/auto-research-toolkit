@@ -10,7 +10,6 @@ receives, shows only pass/fail and the consultation count, and meters the
 consultations per epoch -- every peek leaks a little of the holdout.
 """
 import json
-import os
 
 import pytest
 
@@ -258,3 +257,91 @@ def test_a_worker_brief_carries_no_holdout_value(sandbox, store):
             Iteration(n=1), [SimpleNamespace(entry_id="Q1", terms={})],
             iteration_budget(config), pool)
     assert briefs and all(str(SECRET) not in b and "1500" not in b for b in briefs)
+
+
+# -- review fixes -----------------------------------------------------------
+
+def test_a_cached_pass_does_not_outlive_its_target(sandbox):
+    """Review: verdicts were cached by config alone, but a pass is a pass
+    against a target. A moving target must be judged again."""
+    config = _domain(sandbox, factor=1.5)
+    row = _best(config, ops=500.0)                      # holdout: 750
+    assert holdout.stop_reason(config, (500.0, row), 1000, session="loop") == (None, True)
+    reason, passed = holdout.stop_reason(config, (500.0, row), 600, session="loop")
+    assert passed is False and "does not confirm" in reason
+
+
+def _failing(config, stderr="score 777"):
+    script = config.paths.root / "holdout/bin"
+    counter = config.paths.root / "count"
+    script.write_text(f"#!/bin/sh\necho peek >> {counter}\necho '{stderr}' >&2\nexit 3\n")
+    return counter
+
+
+def test_a_failing_holdout_is_not_rerun_by_every_stop_decision(sandbox):
+    config = _domain(sandbox)
+    counter = _failing(config)
+    row = _best(config)
+    for _ in range(5):
+        reason, passed = holdout.stop_reason(config, (500.0, row), 1000, session="loop")
+    assert counter.read_text().count("peek") == 1
+    assert passed is False and holdout.consults(config) == 1
+    assert "777" not in reason                         # its output stays private
+
+
+def test_a_failing_holdout_counts_against_max_consults(sandbox, capsys):
+    config = _domain(sandbox, holdout_table="max_consults = 1\n")
+    _failing(config)
+    _best(config)
+    assert _ar(config, "holdout", "check") == 2
+    err = capsys.readouterr().err
+    assert "777" not in err
+    assert _ar(config, "holdout", "check") == 2
+    assert "max_consults" in capsys.readouterr().err
+
+
+def test_a_holdout_that_cannot_start_is_a_clean_error(sandbox, capsys):
+    config = _domain(sandbox)
+    toml = config.paths.root / "domain.toml"
+    toml.write_text(toml.read_text().replace('holdout = "holdout/bin"',
+                                             'holdout = "no-such-holdout-binary"'))
+    config = DomainConfig.load(config.paths.root)
+    _best(config)
+    assert _ar(config, "holdout", "check") == 2
+    assert "could not start" in capsys.readouterr().err
+
+
+def test_a_held_out_directory_is_stripped_from_a_slot(sandbox):
+    config = _domain(sandbox)
+    toml = config.paths.root / "domain.toml"
+    toml.write_text(toml.read_text().replace('files = ["holdout/factor"]',
+                                             'files = ["holdout"]'))
+    config = DomainConfig.load(config.paths.root)
+    with Pool(config, "dir") as pool:
+        slot = pool.acquire("w1").path
+        assert not (slot / "holdout").exists()
+
+
+def test_a_corrupt_holdout_ledger_is_a_clean_error(sandbox, capsys):
+    config = _domain(sandbox)
+    _best(config)
+    config.paths.holdout.mkdir(parents=True)
+    (config.paths.holdout / "consults.jsonl").write_text("{not json\n")
+    assert _ar(config, "board") == 2
+    assert "consults.jsonl" in capsys.readouterr().err
+
+
+def test_validate_warns_when_the_holdout_is_committed(sandbox):
+    """A committed holdout is readable from any worktree with `git show`,
+    whatever is stripped from the working copy."""
+    import subprocess
+
+    from autoresearch import validate
+    config = _domain(sandbox)
+    for args in (("init", "-q"), ("add", "."),
+                 ("-c", "user.name=T", "-c", "user.email=t@example.invalid",
+                  "commit", "-qm", "fixture")):
+        subprocess.run(["git", *args], cwd=config.paths.root, check=True,
+                       capture_output=True)
+    [warning] = validate.holdout_warnings(config)
+    assert "holdout/factor" in warning and "gitignore" in warning

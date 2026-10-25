@@ -17,7 +17,7 @@ from autoresearch import cli, noise, runs
 from autoresearch.config import DomainConfig
 from autoresearch.errors import GoalError
 from autoresearch.goal import Goal
-from autoresearch.runs import RunRecord, append, read_all
+from autoresearch.runs import RunRecord, append
 from conftest import make_entry
 
 

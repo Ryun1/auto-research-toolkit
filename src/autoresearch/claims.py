@@ -31,9 +31,9 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-import secrets
 import os
 import pathlib
+import secrets
 import time
 from dataclasses import dataclass
 
@@ -243,7 +243,9 @@ class Claims:
         if not claim:
             raise ClaimError(f"{entry.id} holds no claim; nothing to act on")
         presented = self.token or self.issued.get(entry.id)
-        pinned = expected_claim_at or self.pinned.get(entry.id)
+        # A pin proves only the claim it pinned: an assignment recorded
+        # against an earlier claim of the same entry proves nothing now.
+        pinned = (expected_claim_at or self.pinned.get(entry.id)) == claim.at
         if claim.token_sha and presented:
             if _token_sha(presented) != claim.token_sha:
                 raise ClaimError(
@@ -305,6 +307,11 @@ class Claims:
 
     # -- freeing abandoned work --------------------------------------------
 
+    #: Names everyone acts under by default. A sign of life written as `cli`
+    #: says nothing about which `cli` it was -- counting one kept a dead
+    #: `cli` claim alive for every other default user and every later loop.
+    ANONYMOUS = frozenset({"cli"})
+
     def last_seen(self, entry, _cache=None) -> tuple[float, str]:
         """`(hours ago, what)` for the claim holder's last sign of life (#22).
 
@@ -314,6 +321,8 @@ class Claims:
         the claim was taken, is the holder working: an event it wrote on any
         entry, a run row it recorded, a commit whose message names it."""
         claim = entry.claim
+        if claim.session in self.ANONYMOUS:
+            return _age_hours(claim.at), "the claim itself (a shared default name)"
         cache = _cache if _cache is not None else {}
         if claim.session not in cache:
             cache[claim.session] = self._signs_of_life(claim.session, claim.at)
@@ -337,11 +346,18 @@ class Claims:
                 stamp = row.finished or row.started
                 if isinstance(stamp, (int, float)):
                     out.append(((now - stamp) / 3600.0, f"run row {row.id}"))
-        proc = subprocess.run(
-            ["git", "log", f"--since={since}", "--fixed-strings",
-             f"--grep={session}", "-1", "--format=%ct %h"],
-            cwd=self.config.paths.root, capture_output=True, text=True)
-        if proc.returncode == 0 and proc.stdout.strip():
+        # The name as a word, not a substring: `scout` is not `scouting`.
+        import re
+        word = re.sub(r"([.\[\]()*+?{}|^$\\])", r"\\\1", session)
+        try:
+            proc = subprocess.run(
+                ["git", "log", f"--since={since}", "--extended-regexp",
+                 f"--grep=(^|[^A-Za-z0-9_.-]){word}([^A-Za-z0-9_.-]|$)",
+                 "-1", "--format=%ct %h"],
+                cwd=self.config.paths.root, capture_output=True, text=True)
+        except OSError:                # no git on PATH: no commits to read
+            proc = None
+        if proc is not None and proc.returncode == 0 and proc.stdout.strip():
             stamp, sha = proc.stdout.split()
             out.append(((now - int(stamp)) / 3600.0, f"commit {sha} naming it"))
         return out

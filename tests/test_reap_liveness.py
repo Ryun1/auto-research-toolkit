@@ -89,6 +89,6 @@ def test_the_board_names_an_overrun_claim(sandbox, store, capsys):
     entry.claim.at = _iso(30)
     store.save(entry)
     assert cli.main(["--domain", str(sandbox.paths.root), "board"]) == 0
-    line = next(l for l in capsys.readouterr().out.splitlines()
-                if "Q1" in l and "a" in l and "since" in l)
+    line = next(text for text in capsys.readouterr().out.splitlines()
+                if "Q1" in text and "a" in text and "since" in text)
     assert "OVERRUN" in line and "max_hours" in line

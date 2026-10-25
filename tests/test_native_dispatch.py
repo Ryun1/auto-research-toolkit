@@ -15,7 +15,7 @@ import pytest
 from autoresearch import attempts, external
 from autoresearch.driver.brain import ScriptedBrain
 from autoresearch.driver.loop import Coordinator
-from autoresearch.runs import RunRecord, append
+from autoresearch.runs import RunRecord
 from conftest import append_measured, make_entry
 
 

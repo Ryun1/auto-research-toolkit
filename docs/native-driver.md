@@ -33,8 +33,10 @@ generation, ranking and distillation on a cadence; run `ar rank` and
 **Claims are the only write ticket.** An agent works inside a claim or not at
 all; `ar claim` names the entry, the ceiling and the session, and prints a
 token. The token, not the session name, proves the claim is yours: pass it
-as `--claim-token` (or `AR_CLAIM_TOKEN`) to release or update the claim,
-under whatever session name you act as. A domain that wants name ownership
+as `--claim-token` (or `AR_CLAIM_TOKEN`) to release, update or reopen the
+claim, or to `ar exec` / `ar external assign` under it, under whatever
+session name you act as. `ar close` is deliberately not gated: an
+orchestrator closes the entries its subagents claimed. A domain that wants name ownership
 back sets `[coordinator] claim_tokens = false`. A verdict applied without a
 claim is exactly the race the claim lock exists to prevent.
 

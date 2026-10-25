@@ -87,8 +87,10 @@ def test_budget_shows_reservations_in_domain_and_claim(sandbox, store, capsys):
     from autoresearch.claims import Claims
 
     make_entry(store, "Q1")
-    Claims(store, sandbox, "owner").claim("Q1", why="reservation accounting")
-    reserved = attempts.reserve(sandbox, "Q1", "owner", 30, units=2)
+    owner = Claims(store, sandbox, "owner")
+    owner.claim("Q1", why="reservation accounting")
+    reserved = attempts.reserve(sandbox, "Q1", "owner", 30, units=2,
+                                token=owner.issued["Q1"])
     assert cli.main(["--domain", str(sandbox.paths.root), "budget"]) == 0
     output = capsys.readouterr().out
     domain, live_claim = output.split("1 live claim(s)")
@@ -127,8 +129,10 @@ def test_rank_accounts_for_reserved_and_failed_execution(sandbox, store, capsys)
 
     make_entry(store, "Q1")
     make_entry(store, "Q2", cost=399, impact=1)
-    Claims(store, sandbox, "owner").claim("Q1", why="reservation accounting")
-    reserved = attempts.reserve(sandbox, "Q1", "owner", 30, units=2)
+    owner = Claims(store, sandbox, "owner")
+    owner.claim("Q1", why="reservation accounting")
+    reserved = attempts.reserve(sandbox, "Q1", "owner", 30, units=2,
+                                token=owner.issued["Q1"])
     args = ["--domain", str(sandbox.paths.root), "rank", "--top", "1"]
     assert cli.main(args) == 0
     assert "Q2" not in capsys.readouterr().out.split("shortlist (top 1):")[1]

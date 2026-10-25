@@ -366,7 +366,8 @@ def live_claim(config, row, *, check_time=True):
     return entry, remaining
 
 
-def reserve(config, entry_id, session, seconds, command=(), *, kind="exec", units=1):
+def reserve(config, entry_id, session, seconds, command=(), *, kind="exec", units=1,
+            token=None):
     session_required(session)
     if (not isinstance(seconds, (int, float)) or isinstance(seconds, bool)
             or not math.isfinite(seconds) or seconds <= 0):
@@ -377,6 +378,12 @@ def reserve(config, entry_id, session, seconds, command=(), *, kind="exec", unit
         entry = Store(config.paths.entries).load(entry_id)
         if not entry.claim:
             raise AutoresearchError("execution requires an existing live claim")
+        # Ownership is proved here, the way `ar release` proves it (#33): a
+        # reservation pins the claim, and everything after trusts the pin,
+        # so a bare session name must not be enough to take one.
+        from .claims import Claims
+        Claims(Store(config.paths.entries), config, session,
+               token=token).require_owner(entry)
         row = {"entry": entry_id, "session": session, "claim_at": entry.claim.at}
         entry, remaining = live_claim(config, row)
         ceiling = entry.claim.max_runs
@@ -523,7 +530,7 @@ def _terminate(proc):
         proc.wait()
 
 
-def execute(config, entry_id, session, seconds, command):
+def execute(config, entry_id, session, seconds, command, token=None):
     command = list(command)
     if command[:1] == ["--"]:
         command = command[1:]
@@ -532,7 +539,7 @@ def execute(config, entry_id, session, seconds, command):
     config.policy.check_command(command)
     from . import runs
     before = {record.id for record in runs.read_all(config.paths.runs)}
-    row = reserve(config, entry_id, session, seconds, command)
+    row = reserve(config, entry_id, session, seconds, command, token=token)
     work = directory(config) / row["id"]
     proc = None
 
@@ -581,7 +588,8 @@ def _config(args):
 def _command(args):
     config = _config(args)
     if args.command == "exec":
-        row = execute(config, args.entry, args.session, args.timeout, args.argv)
+        row = execute(config, args.entry, args.session, args.timeout, args.argv,
+                      token=getattr(args, "claim_token", None))
         print(json.dumps(row, indent=2))
         return 0 if row["status"] == "completed" else 1
     if args.attempt_action == "list":

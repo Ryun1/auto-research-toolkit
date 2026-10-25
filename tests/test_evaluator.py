@@ -190,7 +190,7 @@ def test_a_worker_that_edits_its_evaluator_lands_no_rows(sandbox, store):
     from types import SimpleNamespace
 
     from autoresearch.budget import iteration_budget
-    from autoresearch.driver.brain import Reply, Role
+    from autoresearch.driver.brain import Reply
     from autoresearch.driver.loop import Coordinator, Iteration
     from conftest import make_entry
     make_entry(store, "Q1", impact=1.0)
@@ -264,8 +264,10 @@ def test_an_external_assignment_measures_through_its_record_command(
     from autoresearch.claims import Claims
     from conftest import make_entry
     make_entry(store, "Q1")
-    Claims(store, sandbox, "owner").claim("Q1", why="bounded execution")
-    assigned = external.assign(sandbox, "Q1", "owner", 30, 1)
+    owner = Claims(store, sandbox, "owner")
+    owner.claim("Q1", why="bounded execution")
+    assigned = external.assign(sandbox, "Q1", "owner", 30, 1,
+                               token=owner.issued["Q1"])
     argv = shlex.split(assigned["record_command"])
     assert "--candidate" in argv and str(sandbox.paths.root) in argv
     subprocess.run([sys.executable, "-m", "autoresearch.cli", *argv[1:],

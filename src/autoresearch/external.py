@@ -58,8 +58,9 @@ def _workspace(config, row):
     return path
 
 
-def assign(config, entry_id, session, seconds, max_runs):
-    row = attempts.reserve(config, entry_id, session, seconds, kind="external", units=max_runs)
+def assign(config, entry_id, session, seconds, max_runs, token=None):
+    row = attempts.reserve(config, entry_id, session, seconds, kind="external",
+                           units=max_runs, token=token)
     name = "external-" + row["id"]
     with _lock(config, row["id"], session):
         with attempts.claims(config, session)._lock():
@@ -376,7 +377,8 @@ def cancel(config, identity, session, reason, *, confirm_inactive=False):
 def _command(args):
     config = attempts._config(args)
     if args.external_action == "assign":
-        row = assign(config, args.entry, args.session, args.timeout, args.max_runs)
+        row = assign(config, args.entry, args.session, args.timeout, args.max_runs,
+                     token=getattr(args, "claim_token", None))
     elif args.external_action == "complete":
         try:
             report = json.loads(Path(args.report).read_text())

@@ -412,8 +412,13 @@ def cmd_board(args):
     # board under its own heading, never on the frontier.
     from . import epochs as epochs_mod
     listed = epochs_mod.segment(config, all_runs)
-    chosen = epochs_mod.current_rows(config, all_runs,
-                                     label=getattr(args, "epoch", None))
+    label = getattr(args, "epoch", None)
+    picked = [e for e in listed if (e.current if label is None else e.label == str(label))]
+    if label is not None and not picked:
+        raise AutoresearchError(
+            f"no epoch {label!r}; this ledger has "
+            f"{', '.join(e.label for e in listed) or 'none'} (see `ar epochs`)")
+    chosen = picked[0].rows if picked else []
     best, excluded = runs_mod.frontier(store, chosen, config.goal)
     print(render.board(config, entries, all_runs, target,
                        (best[0], best[1].entry or best[1].id) if best else None,
@@ -423,8 +428,8 @@ def cmd_board(args):
                        excluded_best=excluded, overruns=_overruns(config, store, entries)))
     from . import holdout as holdout_mod
     if holdout_mod.declared(config):
-        print(_holdout_line(holdout_mod.summary(config, best)) + "\n")
-    others = [e for e in listed if e.rows and e.rows is not chosen]
+        print(_holdout_line(holdout_mod.summary(config, best, target)) + "\n")
+    others = [e for e in listed if e.rows and not (picked and e is picked[0])]
     if others:
         print("## Previous epochs" if getattr(args, "epoch", None) is None
               else "## Other epochs")
@@ -479,9 +484,12 @@ def cmd_holdout_check(args):
         config.goal)
     if best is None:
         raise AutoresearchError("no best row in the current epoch to check")
-    verdict = holdout_mod.consult(config, best[1], _probe_target(config), args.session)
+    target = _probe_target(config)
+    verdict = holdout_mod.consult(config, best[1], target, args.session, retry=True)
+    if verdict.passed is None:
+        raise AutoresearchError(f"{best[1].id}: {verdict.reason}")
     print(f"{best[1].id}: {'pass' if verdict.passed else 'fail'} -- {verdict.reason}")
-    print(_holdout_line(holdout_mod.summary(config, best)))
+    print(_holdout_line(holdout_mod.summary(config, best, target)))
     return 0
 
 
@@ -598,10 +606,17 @@ def cmd_entry_collisions(args):
     before the merge."""
     config = _load(args)
     root = config.paths.root
+    if not config.paths.entries.is_relative_to(root):
+        raise AutoresearchError("[state] entries is outside the domain root; "
+                                "compare it from its own checkout")
     scope = str(config.paths.entries.relative_to(root))
 
     def git(*argv):
-        proc = subprocess.run(["git", *argv], cwd=root, capture_output=True, text=True)
+        try:
+            proc = subprocess.run(["git", *argv], cwd=root, capture_output=True,
+                                  text=True)
+        except OSError as exc:
+            raise AutoresearchError(f"git is not available: {exc}") from exc
         if proc.returncode != 0:
             raise AutoresearchError(f"git {' '.join(argv)}: {proc.stderr.strip()}")
         return proc.stdout
@@ -616,8 +631,17 @@ def cmd_entry_collisions(args):
             out[path] = status
         return out
 
+    def blob(tip, path):
+        proc = subprocess.run(["git", "rev-parse", "-q", "--verify",
+                               f"{tip}:./{path}"], cwd=root,
+                              capture_output=True, text=True)
+        return proc.stdout.strip() if proc.returncode == 0 else None
+
     ours, theirs = touched("HEAD"), touched(args.ref)
-    both = sorted(set(ours) & set(theirs))
+    # Both sides ending at the same bytes -- a cherry-pick, an identical
+    # filing, a delete on both -- merges cleanly and loses nothing.
+    both = sorted(path for path in set(ours) & set(theirs)
+                  if blob("HEAD", path) != blob(args.ref, path))
     if not both:
         print(f"no entry collides with {args.ref}")
         return 0
@@ -783,6 +807,10 @@ def cmd_entry_amend(args):
         tree.check_branch(config, store, changes["parent"],
                           changes.get("kind") or entry.kind,
                           config.track_for(entry.id).id)
+        if changes["parent"] and entry.derived_from:
+            # A branch is already lineage: the derivation it replaces goes,
+            # or the entry is both on the tree and beside it (#23 review).
+            changes["derived_from"] = ""
     # `sources` and `mechanisms` are typed fields (the exclusion vocabulary
     # and the record's citations), and a blind full-value write on a list is
     # how one session's list silently drops another's. So they get explicit
@@ -1124,6 +1152,12 @@ def cmd_close(args):
         return 0
 
     if args.reopen:
+        if entry.claim and not track.machine.status(entry.status).terminal:
+            # Reopening a live claim hands someone's work back to the queue;
+            # only its holder may (#33 review). A closed entry is anyone's
+            # to reopen, as before.
+            Claims(store, config, args.session,
+                   token=getattr(args, "claim_token", None)).require_owner(entry)
         entry.apply(track.machine, track.machine.initial, who=args.session,
                     why=args.why or "")
         entry.claim = None
@@ -1586,7 +1620,8 @@ def cmd_budget(args):
         unmet_required_gates=budget_mod.unmet_required_gates(
             config.goal, store, best),
         independent_confirmation=holdout_passed or budget_mod.independent_confirmation(
-            config.goal, best, epoch_runs, target),
+            config.goal, best, runs_mod.confirmation_rows(store, epoch_runs, config.goal),
+            target),
         holdout=holdout_reason)
 
     if getattr(args, "json", False):
@@ -1608,7 +1643,7 @@ def cmd_budget(args):
                 {"id": excluded[1].id, "entry": excluded[1].entry,
                  "objective": finite(excluded[0]), "reason": excluded[2]}
                 if excluded else None),
-            **({"holdout": holdout_mod.summary(config, best)}
+            **({"holdout": holdout_mod.summary(config, best, target)}
                if holdout_mod.declared(config) else {}),
         }, indent=2))
         return 0
@@ -1626,7 +1661,7 @@ def cmd_budget(args):
             print(f"    OVERRUN: {row['overrun']}")
 
     if holdout_mod.declared(config):
-        print("\n" + _holdout_line(holdout_mod.summary(config, best)))
+        print("\n" + _holdout_line(holdout_mod.summary(config, best, target)))
     print(f"\nstop decision: {decision}")
     # The last line repeats the decision above it in the numbers a reader is
     # looking for, so it is derived from that decision rather than from a
@@ -1874,6 +1909,8 @@ def cmd_validate(args):
                 + validate_mod.epoch_warnings(config)
                 + validate_mod.git_warnings(config)
                 + validate_mod.duplicate_warnings(config)
+                + validate_mod.holdout_warnings(config)
+                + validate_mod.evaluator_warnings(config)
                 + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):

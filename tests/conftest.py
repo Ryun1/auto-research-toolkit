@@ -135,4 +135,8 @@ def append_measured(config, path, record):
     from autoresearch import evaluator
     from autoresearch.runs import append
     append(path, record)
-    evaluator.write_receipt(config.paths.receipts, record, pathlib.Path(path).parent)
+    # The receipt names the slot, as `ar measure --candidate <slot>` does.
+    path = pathlib.Path(path).resolve()
+    pool = config.paths.workspaces.resolve()
+    slot = next(p for p in path.parents if p.parent == pool)
+    evaluator.write_receipt(config.paths.receipts, record, slot)

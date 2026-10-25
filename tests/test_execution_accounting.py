@@ -21,7 +21,12 @@ SOURCE = str(Path(__file__).resolve().parents[1] / "src")
 
 def claim(config, store, entry_id="Q1"):
     make_entry(store, entry_id)
-    return Claims(store, config, "owner").claim(entry_id, why="bounded execution")
+    # A pre-token claim: these tests are about run accounting, and name
+    # ownership is what an untokened claim keeps. Tokens: test_claim_tokens.
+    entry = Claims(store, config, "owner").claim(entry_id, why="bounded execution")
+    entry.claim.token_sha = ""
+    store.save(entry)
+    return entry
 
 
 def record_history(config, **usage):

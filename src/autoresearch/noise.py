@@ -142,7 +142,8 @@ class Group:
 
     @property
     def first_seen(self) -> float:
-        return min(r.started for _, r in self.scored)
+        from .runs import started_at
+        return min(started_at(r) for _, r in self.scored)
 
     def representative(self, goal):
         """The row the group stands on: its median, and for an even count
@@ -249,17 +250,16 @@ def _suspicion(goal, gain, steps, all_groups) -> str | None:
 
 
 def _released(goal, unit, beaten, by_config, promoted) -> bool:
-    """A suspect unit stands once another session reproduced it -- a row of
-    the same config, from a different session than the first, that also beats
-    the incumbent it was held against -- or a person promoted one of its rows.
-    The caller passes one epoch's rows, so the re-measure ran under the same
-    evaluator."""
+    """A suspect unit stands once two sessions have each measured its config
+    beating the incumbent it was held against -- the original and a clean
+    re-measure -- or a person promoted one of its rows. Counting only rows
+    that beat it means an earlier, worse row of the same config from another
+    session is not a reproduction. The caller passes one epoch's rows, so the
+    re-measure ran under the same evaluator."""
     if any(r.id in promoted for _, r in unit.scored):
         return True
     rows = by_config[config_digest(unit.scored[0][1])]
-    first = min(rows, key=lambda pair: pair[1].started)[1]
-    return any(r.session != first.session and goal.better(v, beaten)
-               for v, r in rows)
+    return len({r.session for v, r in rows if goal.better(v, beaten)}) >= 2
 
 
 def admit(goal, scored, promoted=frozenset()):
@@ -272,10 +272,11 @@ def admit(goal, scored, promoted=frozenset()):
     better groups left within noise; `suspects` the units held as suspect,
     each `(unit, reason)`.
     """
+    from .runs import started_at
     rows_mode = goal.noise.method == "none"
     all_groups = groups(scored)
     units = ([Group(r.id, [(v, r)]) for v, r in
-              sorted(scored, key=lambda pair: pair[1].started)]
+              sorted(scored, key=lambda pair: started_at(pair[1]))]
              if rows_mode else all_groups)
     by_config = {}
     for value, record in scored:

@@ -372,7 +372,8 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0,
     out.append(f"## Measurements — {len(runs)} rows read, {len(ok)} valid"
                + (f", {skipped_runs} foreign rows skipped (pre-adoption schema)"
                   if skipped_runs else ""))
-    for r in sorted(runs, key=lambda r: r.started)[-3:]:
+    from .runs import started_at
+    for r in sorted(runs, key=started_at)[-3:]:
         metrics = " ".join(f"{k}={_fmt(v)}" for k, v in sorted(r.metrics.items()))
         out.append(f"  {r.id}  {r.status:8} {r.entry or '—':6} {metrics}")
     if not runs:
@@ -688,9 +689,12 @@ def install_merge_driver(config) -> list[str]:
     without it falls back to an ordinary text merge."""
     import subprocess
     root = config.paths.root
-    probe = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root,
-                           capture_output=True, text=True)
-    if probe.returncode != 0:
+    try:
+        probe = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root,
+                               capture_output=True, text=True)
+    except OSError:
+        probe = None
+    if probe is None or probe.returncode != 0:
         from .errors import AutoresearchError
         raise AutoresearchError("the merge driver is git configuration; this "
                                 "domain is not in a git checkout")

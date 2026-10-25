@@ -81,10 +81,9 @@ def files(config) -> list[str]:
     if not declared(config):
         return []
     root = config.paths.root
-    from .evaluator import _inside
-    script = [t for t in config.commands["holdout"].split()
-              if _inside(root, t) and (root / t).is_file()]
-    return list(dict.fromkeys(script + list(config.holdout.files)))
+    from .evaluator import script_token
+    script = script_token(root, config.commands["holdout"])
+    return list(dict.fromkeys(([script] if script else []) + list(config.holdout.files)))
 
 
 def _ledger(config) -> pathlib.Path:
@@ -95,7 +94,17 @@ def _records(config) -> list[dict]:
     path = _ledger(config)
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    out = []
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError as exc:
+            # Never skipped: a dropped line is an uncounted peek.
+            raise AutoresearchError(f"{path}: line {n} is not JSON ({exc}); "
+                                    "repair it by hand") from exc
+    return out
 
 
 def _epoch(config) -> list[str]:
@@ -115,24 +124,49 @@ class Verdict:
     reason: str = ""
 
 
-def cached(config, row) -> Verdict | None:
-    """This epoch's verdict on `row`'s config, without consulting."""
+FAILED = ("the holdout failed on this config; its output is kept under "
+          ".ar/holdout/, never shown to the search. `ar holdout check` retries")
+
+
+def _verdict(record) -> Verdict:
+    if record.get("failed"):
+        return Verdict(None, FAILED)
+    return Verdict(record["passed"], "the holdout confirms it" if record["passed"]
+                   else "the holdout does not confirm it")
+
+
+def cached(config, row, target) -> Verdict | None:
+    """This epoch's last verdict on `row`'s config against `target`, without
+    consulting. A pass is a pass against a target, so a moving target is
+    judged again rather than read from an older one."""
     from .noise import config_digest
     epoch, digest = _epoch(config), config_digest(row)
     for record in reversed(_records(config)):
-        if record["epoch"] == epoch and record["digest"] == digest:
-            return Verdict(record["passed"],
-                           "the holdout confirms it" if record["passed"]
-                           else "the holdout does not confirm it")
+        if (record["epoch"] == epoch and record["digest"] == digest
+                and record.get("target") == target):
+            return _verdict(record)
     return None
 
 
-def consult(config, row, target, session) -> Verdict:
-    """The holdout's verdict on `row`'s config: from this epoch's record if
-    one exists, else one consultation -- refused once `max_consults` is
-    spent. Raises on a holdout command that fails or emits no row."""
-    found = cached(config, row)
-    if found is not None:
+def _record(config, judged, target, session, **fields) -> None:
+    from .noise import config_digest
+    config.paths.holdout.mkdir(parents=True, exist_ok=True)
+    with _ledger(config).open("a") as fh:
+        fh.write(json.dumps({"epoch": _epoch(config), "digest": config_digest(judged),
+                             "judged": judged.id, "target": target,
+                             "session": session, **fields},
+                            sort_keys=True) + "\n")
+
+
+def consult(config, row, target, session, *, retry=False) -> Verdict:
+    """The holdout's verdict on `row`'s config against `target`: this
+    epoch's record if one exists, else one consultation -- refused once
+    `max_consults` is spent. A run that fails is recorded and counted like
+    any peek, and is not re-run until `retry` (`ar holdout check`) asks:
+    a stop decision every iteration would otherwise re-run it without
+    bound. Its output goes to the ledger only; the verdict says it failed."""
+    found = cached(config, row, target)
+    if found is not None and not (retry and found.passed is None):
         return found
     cap = config.holdout.max_consults
     if cap is not None and consults(config) >= cap:
@@ -142,29 +176,25 @@ def consult(config, row, target, session) -> Verdict:
             "raise it")
     command = config.commands["holdout"]
     config.policy.check_command(command)
-    from .evaluator import _inside
-    argv = [str(config.paths.root / t) if _inside(config.paths.root, t)
-            and (config.paths.root / t).exists() else t for t in command.split()]
-    proc = subprocess.run(argv, cwd=config.paths.root, capture_output=True,
-                          text=True, env={**_env(), "AR_SESSION": session,
-                                          "AR_HOLDOUT_ROW": json.dumps(row.to_dict())})
-    if proc.returncode != 0:
-        raise AutoresearchError(f"holdout failed ({proc.returncode}): "
-                                f"{proc.stderr.strip()[:300]}")
+    argv = command.split()          # run in the domain root: relative paths hold
+    try:
+        proc = subprocess.run(argv, cwd=config.paths.root, capture_output=True,
+                              text=True, env={**_env(), "AR_SESSION": session,
+                                              "AR_HOLDOUT_ROW": json.dumps(row.to_dict())})
+    except OSError as exc:
+        raise AutoresearchError(f"the holdout command could not start: {exc}") from exc
     from .runs import RunRecord
     try:
+        if proc.returncode != 0:
+            raise ValueError(f"exit {proc.returncode}")
         result = RunRecord.from_dict(json.loads(proc.stdout.strip().splitlines()[-1]))
     except (ValueError, IndexError, TypeError) as exc:
-        raise AutoresearchError(f"holdout did not emit a run row: {exc}") from exc
+        _record(config, row, target, session, failed=True, passed=None,
+                error=str(exc), stdout=proc.stdout[-2000:], stderr=proc.stderr[-2000:])
+        return Verdict(None, FAILED)
     result.config = {**(result.config or {}), "holdout": True}
     passed = _passes(config, result, row, target)
-    from .noise import config_digest
-    config.paths.holdout.mkdir(parents=True, exist_ok=True)
-    with _ledger(config).open("a") as fh:
-        fh.write(json.dumps({"epoch": _epoch(config), "digest": config_digest(row),
-                             "judged": row.id, "passed": passed,
-                             "session": session, "row": result.to_dict()},
-                            sort_keys=True) + "\n")
+    _record(config, row, target, session, passed=passed, row=result.to_dict())
     return Verdict(passed, "the holdout confirms it" if passed
                    else "the holdout does not confirm it")
 
@@ -202,7 +232,7 @@ def stop_reason(config, best, target, *, session=None) -> tuple[str | None, bool
     row = best[1]
     try:
         verdict = (consult(config, row, target, session) if session
-                   else cached(config, row))
+                   else cached(config, row, target))
     except AutoresearchError as exc:
         return f"the holdout gives no verdict: {exc}", False
     if verdict is None:
@@ -218,22 +248,54 @@ def stop_reason(config, best, target, *, session=None) -> tuple[str | None, bool
     return verdict.reason, False
 
 
-def summary(config, best) -> dict:
+def summary(config, best, target) -> dict:
     """What the search may see: the count, the cap and pass/fail."""
-    verdict = cached(config, best[1]) if best else None
+    verdict = cached(config, best[1], target) if best else None
+    last = (None if verdict is None else "error" if verdict.passed is None
+            else "pass" if verdict.passed else "fail")
     return {"consults": consults(config), "max": config.holdout.max_consults,
-            "last": None if verdict is None else ("pass" if verdict.passed else "fail")}
+            "last": last}
 
 
 def strip(config, slot_path, worktree: bool) -> None:
     """Remove the holdout from a slot. In a worktree the paths are marked
     skip-worktree first, so a worker's `commit -a` cannot record the deletion
     and delete the holdout from the primary on merge."""
-    names = [n for n in files(config) if (pathlib.Path(slot_path) / n).exists()]
+    import shutil
+    slot_path = pathlib.Path(slot_path)
+    names = [n for n in files(config) if (slot_path / n).exists()
+             or (slot_path / n).is_symlink()]
     if not names:
         return
     if worktree:
-        subprocess.run(["git", "update-index", "--skip-worktree", "--", *names],
-                       cwd=slot_path, capture_output=True)
+        try:
+            tracked = subprocess.run(["git", "ls-files", "-z", "--", *names],
+                                     cwd=slot_path, capture_output=True,
+                                     text=True).stdout.split("\0")
+            tracked = [t for t in tracked if t]
+            if tracked:
+                subprocess.run(["git", "update-index", "--skip-worktree", "--",
+                                *tracked], cwd=slot_path, capture_output=True)
+        except OSError:
+            pass
     for name in names:
-        (pathlib.Path(slot_path) / name).unlink()
+        target = slot_path / name
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)       # a held-out data directory
+        else:
+            target.unlink()
+
+
+def tracked_files(config) -> list[str]:
+    """Holdout files git tracks. Stripping a slot's working copy hides them
+    from a casual read, but a committed file is one `git show HEAD:path`
+    away in every worktree -- the holdout must be gitignored to be held out."""
+    names = files(config)
+    if not names:
+        return []
+    try:
+        proc = subprocess.run(["git", "ls-files", "--", *names],
+                              cwd=config.paths.root, capture_output=True, text=True)
+    except OSError:
+        return []
+    return proc.stdout.splitlines() if proc.returncode == 0 else []

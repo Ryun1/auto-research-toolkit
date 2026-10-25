@@ -39,11 +39,15 @@ def _run(config, name, cwd) -> str:
     command = config.commands[name]
     config.policy.check_command(command)
     from . import evaluator
-    argv = [str(config.paths.root / token)
-            if evaluator._inside(config.paths.root, token)
-            and (config.paths.root / token).exists() else token
-            for token in command.split()]
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+    argv = command.split()
+    if not argv:
+        raise AutoresearchError(f"[commands] {name} is empty")
+    script = evaluator.script_token(config.paths.root, command)
+    argv = [str(config.paths.root / t) if t == script else t for t in argv]
+    try:
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+    except OSError as exc:
+        raise AutoresearchError(f"[commands] {name} could not start: {exc}") from exc
     if proc.returncode != 0:
         raise AutoresearchError(
             f"[commands] {name} failed ({proc.returncode}): "
@@ -68,13 +72,16 @@ def source_revision(config, tree) -> tuple[str, bool | None]:
     """
     if "source_revision" in config.commands:
         return _run(config, "source_revision", tree), None
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tree,
-                          capture_output=True, text=True)
-    if head.returncode != 0:
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tree,
+                              capture_output=True, text=True)
+        if head.returncode != 0:
+            return "", None
+        status = subprocess.run(["git", "status", "--porcelain",
+                                 "--untracked-files=no"], cwd=tree,
+                                capture_output=True, text=True)
+    except OSError:                  # no git on PATH
         return "", None
-    status = subprocess.run(["git", "status", "--porcelain",
-                             "--untracked-files=no"], cwd=tree,
-                            capture_output=True, text=True)
     return head.stdout.strip(), bool(status.stdout.strip())
 
 
@@ -107,19 +114,21 @@ class Epoch:
 
     @property
     def first_seen(self) -> float:
-        return min((r.started for r in self.rows), default=0.0)
+        from .runs import started_at
+        return min((started_at(r) for r in self.rows), default=0.0)
 
 
 def segment(config, records, current=None) -> list[Epoch]:
     """Every epoch in the ledger, unpinned first, then pinned ones by first
     appearance. The current epoch is listed even with no rows yet: an
     evaluator that just changed has an empty frontier, and the board says so."""
+    from .runs import started_at
     current = current_key(config) if current is None else current
     groups: dict = {}
     for record in records:
         groups.setdefault(key_of(record), []).append(record)
     pinned = sorted((k for k in groups if k is not None),
-                    key=lambda k: min(r.started for r in groups[k]))
+                    key=lambda k: min(started_at(r) for r in groups[k]))
     if pinned and current not in groups:
         pinned.append(current)
     out = []
@@ -156,10 +165,11 @@ def pin(config, records, entry_id, *, source_revision_override="",
     worker's declared applicability), then the row's; never guessed from the
     primary's HEAD, which moves with every record commit.
     """
+    from .runs import started_at
     from .skills import core_version
     own = [r for r in records if r.entry == entry_id and key_of(r) is not None]
     if own:
-        latest = max(own, key=lambda r: r.started)
+        latest = max(own, key=started_at)
         sha, benchmark = key_of(latest)
         revision = latest.provenance.get("source_revision") or ""
         core = latest.provenance.get("core") or ""

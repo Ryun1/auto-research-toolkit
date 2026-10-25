@@ -31,6 +31,7 @@ _TEST = re.compile(r"(^|/)(tests?|spec)/|(^|/)test_[^/]*\.py$|_test\.\w+$"
 _TIMING = re.compile(r"\b(time\.(time|perf_counter|monotonic|process_time)"
                      r"(_ns)?|perf_counter(_ns)?|cuda\.synchronize|"
                      r"cuda\.Event|timeit)\b")
+_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 _EQUALITY = re.compile(r"\bdef\s+__(eq|ne|hash)__\s*\(")
 _PATCH_CALL = re.compile(r"\bsetattr\s*\(|\bmock\.patch\b|\bpatch\s*\(|"
                          r"\bmonkeypatch\.setattr\b|\bimportlib\.reload\b")
@@ -76,24 +77,37 @@ def scan(config, diff: str) -> list[Hunk]:
     evaluator_files = set(evaluator.files(config))
     files: dict[str, list[tuple[int, str]]] = {}
     path, line_no = None, 0
+    old_left = new_left = 0          # lines still owed to the current hunk
     for raw in diff.splitlines():
+        if old_left > 0 or new_left > 0:
+            # Inside a hunk its header's counts decide what a line is, so an
+            # added line that reads `++ path` (`+++ path` in the diff) is
+            # content, never a file header that steers the rest.
+            if raw.startswith("+"):
+                if path is not None:
+                    files[path].append((line_no, raw[1:]))
+                line_no += 1
+                new_left -= 1
+            elif raw.startswith("-"):
+                old_left -= 1
+            elif raw.startswith("\\"):
+                pass                                  # "\ No newline at end of file"
+            else:
+                line_no += 1
+                old_left -= 1
+                new_left -= 1
+            continue
         if raw.startswith("+++ "):
             target = raw[4:].strip()
             path = None if target == "/dev/null" else re.sub(r"^b/", "", target)
             if path is not None:
                 files.setdefault(path, [])
             continue
-        if raw.startswith("@@"):
-            match = re.search(r"\+(\d+)", raw)
-            line_no = int(match.group(1)) if match else 0
-            continue
-        if path is None or raw.startswith(("---", "diff ", "index ")):
-            continue
-        if raw.startswith("+"):
-            files[path].append((line_no, raw[1:]))
-            line_no += 1
-        elif not raw.startswith("-"):
-            line_no += 1
+        match = _HUNK.match(raw)
+        if match:
+            old_left = int(match.group(2) or 1)
+            line_no = int(match.group(3))
+            new_left = int(match.group(4) or 1)
     out = []
     for path, added in files.items():
         if config.lanes.classify(path) == "findings" or not added:
@@ -117,23 +131,38 @@ def scan(config, diff: str) -> list[Hunk]:
     return out
 
 
+#: Fixed whatever the user's git config says: `diff.mnemonicPrefix` prints
+#: `w/path`, and quoted paths would not match the evaluator or the lanes.
+_DIFF = ["-c", "core.quotePath=false", "diff", "--unified=0", "--no-color",
+         "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/"]
+
+
+def _run_git(root, *args):
+    try:
+        return subprocess.run(["git", *args], cwd=root, capture_output=True,
+                              text=True)
+    except OSError:              # no git on PATH: there is no diff to read
+        return None
+
+
 def _git(root, *args) -> str | None:
-    proc = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
-    return proc.stdout if proc.returncode == 0 else None
+    proc = _run_git(root, *args)
+    return proc.stdout if proc is not None and proc.returncode == 0 else None
 
 
 def diff_of(tree, base="HEAD") -> str | None:
     """Tracked changes since `base`, plus untracked files as whole additions.
     None outside git -- there is no diff to read, and none is guessed."""
-    tracked = _git(tree, "diff", "--unified=0", "--no-color", base)
+    tracked = _git(tree, *_DIFF, base)
     if tracked is None:
         return None
     parts = [tracked]
-    for name in (_git(tree, "ls-files", "--others", "--exclude-standard") or "").splitlines():
+    for name in (_git(tree, "-c", "core.quotePath=false", "ls-files", "--others",
+                      "--exclude-standard") or "").splitlines():
         # --no-index exits 1 whenever the files differ, which here is always.
-        parts.append(subprocess.run(
-            ["git", "diff", "--unified=0", "--no-color", "--no-index",
-             "/dev/null", name], cwd=tree, capture_output=True, text=True).stdout)
+        proc = _run_git(tree, *_DIFF, "--no-index", "/dev/null", name)
+        if proc is not None:
+            parts.append(proc.stdout)
     return "\n".join(parts)
 
 

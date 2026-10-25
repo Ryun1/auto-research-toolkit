@@ -33,28 +33,47 @@ from .errors import AutoresearchError, ConfigError
 
 def files(config) -> list[str]:
     """The evaluator: `[evaluator] files`, or by default every token of the
-    measure command that names a file in the domain root -- `bin/measure`,
-    or the script in `python bin/measure.py`."""
+    measure command's script: its first token when that names a file in the
+    domain root (`bin/measure ...`), else its second (`python bin/m.py ...`).
+    Later tokens are arguments -- often the candidate's own files -- and
+    are never taken for the evaluator (review of #36)."""
     if config.evaluator_files is not None:
         return list(config.evaluator_files)
-    command = config.commands.get("measure", "")
-    return [token for token in command.split()
-            if _inside(config.paths.root, token)
-            and (config.paths.root / token).is_file()]
+    return [script] if (script := script_token(config.paths.root,
+                                               config.commands.get("measure", ""))) else []
+
+
+def script_token(root, command: str) -> str | None:
+    """The token of `command` that names its script in `root`, if any."""
+    for token in command.split()[:2]:
+        if _inside(root, token) and (pathlib.Path(root) / token).is_file():
+            return token
+    return None
 
 
 def _inside(root, name) -> bool:
+    """Lexically inside `root`. Not resolved: a script symlinked in from a
+    shared location is still the domain's evaluator, and resolving it made
+    it "outside" and left it to run from the slot (review of #36)."""
     path = pathlib.Path(name)
-    return (not path.is_absolute() and ".." not in path.parts
-            and (pathlib.Path(root) / path).resolve().is_relative_to(
-                pathlib.Path(root).resolve()))
+    return bool(path.parts) and not path.is_absolute() and ".." not in path.parts
 
 
 def _file_digest(path) -> str:
+    """A file's bytes, or a directory's names and bytes, as one digest."""
+    path = pathlib.Path(path)
     try:
-        return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+        if path.is_dir():
+            digest = hashlib.sha256()
+            for child in sorted(p for p in path.rglob("*") if p.is_file()):
+                digest.update(f"{child.relative_to(path).as_posix()}\0"
+                              f"{_file_digest(child)}\n".encode())
+            return digest.hexdigest()
+        return hashlib.sha256(path.read_bytes()).hexdigest()
     except FileNotFoundError:
         return "missing"
+    except OSError:
+        return "unreadable"
 
 
 def identity(config, root=None) -> str:
@@ -78,8 +97,9 @@ def command(config) -> list[str]:
     """The measure command with every token naming a file in the primary root
     made absolute, so it runs the primary's copy from inside a candidate."""
     root = config.paths.root
-    return [str(root / token) if _inside(root, token) and (root / token).exists()
-            else token for token in config.command("measure").split()]
+    protected = set(files(config))
+    return [str(root / token) if token in protected else token
+            for token in config.command("measure").split()]
 
 
 def candidate(config, path) -> pathlib.Path:
@@ -134,8 +154,10 @@ def write_receipt(directory, record, candidate_path) -> pathlib.Path:
     return path
 
 
-def receipt_problem(directory, record) -> str | None:
-    """Why `record` is not a row `ar measure` recorded, or None if it is."""
+def receipt_problem(directory, record, workspace=None) -> str | None:
+    """Why `record` is not a row `ar measure` recorded, or None if it is.
+    With `workspace`, the receipt must also name that slot: a receipted line
+    copied into another slot's runs file is not that slot's measurement."""
     path = _receipt_path(directory, record.id)
     if path is None:
         return (f"run id {record.id!r} is not a plain name, so it names no "
@@ -148,6 +170,11 @@ def receipt_problem(directory, record) -> str | None:
     if receipt.get("digest") != _row_digest(record):
         return (f"row {record.id!r} does not match its receipt: it was "
                 "changed after `ar measure` recorded it")
+    if workspace is not None and (
+            pathlib.Path(str(receipt.get("candidate", ""))).resolve()
+            != pathlib.Path(workspace).resolve()):
+        return (f"row {record.id!r} was measured in another workspace "
+                f"({receipt.get('candidate')}), not this one")
     return None
 
 

@@ -406,6 +406,28 @@ def frontier(store, records, goal):
     return best, excluded
 
 
+def started_at(record) -> float:
+    """A row's start as a number for ordering. The measure script writes
+    `started`; a string or null there must not crash every reader that
+    orders rows (review of #40) -- it sorts first, as if unknown."""
+    value = record.started
+    return float(value) if isinstance(value, (int, float)) \
+        and not isinstance(value, bool) else 0.0
+
+
+def confirmation_rows(store, records, goal) -> list[RunRecord]:
+    """The rows `independent_confirmation` may read: frontier-eligible, and
+    not held as suspect (#39) -- a row the frontier will not believe is not
+    a second measurement of anything."""
+    eligible = [r for r in records if exclusion_reason(store, r, goal) is None]
+    if goal.suspect.k is None:
+        return eligible
+    from . import noise
+    _, _, suspects = noise.admit(goal, scored_rows(eligible, goal), promoted(store))
+    held = {id(r) for unit, _ in suspects for _, r in unit.scored}
+    return [r for r in eligible if id(r) not in held]
+
+
 def scored_rows(records, goal) -> list[tuple[float, RunRecord]]:
     """`(objective, record)` for every row `best_run` would consider."""
     out = []
@@ -689,7 +711,8 @@ def harvest(directory, before, destination, *, workspace, root, goal, lanes,
                             or not isinstance(record.session, str)):
                         raise SchemaError("metrics/provenance must be objects and session a string")
                     record.validate(goal)
-                    unreceipted = evaluator.receipt_problem(receipts, record)
+                    unreceipted = evaluator.receipt_problem(receipts, record,
+                                                            workspace)
                     if unreceipted:
                         raise SchemaError(unreceipted)
                     if not isinstance(record.outputs, list) or not all(

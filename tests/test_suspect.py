@@ -279,8 +279,10 @@ def test_an_external_completion_lists_tamper_shaped_hunks(sandbox, store):
     from autoresearch.claims import Claims
     _commit(sandbox.paths.root)
     make_entry(store, "Q1")
-    Claims(store, sandbox, "owner").claim("Q1", why="bounded")
-    assigned = external.assign(sandbox, "Q1", "owner", 30, 1)
+    owner = Claims(store, sandbox, "owner")
+    owner.claim("Q1", why="bounded")
+    assigned = external.assign(sandbox, "Q1", "owner", 30, 1,
+                               token=owner.issued["Q1"])
     workspace = pathlib.Path(assigned["workspace"])
     (workspace / "src").mkdir()
     (workspace / "src/kernel.py").write_text("import time\nt = time.perf_counter()\n")
@@ -292,3 +294,50 @@ def test_an_external_completion_lists_tamper_shaped_hunks(sandbox, store):
         "verification": {"reread": True, "claims_checked": ["x"]}})
     assert done["status"] == "completed"
     assert any(e.kind == "tamper-scan" for e in store.load("Q1").history)
+
+
+def test_a_suspect_row_cannot_release_itself(store):
+    """Review: release compared the re-measure's session with the config's
+    *first* row's session, so a lucky row whose config an honest session had
+    measured earlier (and worse) counted as its own second session."""
+    rows = [_row("a", 1000, "a", started=1), _row("b", 990, "b", started=2),
+            _row("c0", 5000, "c", session="honest", started=3),
+            _row("c1", 20, "c", session="lucky", started=4)]
+    best, excluded = runs.frontier(store, rows, _goal(suspect={"k": 10}))
+    assert best[1].id == "b" and excluded[2].startswith("suspect")
+
+
+def test_a_suspect_row_does_not_confirm_the_best(sandbox, store):
+    """A row held as suspect is not evidence; it may not be the second
+    measurement `confirm_independently` asks for either."""
+    from autoresearch import budget as budget_mod
+    goal = _goal(suspect={"k": 10})
+    rows = [_row("a", 1000, "a", started=1), _row("b", 990, "b", started=2),
+            _row("b2", 991, "b", session="other", started=3),
+            _row("c", 20, "c", session="lucky", started=4)]
+    best, _ = runs.frontier(store, rows, goal)
+    usable = runs.confirmation_rows(store, rows, goal)
+    assert "c" not in {r.id for r in usable}
+    assert budget_mod.independent_confirmation(goal, best, usable, 995.0)
+
+
+def test_an_added_line_that_looks_like_a_header_does_not_steer_the_scan(sandbox):
+    """Review: an added line `++ docs/notes.md` shows in the diff as
+    `+++ docs/notes.md` and was read as a new file, so later added lines were
+    attributed to a findings-lane path and skipped."""
+    diff = ("diff --git a/src/x.py b/src/x.py\n--- a/src/x.py\n+++ b/src/x.py\n"
+            "@@ -0,0 +1,3 @@\n+'''\n+++ docs/notes.md\n+time.time = lambda: 0\n")
+    hunks = tamper.scan(sandbox, diff)
+    assert [(h.kind, h.path, h.line) for h in hunks if h.kind == "monkeypatch"] \
+        == [("monkeypatch", "src/x.py", 3)]
+
+
+def test_the_scan_reads_paths_whatever_the_users_diff_prefix(sandbox, store, capsys):
+    """`diff.mnemonicPrefix` makes git print `w/path`; the scan asks for
+    a/ b/ explicitly, so the evaluator and findings lanes still classify."""
+    _commit(sandbox.paths.root)
+    _git(sandbox.paths.root, "config", "diff.mnemonicPrefix", "true")
+    (sandbox.paths.root / "bin/measure").write_text(
+        (sandbox.paths.root / "bin/measure").read_text() + "\n# tuned\n")
+    hunks = tamper.scan_tree(sandbox, sandbox.paths.root)
+    assert ("evaluator", "bin/measure") in {(h.kind, h.path) for h in hunks}

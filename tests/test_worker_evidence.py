@@ -210,6 +210,7 @@ def test_restarted_budget_counts_reserved_but_unsettled_attempts(sandbox, store)
     claims = attempts.claims(sandbox, "coordinator")
     claims.claim("Q1", why="crash test")
     assert total_runs(sandbox) == 0
-    attempts.reserve(sandbox, "Q1", "coordinator", 60.0, kind="dispatch")
+    attempts.reserve(sandbox, "Q1", "coordinator", 60.0, kind="dispatch",
+                     token=claims.issued["Q1"])
     assert total_runs(sandbox) == 1
     assert total_runs(sandbox) == 1, "reading the ledger again must not charge again"

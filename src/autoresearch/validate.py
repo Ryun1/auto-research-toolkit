@@ -229,8 +229,11 @@ def git_warnings(config, limit: int = 15) -> list[str]:
               if p.is_relative_to(root)]
 
     def git(*args):
-        proc = subprocess.run(["git", *args, "--", *scopes], cwd=root,
-                              capture_output=True, text=True)
+        try:
+            proc = subprocess.run(["git", *args, "--", *scopes], cwd=root,
+                                  capture_output=True, text=True)
+        except OSError:              # no git on PATH: nothing to say
+            return None
         return proc.stdout.splitlines() if proc.returncode == 0 else None
 
     untracked = git("ls-files", "--others", "--exclude-standard")
@@ -272,6 +275,9 @@ def duplicate_warnings(config, limit: int = 15) -> list[str]:
                 continue
         except AutoresearchError:
             continue
+        if (entry.result.verdict == "superseded"
+                or entry.result.disposition == "superseded"):
+            continue                  # already retired: the remedy was applied
         for field in ("title", "hypothesis"):
             key = _normalised(getattr(entry, field, ""))
             if key:
@@ -290,8 +296,33 @@ def duplicate_warnings(config, limit: int = 15) -> list[str]:
         shown.append(f"{a}/{b}" + (f" (contradictory: {va} vs {vb})" if va != vb else ""))
     listed = ", ".join(shown[:limit]) + (" ..." if len(shown) > limit else "")
     return [f"{len(pairs)} duplicate closure pair(s): {listed} -- the same claim "
-            f"closed twice; retire one with `ar close ID superseded "
-            f"--superseded-by OTHER`"]
+            f"closed twice; retire one: `ar close ID --reopen`, claim it, then "
+            f"`ar close ID superseded --superseded-by OTHER`"]
+
+
+def evaluator_warnings(config) -> list[str]:
+    """A measure command that names no script in the domain -- `python -m
+    bench`, `uv run bench` -- has no evaluator for #36 to protect: a worker's
+    edited copy in its slot is what runs. Said once, with the remedy."""
+    from . import evaluator
+    if "measure" not in config.commands or evaluator.files(config):
+        return []
+    return [f"the measure command ({config.commands['measure']!r}) names no "
+            f"script in the domain, so nothing protects the evaluator from a "
+            f"worker's slot; declare `[evaluator] files` (and, for a module "
+            f"or entry point, run it by path)"]
+
+
+def holdout_warnings(config) -> list[str]:
+    """A committed holdout is not held out (#38): every worktree slot can
+    `git show HEAD:<path>` it, however its working copy was stripped."""
+    from . import holdout
+    tracked = holdout.tracked_files(config)
+    if not tracked:
+        return []
+    return [f"holdout file(s) committed to git: {', '.join(tracked)} -- any "
+            f"worktree can read them with `git show`; remove them from the "
+            f"index (`git rm --cached`) and gitignore them"]
 
 
 def core_warnings(config) -> list[str]:

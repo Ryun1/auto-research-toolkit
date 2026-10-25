@@ -791,7 +791,10 @@ class Store:
             path = self.path(entry.id)
             body = yaml.safe_dump(entry.to_dict(), sort_keys=False,
                                   allow_unicode=True, width=100)
-            temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            # Its own name, never `save`'s pid-only one: two writers in one
+            # process must not share a temporary file (review of #21).
+            import uuid
+            temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
             try:
                 temporary.write_text(body)
                 os.link(temporary, path)

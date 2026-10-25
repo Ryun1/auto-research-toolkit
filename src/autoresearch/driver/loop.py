@@ -55,10 +55,10 @@ from .. import hardware as hw
 from .. import rank as rank_mod
 from .. import runs as runs_mod
 from .. import skills as skills_mod
-from ..holdout import files as holdout_files
 from ..claims import Claims
 from ..entries import Applicability, Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
+from ..holdout import files as holdout_files
 from ..workspaces import Pool
 from .brain import Role, cost_value
 
@@ -927,7 +927,8 @@ class Coordinator:
             try:
                 row = external_mod.assign(
                     self.config, card.entry_id, self.session,
-                    claimed.claim.max_hours * 3600, max_runs)
+                    claimed.claim.max_hours * 3600, max_runs,
+                    token=self.claims.issued.get(card.entry_id))
             except AutoresearchError as exc:
                 self.claims.release(card.entry_id, why=str(exc))
                 phase.detail.append(f"{card.entry_id}: {exc}")
@@ -982,7 +983,8 @@ class Coordinator:
             try:
                 reservation = attempts.reserve(
                     self.config, card.entry_id, self.session,
-                    claimed.claim.max_hours * 3600, kind="dispatch")
+                    claimed.claim.max_hours * 3600, kind="dispatch",
+                    token=self.claims.issued.get(card.entry_id))
             except AutoresearchError as exc:
                 self.claims.release(card.entry_id, why=str(exc))
                 phase.detail.append(f"{card.entry_id}: {exc}")
@@ -1750,7 +1752,8 @@ class Coordinator:
             # A passing holdout is the strongest second measurement there is:
             # data the search never saw (#38).
             independent_confirmation=holdout_passed or budget_mod.independent_confirmation(
-                self.config.goal, best, self._epoch_rows(), it.target),
+                self.config.goal, best, runs_mod.confirmation_rows(
+                    self.store, self._epoch_rows(), self.config.goal), it.target),
             holdout=holdout_reason)
         outstanding = [e for e, v in it.verdicts.items() if v == "assigned"]
         if self.config.dispatch == "native" and outstanding:
