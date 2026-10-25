@@ -354,3 +354,27 @@ def test_reaping_a_settled_assignment_is_refused(coordinator, store):
         coordinator.config, identity)["session"], "failed")
     with pytest.raises(AutoresearchError, match="already settled"):
         attempts.reap_assignment(coordinator.config, identity, "other")
+
+
+def test_cancel_folds_back_and_any_session_can_list_and_show(
+        coordinator, capsys):
+    """#17: the board said "N assignment(s) outstanding" after a cancel,
+    because only `complete` folded back; and no session but the owner could
+    list or show the assignment it named."""
+    from autoresearch import cli
+    it = coordinator.run_iteration(1)
+    identity = it.attempt_ids[0]
+    root = ["--domain", str(coordinator.config.paths.root), "--session", "curator"]
+    assert cli.main([*root, "external", "list"]) == 0
+    assert identity in capsys.readouterr().out
+    assert cli.main([*root, "external", "show", identity]) == 0
+    assert json.loads(capsys.readouterr().out)["entry"] == "Q1"
+
+    external.cancel(coordinator.config, identity, "coordinator", "abandoned",
+                    confirm_inactive=True)
+    record = json.loads(next(
+        coordinator.config.paths.iterations.glob("*.json")).read_text())
+    assert record["verdicts"] == {"Q1": "cancelled"}
+    assert record["stop_detail"].startswith("every assignment settled")
+    assert cli.main([*root, "external", "list"]) == 0
+    assert identity not in capsys.readouterr().out

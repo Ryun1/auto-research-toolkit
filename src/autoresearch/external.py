@@ -158,6 +158,14 @@ def _fold_back_verdict(config, identity, entry_id, verdict):
             return
         verdicts[entry_id] = verdict
         record["verdicts"] = verdicts
+        if record.get("stop") == "native-handoff":
+            # The stop line is what the board shows; left as written it kept
+            # counting an assignment that was settled or cancelled (#17).
+            left = sum(1 for v in verdicts.values() if v == "assigned")
+            record["stop_detail"] = (
+                f"{left} assignment(s) outstanding: settle with `ar external "
+                "complete`, then run `ar loop` again" if left else
+                "every assignment settled: run `ar loop` again")
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         try:
             temporary.write_text(json.dumps(record, indent=2, default=str))
@@ -325,6 +333,7 @@ def cancel(config, identity, session, reason, *, confirm_inactive=False):
             # A stale assignment may settle its own ledger, never release a successor claim.
             row.update(status="cancelled", finished=attempts.now())
             attempts.save(config, row)
+            _fold_back_verdict(config, identity, row["entry"], "cancelled")
             return row
 
 
@@ -351,8 +360,17 @@ def _command(args):
               f"by {args.session!r} (it belonged to {row.get('reaped_from')!r}): "
               f"{row.get('reason')}")
         _refresh_views(config)
+    elif args.external_action == "list":
+        # Read-only and across sessions: the board names outstanding
+        # assignments, so any session must be able to see which (#17).
+        for row in attempts.records(config):
+            if row["kind"] == "external" and (args.all or row["status"] not in attempts.TERMINAL):
+                print(f"{row['id']}  {row['status']:10} {row['entry']:6} "
+                      f"{row['session']}  {row.get('started', '')}")
+        return 0
     else:
-        row = attempts.load(config, args.id, args.session)
+        # show is read-only, so it is not owner-gated (#17)
+        row = attempts.load(config, args.id)
     print(json.dumps(row, indent=2))
     return 0
 
@@ -360,9 +378,12 @@ def _command(args):
 def register_parser(subparsers):
     parser = subparsers.add_parser("external", help="bounded native coordinator handoff; no model dispatch")
     subs = parser.add_subparsers(dest="external_action", required=True)
-    for action in ("assign", "complete", "cancel", "show", "reap"):
+    for action in ("assign", "complete", "cancel", "show", "reap", "list"):
         child = subs.add_parser(action)
-        if action == "assign":
+        if action == "list":
+            child.add_argument("--all", action="store_true",
+                               help="include settled and cancelled assignments")
+        elif action == "assign":
             child.add_argument("--entry", required=True)
             child.add_argument("--timeout", type=float, required=True)
             child.add_argument("--max-runs", type=int, required=True)
