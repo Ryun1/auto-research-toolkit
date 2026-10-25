@@ -580,6 +580,50 @@ def cmd_render(args):
     return 0
 
 
+def cmd_entry_collisions(args):
+    """Entry ids both sides of a merge touched since they diverged (#35).
+
+    Ids are filenames, so two branches filing the same number meet as an
+    add/add on one path, and two branches changing one entry meet as a
+    textual merge of a YAML record -- which git can conclude cleanly and
+    wrongly, keeping one side's field (qsb H90, H107). #21 made filing
+    exclusive inside one checkout; this is the cross-branch half, to run
+    before the merge."""
+    config = _load(args)
+    root = config.paths.root
+    scope = str(config.paths.entries.relative_to(root))
+
+    def git(*argv):
+        proc = subprocess.run(["git", *argv], cwd=root, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise AutoresearchError(f"git {' '.join(argv)}: {proc.stderr.strip()}")
+        return proc.stdout
+
+    base = git("merge-base", "HEAD", args.ref).strip()
+
+    def touched(tip):
+        out = {}
+        for line in git("diff", "--name-status", "--no-renames", "--relative",
+                        base, tip, "--", scope).splitlines():
+            status, path = line.split("\t", 1)
+            out[path] = status
+        return out
+
+    ours, theirs = touched("HEAD"), touched(args.ref)
+    both = sorted(set(ours) & set(theirs))
+    if not both:
+        print(f"no entry collides with {args.ref}")
+        return 0
+    print(f"{len(both)} entry id(s) touched on both sides since {base[:12]}:")
+    for path in both:
+        entry_id = pathlib.Path(path).stem
+        what = ("filed on both sides -- two different entries, one id"
+                if ours[path] == theirs[path] == "A"
+                else "changed on both sides -- a clean merge may keep only one side")
+        print(f"  {entry_id}  {what}")
+    return 1
+
+
 def cmd_entry_graph(args):
     """Print the graph view: the hypothesis tree as a mermaid diagram.
 
@@ -1812,6 +1856,7 @@ def cmd_validate(args):
                 + validate_mod.revision_warnings(config)
                 + validate_mod.epoch_warnings(config)
                 + validate_mod.git_warnings(config)
+                + validate_mod.duplicate_warnings(config)
                 + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):
@@ -2373,6 +2418,11 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                      help="print the pick-work projection (no history, no "
                           "prose) as JSON")
     lst.set_defaults(func=cmd_entry_list)
+    collisions = esub.add_parser(
+        "collisions", help="entry ids this branch and REF both filed or "
+                           "changed since they diverged (exit 1 if any)")
+    collisions.add_argument("ref", help="the branch or commit to merge")
+    collisions.set_defaults(func=cmd_entry_collisions)
     graph = esub.add_parser(
         "graph", help="the hypothesis tree as a mermaid diagram")
     graph.add_argument("--track", help="one track (default: every track)")

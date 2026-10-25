@@ -247,6 +247,53 @@ def git_warnings(config, limit: int = 15) -> list[str]:
             f"(or gitignore what is meant to stay local)"]
 
 
+def _normalised(text: str) -> str:
+    import re
+    return re.sub(r"\s+", " ", (text or "").lower()).strip().rstrip(".!?;:,")
+
+
+def duplicate_warnings(config, limit: int = 15) -> list[str]:
+    """Closed entries that are the same claim twice (#35).
+
+    qsb's dupe sweep found 54 duplicate claim pairs, 10 with contradictory
+    terminals: one closed `confirmed`, its twin `refuted`, and a reader shown
+    either one. Two closures on one track are duplicates when their titles
+    or their hypotheses match once case, spacing and trailing punctuation
+    are set aside. Named in one warning; the pair marked contradictory is
+    the one to settle first (`ar close ... superseded --superseded-by`)."""
+    from .entries import Store
+    from .errors import AutoresearchError
+    groups: dict = {}
+    for entry in Store(config.paths.entries).read_all()[0]:
+        if entry.result is None:
+            continue
+        try:
+            if not config.track_for(entry.id).machine.status(entry.result.verdict).terminal:
+                continue
+        except AutoresearchError:
+            continue
+        for field in ("title", "hypothesis"):
+            key = _normalised(getattr(entry, field, ""))
+            if key:
+                groups.setdefault((entry.track, field, key), []).append(entry)
+    pairs = {}
+    for members in groups.values():
+        members = sorted(members, key=lambda e: (e.prefix, e.number))
+        for i, first in enumerate(members):
+            for second in members[i + 1:]:
+                pairs[(first.id, second.id)] = (first.result.verdict,
+                                                second.result.verdict)
+    if not pairs:
+        return []
+    shown = []
+    for (a, b), (va, vb) in sorted(pairs.items(), key=lambda kv: kv[1][0] == kv[1][1]):
+        shown.append(f"{a}/{b}" + (f" (contradictory: {va} vs {vb})" if va != vb else ""))
+    listed = ", ".join(shown[:limit]) + (" ..." if len(shown) > limit else "")
+    return [f"{len(pairs)} duplicate closure pair(s): {listed} -- the same claim "
+            f"closed twice; retire one with `ar close ID superseded "
+            f"--superseded-by OTHER`"]
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.
