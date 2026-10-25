@@ -272,3 +272,34 @@ def test_a_zero_objective_from_one_zero_factor_is_flagged():
         record(metrics={"ops": 0.0, "peak": 7.0}).validate(GOAL)
     # maximise: zero is the worst score, not a perfect one
     record(metrics={"ops": 0.0, "peak": 7.0}).validate(MAXIMISE)
+
+
+def test_frontier_leaves_out_rows_failing_a_constraint_or_marked_scaffold(sandbox, store):
+    """#9: a row over the scorer's size cap (falcon H2), a reduced-width toy
+    (ecdsa H168) and a finding's cost bench (sig.golf H41) each printed as
+    best. The frontier skips them and names the best one it left out."""
+    goal = Goal.from_dict({"goal": {
+        "id": "g", "objective": "ops * peak", "metrics": {"ops": {}, "peak": {}},
+        "target": {"value": 1}, "constraints": ["width == 256", "peak <= 50"]}})
+    rows = [record(id="toy", metrics={"ops": 1.0, "peak": 1.0}, config={"width": 16}),
+            record(id="big", metrics={"ops": 1.0, "peak": 60.0}, config={"width": 256}),
+            record(id="bench", metrics={"ops": 1.0, "peak": 2.0},
+                   config={"width": 256, "scaffold": True}),
+            record(id="real", metrics={"ops": 1.0, "peak": 9.0}, config={"width": 256}),
+            record(id="nowidth", metrics={"ops": 1.0, "peak": 3.0})]
+    best, excluded = frontier(store, rows, goal)
+    assert best[1].id == "real"
+    value, row, reason = excluded
+    assert row.id == "toy" and "width == 256" in reason
+    with pytest.raises(Exception, match="constraints"):
+        Goal.from_dict({"goal": {"id": "g", "objective": "ops", "metrics": {"ops": {}},
+                                 "target": {"value": 1}, "constraints": "x > 1"}})
+
+
+def test_measure_refuses_a_closed_entry(sandbox, store, capsys):
+    from autoresearch import cli
+    from conftest import close, make_entry
+    close(sandbox, store, make_entry(store, "Q1"))
+    assert cli.main(["--domain", str(sandbox.paths.root), "measure",
+                     "--entry", "Q1"]) == 2
+    assert "Q1 is closed" in capsys.readouterr().err

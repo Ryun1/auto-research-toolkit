@@ -126,6 +126,11 @@ goal:
   # a search guided by its own proxy overfits, and the perceived score keeps
   # rising after the true one has stopped.
   confirm_independently: true
+  # Rows that may stand on the frontier: expressions over the row's metrics,
+  # derived constants and scalar `config` values. A failing row stays on the
+  # board, named as excluded, and never becomes `best` or GOAL MET. A row can
+  # also opt out itself with `config: {scaffold: true}` (a bench, not a score).
+  constraints: ["width == 256", "class_bytes <= 4089446"]
 ```
 
 Two guards the *coordinator* owns sit on top of the goal, and both are

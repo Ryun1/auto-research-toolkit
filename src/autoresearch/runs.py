@@ -371,21 +371,47 @@ def frontier(store, records, goal):
 
     One resolver, because the board, the budget and the loop each deriving their
     own is how they came to answer different questions about one record (the H2
-    shape). `excluded` is `(objective, record)` for the best scaffold row, so a
+    shape). `excluded` is `(objective, record, reason)` for the best row left
+    out (see `exclusion_reason`), so a
     caller can *name* what it dropped: a row that vanishes without a word reads
     as a frontier that did not move.
     """
-    findings, scaffold = [], []
+    findings, left_out, why = [], [], {}
     for record in records:
-        entry = None
-        if record.entry:
-            try:
-                entry = store.load(record.entry)
-            except Exception:        # unreadable evidence is no evidence
-                entry = None
-        (scaffold if entry is not None and getattr(entry, "scaffold", False)
-         else findings).append(record)
-    return best_run(findings, goal), best_run(scaffold, goal)
+        reason = exclusion_reason(store, record, goal)
+        if reason:
+            why[id(record)] = reason
+            left_out.append(record)
+        else:
+            findings.append(record)
+    excluded = best_run(left_out, goal)
+    if excluded is not None:
+        excluded = (*excluded, why[id(excluded[1])])
+    return best_run(findings, goal), excluded
+
+
+def exclusion_reason(store, record, goal) -> str | None:
+    """Why a row may not stand on the frontier, or None if it may.
+
+    Three ways, each named on the board: its entry is scaffold (sig.golf H4);
+    the row itself declares `config.scaffold` -- a cost bench owned by a real
+    finding (sig.golf H41); or it fails a goal constraint -- over the scorer's
+    size cap, a reduced-width toy (falcon H2, ecdsa H168; #9).
+    """
+    entry = None
+    if record.entry:
+        try:
+            entry = store.load(record.entry)
+        except Exception:        # unreadable evidence is no evidence
+            entry = None
+    if entry is not None and getattr(entry, "scaffold", False):
+        return f"scaffold entry {record.entry} -- a wiring check is not a finding"
+    if (record.config or {}).get("scaffold") is True:
+        return "row declares config.scaffold -- a bench, not a finding"
+    failed = goal.violated(record.metrics, record.config)
+    if failed:
+        return f"fails goal constraint `{failed}`"
+    return None
 
 
 def read_all(directory, strict: bool = False) -> list[RunRecord]:

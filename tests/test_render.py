@@ -117,7 +117,7 @@ def test_the_board_names_the_scaffold_row_it_left_out(sandbox, store):
                   provenance={"h": "x"}, entry="Q1")
     text = render.board(sandbox, store.all(), [r], target=1000.0,
                         best=(20.0, "Q2"), best_metrics=r.metrics,
-                        excluded_best=(1.0, r))
+                        excluded_best=(1.0, r, "scaffold entry Q1 -- a wiring check is not a finding"))
     line = next(line for line in text.splitlines() if line.startswith("excluded"))
     assert "Q1" in line and "not a finding" in line
 

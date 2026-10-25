@@ -296,10 +296,9 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0,
         # wearing the fix's clothes: a reader has to be able to tell a frontier
         # that did not move from one whose fixture was reclassified (sig.golf
         # H4).
-        value, record = excluded_best
+        value, record, reason = excluded_best
         out.append(f"excluded  {record.id} on {record.entry or '(no entry)'}"
-                   f"  scaffold run, objective {_fmt(value)} -- a wiring "
-                   f"check is not a finding")
+                   f"  objective {_fmt(value)}: {reason}")
     out.append("")
 
     for track in config.tracks.values():

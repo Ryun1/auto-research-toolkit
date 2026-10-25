@@ -991,6 +991,16 @@ def cmd_measure(args):
     # same gate. A human-only measurement command must never reach
     # subprocess.run just because a caller skipped the coordinator.
     config.policy.check_command(config.command("measure"))
+    if args.entry:
+        # A row on a closed entry lands on the board as that entry's evidence
+        # -- an integration run on an already-confirmed entry printed as best,
+        # GOAL MET, after its `ar claim` had been refused (mldsa87, #9).
+        entry = _store(config).load(args.entry)
+        if config.track_for(entry.id).machine.status(entry.status).terminal:
+            raise AutoresearchError(
+                f"{entry.id} is closed ({entry.status}); a measurement filed "
+                f"against it reads as its evidence. File the run under an "
+                f"open entry, or reopen {entry.id} first")
     command = config.command("measure").split() + list(args.rest)
     env_note = f"entry={args.entry} " if args.entry else ""
     proc = subprocess.run(command, cwd=config.paths.root, capture_output=True,
@@ -1153,7 +1163,8 @@ def cmd_budget(args):
             # a flat frontier from a moved one (sig.golf H4).
             "excluded_scaffold": (
                 {"id": excluded[1].id, "entry": excluded[1].entry,
-                 "objective": finite(excluded[0])} if excluded else None),
+                 "objective": finite(excluded[0]), "reason": excluded[2]}
+                if excluded else None),
         }, indent=2))
         return 0
 
@@ -1184,9 +1195,9 @@ def cmd_budget(args):
         # Named, never dropped silently (sig.golf H4): a wiring check's number
         # is real, and a reader who cannot see what the frontier ignored cannot
         # tell a flat frontier from a moved one.
-        value, record = excluded
+        value, record, reason = excluded
         print(f"excluded  {record.id} on {record.entry or '(no entry)'}: "
-              f"scaffold run, objective {render._fmt(value)} -- not a finding")
+              f"objective {render._fmt(value)}: {reason}")
     return 0
 
 

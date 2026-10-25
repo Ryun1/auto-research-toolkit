@@ -152,6 +152,12 @@ class Goal:
     #: domain decides what makes re-measurement honest (fresh data split,
     #: re-seeded run); the core enforces only that a second execution said so.
     confirm_independently: bool = False
+    #: Expressions every row must satisfy to stand on the frontier, over its
+    #: metrics, derived constants and scalar `config` values (#9). Field
+    #: evidence: a patch over the scorer's class-size cap (falcon H2) and a
+    #: reduced-width toy config (ecdsa H168) each printed as best, GOAL MET.
+    #: A row missing a name a constraint reads is ineligible: fail closed.
+    constraints: tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.direction not in DIRECTIONS:
@@ -197,6 +203,25 @@ class Goal:
         for name, source in self.derived.items():
             ns[name] = expr.evaluate(source, ns)
         return ns
+
+    def violated(self, metrics: dict, config: dict | None = None) -> str | None:
+        """The first constraint this row fails, or None if it is eligible."""
+        if not self.constraints:
+            return None
+        ns = {k: v for k, v in (config or {}).items()
+              if isinstance(v, (int, float, str, bool))}
+        ns.update(metrics)
+        try:
+            ns.update(self.namespace(metrics))
+        except GoalError:
+            pass
+        for source in self.constraints:
+            try:
+                if not expr.evaluate(source, ns):
+                    return source
+            except GoalError:
+                return source
+        return None
 
     def objective_value(self, measurements: dict[str, float]) -> float:
         return expr.evaluate(self.objective, self.namespace(measurements))
@@ -308,6 +333,14 @@ class Goal:
                 f"goal {gid!r}: confirm_independently must be a bool, got "
                 f"{type(confirm).__name__}")
 
+        raw_constraints = data.get("constraints") or []
+        if not isinstance(raw_constraints, list) or not all(
+                isinstance(c, str) and c.strip() for c in raw_constraints):
+            raise GoalError(
+                f"goal {gid!r}: constraints must be a list of expressions")
+        for source in raw_constraints:
+            expr.names(source)          # a syntax error fails at load
+
         return cls(
             id=gid,
             objective=objective,
@@ -318,6 +351,7 @@ class Goal:
             derived=dict(data.get("derived") or {}),
             stop_when=data.get("stop_when"),
             yield_floor=floor,
+            constraints=tuple(raw_constraints),
             required_gates=tuple(gates),
             allow_degenerate_target=degenerate,
             confirm_independently=confirm)
