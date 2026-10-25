@@ -511,11 +511,6 @@ def cmd_entry_new(args):
         # works on a fresh entry without a `gates configure` first (#20).
         from .gates import configure as configure_gates
         configure_gates(entry, track.gates)
-    if store.exists(entry.id):
-        raise AutoresearchError(
-            f"{entry.id} already exists at {store.path(entry.id)}. Ids are "
-            "filenames, so a collision is loud here rather than a silent "
-            "renumber after every citation was written (H79).")
     if track.requires_defect_evidence:
         # The track already declares this rule; before H15 only `harness
         # export` and `ar validate` read it, so a defect could sit in the
@@ -527,7 +522,10 @@ def cmd_entry_new(args):
         problems = defects.evidence_problems(entry, track)
         if problems:
             raise AutoresearchError("; ".join(problems))
-    print(store.save(entry))
+    # Exclusive (#21): a number another session filed after this one read
+    # the store is skipped rather than overwritten. A `--id` the caller chose
+    # is never moved -- a taken one is refused (H79).
+    print(store.create(entry, renumber=not args.id))
     _render_views(config)
     return 0
 

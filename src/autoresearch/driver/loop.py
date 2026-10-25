@@ -776,7 +776,7 @@ class Coordinator:
             core=str(proposal.get("core", ""))
             or (core_version() if track.requires_defect_evidence else ""))
         entry.gates = [dataclasses.replace(gate) for gate in track.gates]
-        self.store.save(entry)
+        self.store.create(entry, renumber=True)
         return entry
 
     def rank(self, it: Iteration, budget) -> tuple[Phase, list]:

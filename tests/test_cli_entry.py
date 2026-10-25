@@ -9,7 +9,7 @@ import json
 
 from autoresearch import cli, render
 from autoresearch.entries import Claim
-from conftest import close, make_entry
+from conftest import close, make_entry, race_next_id
 
 NOW = "2026-01-01T00:00:00+00:00"
 
@@ -270,3 +270,13 @@ def test_entry_new_attaches_the_tracks_gates(sandbox, store, capsys):
     assert _ar(sandbox, "--session", "s", "claim", "Q1", "--why", "x") == 0
     assert _ar(sandbox, "--session", "s", "gates", "update", "Q1",
                "kernel-proof", "--state", "blocked", "--why", "x") == 0
+
+
+def test_entry_new_moves_past_a_number_another_session_just_took(
+        sandbox, store, monkeypatch):
+    """#21: a number taken between this filing's scan and its write is
+    neither overwritten nor a refusal -- the filing takes the next one."""
+    taken = race_next_id(monkeypatch)
+    assert _ar(sandbox, "entry", "new", "mine", "--track", "research") == 0
+    assert store.load(taken[0]).title == "theirs"
+    assert [e.title for e in store.all()] == ["theirs", "mine"]

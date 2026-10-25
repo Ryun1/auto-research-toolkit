@@ -395,3 +395,17 @@ def test_an_ingested_defect_carries_its_tracks_gates(sandbox):
                           "observed": "unlabelled reserve"})
     defects_mod.ingest_bundle(bundle, target, track=receiving.tracks["field"])
     assert [g.name for g in target.load("F1").gates] == ["reproduced"]
+
+
+def test_ingest_never_overwrites_an_entry_filed_mid_ingest(receiving, monkeypatch):
+    """#21: ingest files through the exclusive create too."""
+    from conftest import race_next_id
+    taken = race_next_id(monkeypatch)
+    target = Store(receiving.paths.entries)
+    bundle = make_bundle({"id": "H1", "title": "the judge brief drops marks",
+                          "core": "0.1.0", "repro": "ar rank",
+                          "observed": "unlabelled reserve"})
+    filed, _ = defects_mod.ingest_bundle(
+        bundle, target, track=receiving.tracks["field"])
+    assert target.load(taken[0]).title == "theirs"
+    assert [e.id for e in filed] == ["F2"]

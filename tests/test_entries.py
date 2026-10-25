@@ -511,3 +511,56 @@ def test_all_skips_an_entry_removed_between_stat_and_read(store, monkeypatch):
 
     monkeypatch.setattr(pathlib.Path, "read_text", vanish_on_read)
     assert [e.id for e in store.all()] == ["Q2"]
+
+
+def test_a_new_entry_never_overwrites_one_another_session_filed(sandbox, store):
+    """#21: `entry new` computed the next id, checked it was free, then saved
+    -- three steps. A second session filing the same number in between had
+    its entry replaced by this one, with success printed on both sides.
+    Creating is exclusive: a filing whose number was taken moves to the next
+    free one, and the other session's record is left as it was."""
+    make_entry(store, "Q1")
+    entry = Entry(id=store.next_id("Q"), track="research", title="mine")
+    _write_record(store.path("Q2"), id="Q2", title="theirs")
+    path = store.create(entry, renumber=True)
+    assert path.name == "Q3.yaml" and entry.id == "Q3"
+    assert store.load("Q2").title == "theirs"
+    assert store.load("Q3").title == "mine"
+
+
+def test_a_named_new_entry_is_refused_when_its_id_is_taken(sandbox, store):
+    """An id the caller chose (`ar entry new --id`) is not renumbered: it may
+    already be cited, so a taken id is a loud refusal, not a quiet move."""
+    _write_record(store.path("Q1"), title="theirs")
+    with pytest.raises(SchemaError, match="already exists"):
+        store.create(Entry(id="Q1", track="research", title="mine"))
+    assert store.load("Q1").title == "theirs"
+
+
+def _file_after_barrier(directory, barrier, out):
+    from autoresearch.entries import Entry, Store
+    store = Store(directory)
+    entry = Entry(id=store.next_id("Q"), track="research", title="racer")
+    barrier.wait()           # every filer has computed the same next id
+    out.put(store.create(entry, renumber=True).name)
+
+
+def test_concurrent_filers_each_get_their_own_entry(sandbox, store):
+    """#21: two processes filing on one track at once. Every filer computes
+    the same next id before any of them writes; each must still end up with
+    an entry of its own."""
+    import multiprocessing
+    context = multiprocessing.get_context("spawn")
+    count = 6
+    barrier, out = context.Barrier(count), context.Queue()
+    workers = [context.Process(target=_file_after_barrier,
+                               args=(str(store.dir), barrier, out))
+               for _ in range(count)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(60)
+        assert worker.exitcode == 0
+    names = sorted(out.get(timeout=5) for _ in range(count))
+    assert names == sorted(f"Q{n}.yaml" for n in range(1, count + 1))
+    assert len(list(store.dir.glob("Q*.yaml"))) == count

@@ -7,7 +7,7 @@ from autoresearch.budget import BUDGET, MET, recorded_usage
 from autoresearch.driver.brain import Reply, Role, ScriptedBrain, extract_json
 from autoresearch.driver.loop import Coordinator, Iteration
 from autoresearch.errors import AutoresearchError
-from conftest import make_entry
+from conftest import make_entry, race_next_id
 from toy_brain import ToyBrain
 
 
@@ -1016,3 +1016,18 @@ def test_the_envelope_still_files_its_proposals(sandbox, store):
         {**IDLE, Role.GENERATOR: {"proposals": [proposal], "notes": ["one only"]}}))
     coordinator.run(max_iterations=1)
     assert [e.title for e in store.all()] == ["an enveloped idea"]
+
+
+def test_a_proposal_never_overwrites_an_entry_filed_mid_iteration(
+        sandbox, store, monkeypatch):
+    """#21: the generate phase files through the same exclusive create, so a
+    human's `ar entry new` landing mid-iteration keeps its entry."""
+    taken = race_next_id(monkeypatch)
+    proposal = {"title": "proposed", "hypothesis": "h", "prediction": "p",
+                "bar": "b", "confidence": 0.4, "impact": 0.05, "cost": 2.0,
+                "mechanisms": ["m"], "why_filed": "w"}
+    coordinator = Coordinator(sandbox, ScriptedBrain(
+        {**IDLE, Role.GENERATOR: {"proposals": [proposal]}}))
+    coordinator.run(max_iterations=1)
+    assert store.load(taken[0]).title == "theirs"
+    assert sorted(e.title for e in store.all()) == ["proposed", "theirs"]

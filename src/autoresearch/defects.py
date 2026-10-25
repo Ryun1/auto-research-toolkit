@@ -180,7 +180,7 @@ def ingest_bundle(bundle: dict, store, *, track: Track,
             why_filed=f"field defect from {project}",
             tags=[tag])
         entry.gates = [dataclasses.replace(gate) for gate in track.gates]
-        store.save(entry)
+        store.create(entry, renumber=True)
         seen_tags.add(tag)
         filed.append(entry)
     return filed, skipped

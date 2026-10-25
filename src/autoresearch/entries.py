@@ -752,6 +752,47 @@ class Store:
                               f"disk does not match what was written")
         return path
 
+    def create(self, entry: Entry, renumber: bool = False) -> pathlib.Path:
+        """File a new entry: write it only where no entry exists yet.
+
+        #21: filing used to be `next_id`, an existence check, then `save` --
+        three steps. Two sessions filing on one track both computed the same
+        number, both found it free, and the second save replaced the first
+        session's entry, with success printed on both sides. Here the record
+        is written to a temporary file and hard-linked into place, and a link
+        never replaces an existing name, so the claim on an id and the record
+        under it land in one step -- and a crash leaves either the whole entry
+        or no entry, never a reserved number with nothing behind it.
+
+        A taken id is refused, unless `renumber`: an id the store allocated
+        moves to the next free number and the entry's `id` is updated. An id
+        the caller chose is never moved, because it may already be cited."""
+        import os
+        entry.__post_init__()
+        self.dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            path = self.path(entry.id)
+            body = yaml.safe_dump(entry.to_dict(), sort_keys=False,
+                                  allow_unicode=True, width=100)
+            temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            try:
+                temporary.write_text(body)
+                os.link(temporary, path)
+            except FileExistsError:
+                if not renumber:
+                    raise SchemaError(
+                        f"{entry.id} already exists at {path}. Ids are filenames, "
+                        "so a collision is loud here rather than a silent "
+                        "renumber after every citation was written (H79).") from None
+                taken = int(self.next_id(entry.prefix)[len(entry.prefix):])
+                entry.id = f"{entry.prefix}{max(taken, entry.number + 1)}"
+                continue
+            finally:
+                temporary.unlink(missing_ok=True)
+            _ENTRY_CACHE.setdefault(str(self.dir.resolve()), {})[path.name] = \
+                (_signature(path), entry.to_dict())
+            return path
+
     def all(self) -> list[Entry]:
         return self._scan(None)
 

@@ -102,3 +102,27 @@ def memo(config, name="inbox/m.md", text="evidence"):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     return name
+
+
+def race_next_id(monkeypatch, title="theirs"):
+    """#21: another session files the number this one just computed, in the
+    window between `next_id` and the write -- once, the way a real race
+    happens. Its record is written straight to disk, as a second process
+    would write it."""
+    import yaml
+
+    from autoresearch.entries import Store
+    real = Store.next_id
+    taken = []
+
+    def racing(self, prefix):
+        entry_id = real(self, prefix)
+        if not taken:
+            taken.append(entry_id)
+            self.path(entry_id).write_text(yaml.safe_dump(
+                {"id": entry_id, "track": "research", "title": title,
+                 "status": "queued"}, sort_keys=False))
+        return entry_id
+
+    monkeypatch.setattr(Store, "next_id", racing)
+    return taken
