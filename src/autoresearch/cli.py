@@ -1186,10 +1186,19 @@ def cmd_budget(args):
     except AutoresearchError:
         target = None
     best, excluded = runs_mod.frontier(store, all_runs, config.goal)
+    # The same yield series the loop feeds its stop decision; without it the
+    # yield floor could never fire here, so budget and loop disagreed (#19).
+    try:
+        from .driver.loop import read_history
+        yields = [i.confirmed for i in read_history(config.paths.iterations)
+                  if i.kind == "iteration"]
+    except AutoresearchError:
+        yields = None            # a malformed record is validate's to report
     decision = budget_mod.should_stop(
         config,
         measurements=best[1].metrics if best else None,
         target=target,
+        verdicts_per_iteration=yields,
         budgets=[domain],
         unmet_required_gates=budget_mod.unmet_required_gates(
             config.goal, store, best),

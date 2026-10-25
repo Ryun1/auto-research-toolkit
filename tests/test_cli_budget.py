@@ -135,3 +135,15 @@ def test_rank_accounts_for_reserved_and_failed_execution(sandbox, store, capsys)
     attempts.settle(sandbox, reserved["id"], "owner", "failed")
     assert cli.main(args) == 0
     assert "Q2" not in capsys.readouterr().out.split("shortlist (top 1):")[1]
+
+
+def test_budget_fires_the_yield_floor_the_loop_would(sandbox, capsys):
+    """#19: `ar budget` never passed the iteration yields to should_stop, so
+    the yield floor could only ever stop the loop, never show on the meter."""
+    import json
+    sandbox.paths.iterations.mkdir(parents=True, exist_ok=True)
+    for n in range(1, 7):                  # toy floor: 0.25 over 6 iterations
+        (sandbox.paths.iterations / f"{n:04d}.json").write_text(json.dumps(
+            {"n": n, "verdicts": {f"Q{n}": "refuted"}}))
+    cli.main(["--domain", str(sandbox.paths.root), "budget"])
+    assert "stop decision: yield" in capsys.readouterr().out
