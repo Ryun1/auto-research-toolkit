@@ -50,7 +50,8 @@ def test_the_documented_timestamp_form_is_read_and_still_bites(sandbox, store):
         "---\n\n# documented\n\nIt held [Q1].\n")
     assert _check(sandbox, store) == []
 
-    entry.relabel("cell", "test", why="only ever measured at one width")
+    entry.relabel("cell", "test", why="only ever measured at one width",
+                   reopen_condition="a second width")
     entry.result.reopen_condition = "another width"
     store.save(entry)
     assert any("relabel" in p for p in _check(sandbox, store))
@@ -183,7 +184,8 @@ def test_relabelling_a_closure_makes_the_skill_stale(sandbox, store):
     make_skill(sandbox, "holds-everywhere", cites=["Q1"])
     assert _check(sandbox, store) == []
 
-    entry.relabel("cell", "test", why="it was only ever measured at one width")
+    entry.relabel("cell", "test", why="it was only ever measured at one width",
+                   reopen_condition="a second width")
     entry.result.reopen_condition = "another width"
     store.save(entry)
 
@@ -389,7 +391,8 @@ def test_relabelling_is_caught_on_a_skill_whose_entry_stays_terminal(sandbox, st
     entry, = _entries(sandbox, store, "Q1", verdict="refuted",
                       closure_kind="mechanism")
     make_skill(sandbox, "holds", cites=["Q1"])
-    entry.relabel("cell", "test", why="measured at one width only")
+    entry.relabel("cell", "test", why="measured at one width only",
+                   reopen_condition="a second width")
     entry.result.reopen_condition = "another width"
     store.save(entry)
 
@@ -436,7 +439,8 @@ def test_an_event_in_the_same_second_as_the_distillation_still_counts(sandbox, s
     label right after a distil pass actually does."""
     entry, = _entries(sandbox, store, "Q1", verdict="refuted",
                       closure_kind="mechanism")
-    entry.relabel("cell", "test", why="one width only")
+    entry.relabel("cell", "test", why="one width only",
+                   reopen_condition="a second width")
     entry.result.reopen_condition = "another width"
     store.save(entry)
     same_second = entry.history[-1].at

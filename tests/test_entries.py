@@ -97,9 +97,24 @@ def test_relabel_keeps_the_verdict(store):
     e.apply(m, "in-progress", who="s", why="c")
     e.apply(m, "refuted", who="s", memo_exists=lambda p: True,
             result=result(verdict="refuted", closure_kind="mechanism"))
-    e.relabel("cell", who="curator", why="one point, not a range")
+    e.relabel("cell", who="curator", why="one point, not a range",
+              reopen_condition="a second point outside the band")
     assert e.status == "refuted" and e.result.closure_kind == "cell"
+    assert e.result.reopen_condition == "a second point outside the band"
     assert any(ev.kind == "relabel" for ev in e.history)
+
+
+def test_relabel_to_cell_without_a_reopen_condition_is_refused(store):
+    """falcon1024 H1 (#27): --reopen-condition was accepted and discarded, so a
+    relabel produced a cell closure the close path would have refused."""
+    m = default_machine()
+    e = make_entry(store)
+    e.apply(m, "in-progress", who="s", why="c")
+    e.apply(m, "refuted", who="s", memo_exists=lambda p: True,
+            result=result(verdict="refuted", closure_kind="mechanism"))
+    with pytest.raises(TransitionError, match="reopen-condition"):
+        e.relabel("cell", who="c", why="one point")
+    assert e.result.closure_kind == "mechanism"
 
 
 def test_relabel_requires_a_reason(store):

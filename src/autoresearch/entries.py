@@ -451,7 +451,8 @@ class Entry:
         self.status = dest
         self.updated = _now()
 
-    def relabel(self, kind: str, who: str, why: str) -> None:
+    def relabel(self, kind: str, who: str, why: str,
+                reopen_condition: str | None = None) -> None:
         """Correct a closure label without disturbing the verdict.
 
         H133: a label that turns out wrong had no writer, so correcting it meant
@@ -464,8 +465,19 @@ class Entry:
                 f"closure kind {kind!r} not in {sorted(CLOSURE_KINDS)}")
         if not why.strip():
             raise TransitionError("relabelling requires a reason")
+        # A relabel to cell/slope must meet the same H136 rule a fresh close
+        # does; the flag used to be accepted and discarded (falcon1024 H1, #27).
+        if reopen_condition is not None and reopen_condition.strip():
+            self.result.reopen_condition = reopen_condition
+        if kind in ("slope", "cell") and not self.result.reopen_condition.strip():
+            raise TransitionError(
+                f"{self.id}: relabelling to {kind!r} requires --reopen-condition: "
+                "a closure that holds only within what was measured must say "
+                "what would re-open it (H136)")
         old, self.result.closure_kind = self.result.closure_kind, kind
-        self.history.append(Event(_now(), "relabel", who, f"{old} -> {kind}: {why}"))
+        self.history.append(Event(
+            _now(), "relabel", who, f"{old} -> {kind}: {why}"
+            + (f" (reopen: {reopen_condition})" if reopen_condition else "")))
         self.updated = _now()
 
     def set_evidence_class(self, value: str, who: str, why: str) -> None:

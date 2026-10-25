@@ -842,7 +842,8 @@ def cmd_close(args):
     track = config.track_for(args.id)
 
     if args.relabel:
-        entry.relabel(args.relabel, who=args.session, why=args.why or "")
+        entry.relabel(args.relabel, who=args.session, why=args.why or "",
+                      reopen_condition=args.reopen_condition)
         store.save(entry)
         _render_views(config)
         print(f"{entry.id} closure relabelled to {args.relabel}")
@@ -980,7 +981,8 @@ def cmd_close(args):
         if hidden:
             print(f"  now excluded from `ar rank` by this mechanism closure: "
                   f"{', '.join(hidden)} -- if the refutation does not reach "
-                  f"them, `ar close {entry.id} --relabel cell`")
+                  f"them, `ar close {entry.id} --relabel cell --why ... "
+                  f"--reopen-condition ...`")
     if not track.machine.status(entry.status).terminal:
         # Which statuses are terminal is per-track machine config (a defect
         # track closes `fixed`, not `confirmed`), and the first real domain
