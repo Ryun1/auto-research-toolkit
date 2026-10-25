@@ -420,7 +420,7 @@ def cmd_board(args):
                        skipped, best_metrics=best[1].metrics if best else None,
                        unmet_required_gates=budget_mod.unmet_required_gates(
                            config.goal, store, best),
-                       excluded_best=excluded))
+                       excluded_best=excluded, overruns=_overruns(config, store, entries)))
     from . import holdout as holdout_mod
     if holdout_mod.declared(config):
         print(_holdout_line(holdout_mod.summary(config, best)) + "\n")
@@ -436,6 +436,21 @@ def cmd_board(args):
         print("  (`ar board --epoch N` reads one; `ar epochs` lists what a move "
               "may have invalidated)")
     return 0
+
+
+def _overruns(config, store, entries) -> dict:
+    """Live claims past a ceiling they registered, by entry id (#22) -- the
+    same test `ar budget` prints per claim."""
+    claims = Claims(store, config, "board")
+    out = {}
+    for entry in entries:
+        if not entry.claim or config.track_for(entry.id).machine.status(
+                entry.status).terminal:
+            continue
+        over = claims.overrun(entry.id, runs_spent=budget_mod.claim_runs(config, entry))
+        if over:
+            out[entry.id] = over
+    return out
 
 
 def _holdout_line(summary) -> str:

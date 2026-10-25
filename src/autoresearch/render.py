@@ -252,7 +252,7 @@ def last_iteration(config) -> tuple[int, dict, int] | None:
 
 def board(config, entries, runs, target=None, best=None, skipped_runs=0,
           best_metrics=None, unmet_required_gates=(),
-          excluded_best=None) -> str:
+          excluded_best=None, overruns=None) -> str:
     """One screen answering what is currently true.
 
     Modelled on the source harness's `bin/board`, which existed because a cold
@@ -319,8 +319,13 @@ def board(config, entries, runs, target=None, best=None, skipped_runs=0,
         held = [e for e in mine if e.claim and not machine.status(e.status).terminal]
         out.append(f"  live claims: {len(held)}")
         for e in held:
+            # #22: claims ran 27-47 h past a 2 h budget and only a curator's
+            # manual check noticed. The board names the overrun on the line.
+            over = (overruns or {}).get(e.id)
             out.append(f"    {e.id}  {e.claim.session}  since {e.claim.at[:16]} "
-                       f" [{e.gate_readiness(machine.required_gates)}]")
+                       f" [{e.gate_readiness(machine.required_gates)}]"
+                       + (f"  OVERRUN {over[0]} {over[1]:.3g} > {over[2]:g}"
+                          if over else ""))
         queued = sorted((e for e in mine if e.status == machine.initial),
                         key=lambda e: -getattr(e, "_score", 0))
         out.append(f"  queued heads ({len(queued)} queued):")

@@ -305,6 +305,47 @@ class Claims:
 
     # -- freeing abandoned work --------------------------------------------
 
+    def last_seen(self, entry, _cache=None) -> tuple[float, str]:
+        """`(hours ago, what)` for the claim holder's last sign of life (#22).
+
+        The claim's own timestamp was the only liveness fact `ar reap` read,
+        so it reaped a session that had committed a memo two hours earlier
+        ("its claim was silent but the session was not"). Any of these, after
+        the claim was taken, is the holder working: an event it wrote on any
+        entry, a run row it recorded, a commit whose message names it."""
+        claim = entry.claim
+        cache = _cache if _cache is not None else {}
+        if claim.session not in cache:
+            cache[claim.session] = self._signs_of_life(claim.session, claim.at)
+        best = (_age_hours(claim.at), "the claim itself")
+        for hours, what in cache[claim.session]:
+            if hours < best[0]:
+                best = (hours, what)
+        return best
+
+    def _signs_of_life(self, session, since) -> list[tuple[float, str]]:
+        import subprocess
+        out = []
+        for other in self.store.all():
+            for event in other.history:
+                if event.who == session and event.at > since:
+                    out.append((_age_hours(event.at), f"{event.kind} on {other.id}"))
+        from . import runs as runs_mod
+        now = time.time()
+        for row in runs_mod.read_all(self.config.paths.runs):
+            if row.session == session:
+                stamp = row.finished or row.started
+                if isinstance(stamp, (int, float)):
+                    out.append(((now - stamp) / 3600.0, f"run row {row.id}"))
+        proc = subprocess.run(
+            ["git", "log", f"--since={since}", "--fixed-strings",
+             f"--grep={session}", "-1", "--format=%ct %h"],
+            cwd=self.config.paths.root, capture_output=True, text=True)
+        if proc.returncode == 0 and proc.stdout.strip():
+            stamp, sha = proc.stdout.split()
+            out.append(((now - int(stamp)) / 3600.0, f"commit {sha} naming it"))
+        return out
+
     def reapable(self, ttl_hours=None) -> list:
         """Orphaned active records, plus claims whose holder exceeded TTL.
 
@@ -316,14 +357,16 @@ class Claims:
         """
         ttl = float(ttl_hours if ttl_hours is not None
                     else self.config.budgets.get("claim_ttl_hours", 6))
-        out = []
+        out, seen = [], {}
         for entry in self.store.all():
             track = self.config.track_for(entry.id)
             if not entry.claim and entry.status == "in-progress":
                 out.append((entry, None))
             elif (entry.claim and not track.machine.status(entry.status).terminal
                   and _age_hours(entry.claim.at) > ttl):
-                out.append((entry, _age_hours(entry.claim.at)))
+                silent, _ = self.last_seen(entry, seen)
+                if silent > ttl:
+                    out.append((entry, silent))
         return out
 
     def reap(self, entry_id: str, ttl_hours=None, why: str = ""):
@@ -367,15 +410,15 @@ class Claims:
                 entry.claim = None
                 self.store.save(entry)
                 return entry, None, 0.0
-            age = _age_hours(entry.claim.at)
             ttl = float(ttl_hours if ttl_hours is not None
                         else self.config.budgets.get("claim_ttl_hours", 6))
+            age, what = self.last_seen(entry)
             if age <= ttl:
                 raise ClaimError(
-                    f"{entry_id} was touched {age:.2f} h ago, inside the "
-                    f"{ttl:.2f} h TTL; its holder {entry.claim.session!r} is "
-                    "presumed alive. Reaping a live claim gives two sessions "
-                    "the same work.")
+                    f"{entry_id} was touched {age:.2f} h ago ({what}), inside "
+                    f"the {ttl:.2f} h TTL; its holder {entry.claim.session!r} "
+                    "is presumed alive. Reaping a live claim gives two "
+                    "sessions the same work.")
             former = entry.claim.session
             reason = why or f"reaped: {former} silent for {age:.1f} h (TTL {ttl} h)"
             entry.apply(track.machine, track.machine.initial,
