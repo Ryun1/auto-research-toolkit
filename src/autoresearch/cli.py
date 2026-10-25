@@ -1449,6 +1449,12 @@ def cmd_measure(args):
         source_revision=revision, core=core_version())
     if dirty is not None:
         record.provenance["source_dirty"] = dirty
+    # Who measured it, in terms the measurer cannot choose (#43): the slot a
+    # candidate tree was handed out as, or the claim the caller proved it
+    # holds. `--session` is a free string, and counting it let one agent be
+    # its own second session. Stamped before the receipt digest, so a slot
+    # cannot edit it.
+    record.provenance["measured_by"] = _measured_by(config, args, candidate)
     # A throughput figure that does not name its machine is not a measurement,
     # and two rows from different machines are not comparable without saying so.
     # The domain does not have to remember to record this; core does it.
@@ -1478,7 +1484,29 @@ def cmd_measure(args):
     print(f"{record.id} {record.status}"
           + (f"  objective={render._fmt(value)}" if value is not None else "")
           + f"  -> {shown}")
+    if record.provenance["measured_by"] == "unclaimed":
+        print("  (unclaimed: no slot and no proven claim, so this row never "
+              "counts as a second, independent measurement; measure with "
+              "--candidate, or --entry with the claim's --claim-token)")
     return 0
+
+
+def _measured_by(config, args, candidate) -> str:
+    if candidate is not None:
+        return f"slot:{candidate.name}"
+    if args.entry:
+        try:
+            entry = _store(config).load(args.entry)
+        except AutoresearchError:
+            entry = None
+        if entry is not None and entry.claim:
+            try:
+                Claims(_store(config), config, args.session,
+                       token=getattr(args, "claim_token", None)).require_owner(entry)
+            except AutoresearchError:
+                return "unclaimed"
+            return f"claim:{entry.claim.session}@{entry.claim.at}"
+    return "unclaimed"
 
 
 def _refuse_evaluator_drift(config, candidate, entry_id, when):

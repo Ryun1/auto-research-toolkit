@@ -258,8 +258,12 @@ def _released(goal, unit, beaten, by_config, promoted) -> bool:
     re-measure ran under the same evaluator."""
     if any(r.id in promoted for _, r in unit.scored):
         return True
+    from .runs import source_of
     rows = by_config[config_digest(unit.scored[0][1])]
-    return len({r.session for v, r in rows if goal.better(v, beaten)}) >= 2
+    # Sources, not session names (#43): a slot or a proven claim each; an
+    # unclaimed row is nobody's second measurement.
+    sources = {source_of(r) for v, r in rows if goal.better(v, beaten)}
+    return len(sources - {None}) >= 2
 
 
 def admit(goal, scored, promoted=frozenset()):

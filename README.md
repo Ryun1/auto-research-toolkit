@@ -120,8 +120,9 @@ goal:
   target:   {source: bin/probe-target, moving: true}
   stop_when: "objective < target"
   yield_floor: {confirmed_per_iteration: 0.15, over_iterations: 10}
-  # Hold a met target until a second, independent run row (different claim:
-  # different workspace session or entry) also meets it. AIRA measured the
+  # Hold a met target until a second, independent run row also meets it: one
+  # from another source -- another slot, or another proven claim (core stamps
+  # `provenance.measured_by`; a free `--session` name is not a source). AIRA measured the
   # failure this guards at 9-13 points on MLE-bench (arXiv 2507.02554 §5.3):
   # a search guided by its own proxy overfits, and the perceived score keeps
   # rising after the true one has stopped.
@@ -144,8 +145,8 @@ goal:
   # Hold an anomalously large win (off unless declared; k defaults to 10). A
   # gain over k x the noise floor -- or, with no floor, over k x the largest
   # step accepted so far -- stays off the frontier, named "suspect", until a
-  # re-measure of the same config from another session in the same epoch
-  # reproduces it, or a person runs `ar promote <run-id> --why ...` (list
+  # re-measure of the same config from another source (slot or proven claim)
+  # in the same epoch reproduces it, or a person runs `ar promote <run-id> --why ...` (list
   # `ar promote` under [[policy.human_only]] to make that the only way). A
   # confirmed close also lists tamper-shaped diff hunks (evaluator files,
   # tests, timing calls, __eq__/__hash__, monkey-patching) for QC and a

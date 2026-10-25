@@ -407,11 +407,14 @@ def independent_confirmation(goal, best, records, target) -> bool:
     if best is None or best[1] is None:
         return True                     # nothing to confirm; is_met governs
     best_row = best[1]
+    best_source = runs_mod.source_of(best_row)
     for row in records:
         if row.id == best_row.id or row.status != runs_mod.OK:
             continue
-        if (row.session == best_row.session
-                and row.entry == best_row.entry):
+        # A second *source* (#43): another slot or proven claim. A free
+        # session name is not one, and an unclaimed row is no source at all.
+        source = runs_mod.source_of(row)
+        if source is None or source == best_source:
             continue
         try:
             if goal.is_met(row.metrics, target):

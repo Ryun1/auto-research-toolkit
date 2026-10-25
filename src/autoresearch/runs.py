@@ -406,6 +406,18 @@ def frontier(store, records, goal):
     return best, excluded
 
 
+def source_of(record) -> str | None:
+    """Which measurement source a row came from, for counting independent
+    ones (#43): core's `provenance.measured_by` -- a slot or a proven claim
+    -- or None for an `unclaimed` row, which is no second source. A row from
+    before the stamp is told apart by session and entry, as it always was."""
+    provenance = record.provenance if isinstance(record.provenance, dict) else {}
+    if "measured_by" not in provenance:
+        return f"legacy:{record.session}/{record.entry}"
+    by = provenance["measured_by"]
+    return None if by in ("unclaimed", None, "") else str(by)
+
+
 def started_at(record) -> float:
     """A row's start as a number for ordering. The measure script writes
     `started`; a string or null there must not crash every reader that
