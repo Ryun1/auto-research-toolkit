@@ -249,3 +249,18 @@ def test_a_retired_sibling_is_not_evidence_against_its_parent(sandbox, store):
 
     machine_for = lambda entry_id: sandbox.track_for(entry_id).machine  # noqa: E731
     assert rank.stagnant_parents(store.all(), machine_for, threshold=1) == {}
+
+
+def test_superseded_by_an_outside_record(sandbox, store, capsys):
+    """mldsa87 H1 (#11): entries made moot by a hosted record had no honest
+    terminal state, so curators closed them `refuted`."""
+    make_entry(store, "Q2")
+    assert cli.main([*root_of(sandbox), "claim", "Q2", "--why", "retiring it"]) == 0
+    assert cli.main([*root_of(sandbox), "close", "Q2", "superseded",
+                     "--superseded-by", "hosted:mk_916c7bcc",
+                     "--memo", memo(sandbox, "inbox/Q2.md"),
+                     "--summary", "the hosted frontier landed this lever"]) == 0
+    assert "superseded by hosted:mk_916c7bcc" in capsys.readouterr().out
+    retired = store.load("Q2")
+    assert retired.status == "superseded"
+    assert "hosted:mk_916c7bcc" in retired.history[-1].detail

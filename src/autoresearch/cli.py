@@ -868,12 +868,21 @@ def cmd_close(args):
                 f"closure as {args.status or '(none)'!r} names no replacement")
         if superseded_by == args.id:
             raise AutoresearchError("an entry cannot supersede itself")
-        try:
-            replacement = store.load(superseded_by)
-        except Exception as exc:
-            raise AutoresearchError(
-                f"cannot retire {args.id} as superseded: no entry "
-                f"{superseded_by!r}") from exc
+        # A replacement outside the store -- a hosted or public record -- is
+        # named by a scheme-prefixed reference (`https://...`, `hosted:mk_1`),
+        # so a mistyped entry id is still refused (mldsa87 H1, #11).
+        external = "://" in superseded_by or (
+            ":" in superseded_by and not superseded_by.startswith(":"))
+        if external:
+            replacement = superseded_by
+        else:
+            try:
+                replacement = store.load(superseded_by)
+            except Exception as exc:
+                raise AutoresearchError(
+                    f"cannot retire {args.id} as superseded: no entry "
+                    f"{superseded_by!r} (an outside record is named with a "
+                    f"scheme, e.g. https://... or hosted:<id>)") from exc
     if args.status == "superseded" and replacement is None:
         raise AutoresearchError(
             "closing as superseded requires --superseded-by: a retirement "
@@ -920,7 +929,11 @@ def cmd_close(args):
     entry.apply(track.machine, args.status, who=args.session, why=args.why or "",
                 result=result,
                 memo_exists=lambda m: (memo_root / m).exists())
-    if replacement is not None:
+    if isinstance(replacement, str):
+        entry.history.append(Event(
+            _iso(), "superseded", args.session,
+            f"retired as superseded by external record {replacement}"))
+    elif replacement is not None:
         # The relation lands on the replacement's own typed field, so the
         # graph, the render and the next agent all see which entry absorbed
         # this one -- and the retired entry's own history says who replaced it.
@@ -936,7 +949,8 @@ def cmd_close(args):
     _render_views(config)
     print(f"{entry.id} closed {args.status}"
           + (f" ({args.closure})" if args.closure else "")
-          + (f" — superseded by {replacement.id}" if replacement else "")
+          + (f" — superseded by {getattr(replacement, 'id', replacement)}"
+             if replacement else "")
           + f" — evidence: {result.memo}")
     if args.status == "refuted" and args.closure == "mechanism":
         # A mechanism closure removes every open entry sharing the mechanism
@@ -1984,7 +1998,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     close.add_argument("--memo", help="path to the evidence memo; must exist")
     close.add_argument("--superseded-by", dest="superseded_by",
                        help="required when closing `superseded`: the entry "
-                            "that covers this one. The relation is recorded "
+                            "that covers this one, or an outside record "
+                            "named with a scheme (https://..., hosted:<id>). The relation is recorded "
                             "in that entry's `supersedes`, so retirement "
                             "always names its replacement (H15)")
     close.add_argument("--summary")
