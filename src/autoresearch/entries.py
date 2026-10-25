@@ -588,20 +588,47 @@ class Entry:
 
     @classmethod
     def from_dict(cls, data: dict) -> Entry:
-        known = {f.name for f in dataclasses.fields(cls)}
-        unknown = set(data) - known
-        if unknown:
-            raise SchemaError(
-                f"entry {data.get('id')!r} has unknown field(s) {sorted(unknown)}; "
-                f"known: {sorted(known)}")
+        entry_id = data.get("id")
+        _known_fields(cls, data, f"entry {entry_id!r}")
         data = dict(data)
         if isinstance(data.get("claim"), dict):
-            data["claim"] = Claim(**data["claim"])
+            data["claim"] = Claim(**_known_fields(
+                Claim, data["claim"], f"entry {entry_id!r} claim"))
         if isinstance(data.get("result"), dict):
-            data["result"] = Result(**data["result"])
-        data["history"] = [Event(**e) if isinstance(e, dict) else e
+            data["result"] = Result(**_known_fields(
+                Result, data["result"], f"entry {entry_id!r} result"))
+        data["history"] = [Event(**_known_fields(Event, e, f"entry {entry_id!r} event"))
+                           if isinstance(e, dict) else e
                            for e in data.get("history", [])]
         return cls(**data)
+
+
+#: The core version each record field first appeared in (#45). A core older
+#: than that refuses the record; `ar validate` names the floor a domain's
+#: records need so `[upstream] min_core` can refuse the stale install first.
+FIELDS_SINCE = {"claim.token_sha": "0.11.0", "derived_from": "0.11.0",
+                "result.pin": "0.11.0"}
+
+
+def _known_fields(cls, data: dict, what: str) -> dict:
+    """`data`, or a refusal naming any field this core does not know.
+
+    Fail closed, never round-trip: an older core that carried `claim.token_sha`
+    along unread would grant the claim by session name again (#33). The
+    refusal says why, so a mixed-version fleet sees a version problem rather
+    than a raw `TypeError` from a constructor (#45)."""
+    known = {f.name for f in dataclasses.fields(cls)}
+    unknown = sorted(set(data) - known)
+    if unknown:
+        from .skills import core_version
+        raise SchemaError(
+            f"{what} has unknown field(s) {unknown}: this core "
+            f"({core_version()}) does not know them -- the record was written "
+            f"by a newer core. Upgrade "
+            f"this install (`ar harness update`), and set `[upstream] "
+            f"min_core` so `ar doctor` refuses the stale one first. "
+            f"Known: {sorted(known)}")
+    return data
 
 
 #: Per-file parse cache, keyed by resolved directory then filename:

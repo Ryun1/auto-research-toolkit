@@ -1939,6 +1939,7 @@ def cmd_validate(args):
                 + validate_mod.duplicate_warnings(config)
                 + validate_mod.holdout_warnings(config)
                 + validate_mod.evaluator_warnings(config)
+                + validate_mod.record_floor_warnings(config)
                 + validate_mod.citation_warnings(config))
 
     if getattr(args, "json", False):

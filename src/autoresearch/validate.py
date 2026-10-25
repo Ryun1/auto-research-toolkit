@@ -325,6 +325,35 @@ def holdout_warnings(config) -> list[str]:
             f"index (`git rm --cached`) and gitignore them"]
 
 
+def record_floor_warnings(config) -> list[str]:
+    """The `min_core` this domain's records need, when it is not declared (#45).
+
+    Records now carry fields an older core refuses to read (`FIELDS_SINCE`).
+    Without a floor, a machine on an older install finds out from a schema
+    refusal mid-session; with one, `ar doctor` refuses the install first."""
+    from .entries import FIELDS_SINCE, Store
+    from .upstream import version_tuple
+    present = set()
+    for entry in Store(config.paths.entries).read_all()[0]:
+        if entry.claim and entry.claim.token_sha:
+            present.add("claim.token_sha")
+        if entry.derived_from:
+            present.add("derived_from")
+        if entry.result and entry.result.pin:
+            present.add("result.pin")
+    if not present:
+        return []
+    need = max((FIELDS_SINCE[f] for f in present), key=version_tuple)
+    floor = getattr(config.upstream, "min_core", "") or ""
+    have = version_tuple(floor) if floor else None
+    if have is not None and have >= version_tuple(need):
+        return []
+    return [f"records carry field(s) {sorted(present)} that cores below {need} "
+            f"cannot read; set `[upstream] min_core = \"{need}\"` so `ar doctor` "
+            f"refuses an older install before it meets one"
+            + (f" (declared: {floor})" if floor else "")]
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.
