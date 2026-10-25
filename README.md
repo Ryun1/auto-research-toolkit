@@ -141,6 +141,16 @@ goal:
   # side; declared: k x sigma, for evaluators that cannot cheaply rerun.
   # Not corrected for the many comparisons a whole search makes.
   noise: {method: mad, k: 2.0, min_rows: 3}
+  # Hold an anomalously large win (off unless declared; k defaults to 10). A
+  # gain over k x the noise floor -- or, with no floor, over k x the largest
+  # step accepted so far -- stays off the frontier, named "suspect", until a
+  # re-measure of the same config from another session in the same epoch
+  # reproduces it, or a person runs `ar promote <run-id> --why ...` (list
+  # `ar promote` under [[policy.human_only]] to make that the only way). A
+  # confirmed close also lists tamper-shaped diff hunks (evaluator files,
+  # tests, timing calls, __eq__/__hash__, monkey-patching) for QC and a
+  # person to read; they decide nothing.
+  suspect: {k: 10}
 ```
 
 Two guards the *coordinator* owns sit on top of the goal, and both are
@@ -270,6 +280,7 @@ ar reap        free an expired claim or repair an in-progress orphan
 ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
 ar epochs      the ledger's measurement epochs; closures pinned to a superseded one
+ar promote     release a suspect row onto the frontier (a person's call)
 ar research    spin up targeted research agents; their ideas land in the record
 ar harness     check for and pull the latest core; export defects upstream
 ar doctor      which core answered, and whether it meets the domain's floor

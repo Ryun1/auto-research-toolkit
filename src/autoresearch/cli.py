@@ -435,6 +435,35 @@ def cmd_board(args):
     return 0
 
 
+def cmd_promote(args):
+    """A person's release of a suspect row (#39).
+
+    A row held as suspect waits for a clean re-measure from another session;
+    a domain that wants a person to decide instead lists `ar promote` under
+    `[[policy.human_only]]`, so an agent may prepare the case and never run
+    it. The release is a file beside the entry store, read by every frontier
+    reader -- the row itself is never edited."""
+    config = _load(args)
+    why = (args.why or "").strip()
+    if not why:
+        raise AutoresearchError("promoting a suspect row needs --why: what "
+                                "made the gain believable")
+    from .evaluator import _RUN_ID
+    if not _RUN_ID.fullmatch(args.run or ""):
+        raise AutoresearchError(f"{args.run!r} is not a run id")
+    if args.run not in {r.id for r in runs_mod.read_all(config.paths.runs)}:
+        raise AutoresearchError(f"no run {args.run!r} in the ledger")
+    directory = runs_mod.promotions_dir(_store(config))
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{args.run}.json"
+    if path.exists():
+        raise AutoresearchError(f"{args.run} is already promoted ({path})")
+    path.write_text(json.dumps({"run": args.run, "who": args.session,
+                                "why": why, "at": _iso()}, sort_keys=True) + "\n")
+    print(f"{args.run} promoted: it may stand on the frontier")
+    return 0
+
+
 def cmd_epochs(args):
     """The ledger's epochs, and the closures pinned to a superseded one.
 
@@ -1085,6 +1114,13 @@ def cmd_close(args):
             config, store, runs_mod.read_all(config.paths.runs), args.id)
         if noisy:
             raise AutoresearchError("; ".join(noisy))
+    tamper_hunks = None
+    if args.status == "confirmed":
+        # #39: hunks shaped like tampering, listed for QC and a person to read.
+        # Data, not a decision -- the closure proceeds either way.
+        from . import tamper as tamper_mod
+        tamper_hunks = tamper_mod.scan_tree(
+            config, config.paths.root, getattr(args, "diff_base", None) or "HEAD")
     if terminal:
         # Pinned to what its evidence was measured under, so a later move of
         # the evaluator or benchmark can list it as a reopen candidate (#40).
@@ -1135,6 +1171,10 @@ def cmd_close(args):
             f"{entry.id} retired as superseded by this entry"))
         replacement.updated = _iso()
         store.save(replacement)
+    if tamper_hunks:
+        from . import tamper as tamper_mod
+        entry.history.append(Event(_iso(), "tamper-scan", args.session,
+                                   tamper_mod.event_detail(tamper_hunks)))
     entry.claim = None
     store.save(entry)
     _render_views(config)
@@ -1144,6 +1184,11 @@ def cmd_close(args):
              if replacement else "")
           + (f" — evidence: {result.memo}" if terminal or result.memo
              else ""))
+    if tamper_hunks:
+        print(f"tamper-shaped hunks since {getattr(args, 'diff_base', None) or 'HEAD'}"
+              " (for QC and a person to read; they decide nothing):")
+        for hunk in tamper_hunks:
+            print(f"  {hunk}")
     if args.status == "refuted" and args.closure == "mechanism":
         # A mechanism closure removes every open entry sharing the mechanism
         # from `ar rank`. Said nowhere, curators found it by hand five times in
@@ -2070,6 +2115,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                                         "from `ar epochs`, or `unpinned`) "
                                         "instead of the current one")
     boardp.set_defaults(func=cmd_board)
+    promotep = sub.add_parser(
+        "promote", help="release a suspect row onto the frontier (a person's "
+                        "call; list it under [[policy.human_only]])")
+    promotep.add_argument("run")
+    promotep.add_argument("--why")
+    promotep.set_defaults(func=cmd_promote)
     sub.add_parser("epochs", help="the ledger's measurement epochs, and closures "
                                   "pinned to a superseded one"
                    ).set_defaults(func=cmd_epochs)
@@ -2327,6 +2378,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                        help="the revision this closure was decided at, for a "
                             "closure with no stamped rows of its own (an "
                             "external or static one); recorded in its pin (#40)")
+    close.add_argument("--diff-base", dest="diff_base",
+                       help="for a confirmed close, list tamper-shaped hunks "
+                            "in the diff since this revision (default HEAD: "
+                            "uncommitted changes) (#39)")
     close.add_argument("--why")
     close.add_argument("--reopen", action="store_true")
     close.add_argument("--relabel", choices=sorted(CLOSURE_KINDS))

@@ -93,6 +93,37 @@ class Noise:
         return noise
 
 
+@dataclass(frozen=True)
+class Suspect:
+    """#39: how much larger than expected a gain may be before it is held.
+
+    A gain past `k` x the noise floor -- or, with no floor to read, past `k`
+    x the largest step the frontier has accepted -- stays off the frontier
+    until a clean re-measure from another session (same config, same epoch)
+    reproduces it, or a person releases it with `ar promote`. `k` None is
+    off, the default; a declared block without `k` takes a conservative 10.
+    """
+    k: float | None = None
+
+    @classmethod
+    def from_dict(cls, raw, gid) -> Suspect:
+        if raw is None:
+            return cls()
+        if not isinstance(raw, dict):
+            raise GoalError(f"goal {gid!r}: suspect must be a mapping like {{k: 10}}")
+        unknown = set(raw) - {"k"}
+        if unknown:
+            raise GoalError(f"goal {gid!r}: suspect has unknown key(s) "
+                            f"{sorted(unknown)}; known: ['k']")
+        try:
+            k = float(raw.get("k", 10.0))
+        except (TypeError, ValueError) as exc:
+            raise GoalError(f"goal {gid!r}: suspect.k: {exc}") from exc
+        if k <= 1:
+            raise GoalError(f"goal {gid!r}: suspect.k must be above 1")
+        return cls(k)
+
+
 def config_digest(record) -> str:
     """Rows measuring one configuration share this; key order is not part of
     a configuration."""
@@ -189,33 +220,98 @@ def compare(goal, incumbent: Group, candidate: Group, all_groups) -> Verdict:
     raise AutoresearchError(f"no noise comparison for method {noise.method!r}")
 
 
-def admit(goal, scored):
-    """The incumbent group after admission, and the groups held within noise
-    of it: `(incumbent | None, [(group, reason)])`. Groups are taken in order
-    of first appearance; a better group displaces the incumbent only when its
-    gain clears the floor, or when there is no floor yet to clear."""
+def _floor(goal, all_groups) -> float | None:
+    """The noise floor in objective units, when there is one to read."""
+    noise = goal.noise
+    if noise.method == "declared":
+        return noise.k * noise.sigma
+    if noise.method in ("mad", "bootstrap"):
+        sigma, _ = pooled_sigma(all_groups, noise)
+        return noise.k * sigma if sigma is not None else None
+    return None
+
+
+def _suspicion(goal, gain, steps, all_groups) -> str | None:
+    """Why a gain is too large to take on one execution's word, or None."""
+    k = goal.suspect.k
+    if k is None:
+        return None
+    floor = _floor(goal, all_groups)
+    if floor:
+        if gain > k * floor:
+            return (f"suspect: gain {gain:.6g} is over {k:g}x the noise floor "
+                    f"{floor:.6g}")
+        return None
+    if steps and gain > k * max(steps):
+        return (f"suspect: gain {gain:.6g} is over {k:g}x the largest accepted "
+                f"step {max(steps):.6g}")
+    return None
+
+
+def _released(goal, unit, beaten, by_config, promoted) -> bool:
+    """A suspect unit stands once another session reproduced it -- a row of
+    the same config, from a different session than the first, that also beats
+    the incumbent it was held against -- or a person promoted one of its rows.
+    The caller passes one epoch's rows, so the re-measure ran under the same
+    evaluator."""
+    if any(r.id in promoted for _, r in unit.scored):
+        return True
+    rows = by_config[config_digest(unit.scored[0][1])]
+    first = min(rows, key=lambda pair: pair[1].started)[1]
+    return any(r.session != first.session and goal.better(v, beaten)
+               for v, r in rows)
+
+
+def admit(goal, scored, promoted=frozenset()):
+    """`(incumbent, held, suspects)` over one epoch's scored rows.
+
+    Units are taken in order of first appearance: config groups under a noise
+    method, single rows under `none`. A better unit displaces the incumbent
+    only when its gain clears the noise floor (or there is no floor yet) and
+    is not suspect (#39) -- or is suspect but released. `held` names the
+    better groups left within noise; `suspects` the units held as suspect,
+    each `(unit, reason)`.
+    """
+    rows_mode = goal.noise.method == "none"
     all_groups = groups(scored)
-    incumbent = None
-    for group in all_groups:
+    units = ([Group(r.id, [(v, r)]) for v, r in
+              sorted(scored, key=lambda pair: pair[1].started)]
+             if rows_mode else all_groups)
+    by_config = {}
+    for value, record in scored:
+        by_config.setdefault(config_digest(record), []).append((value, record))
+    incumbent, steps, suspects = None, [], []
+    for unit in units:
         if incumbent is None:
-            incumbent = group
+            incumbent = unit
             continue
-        if not goal.better(group.representative(goal)[0],
-                           incumbent.representative(goal)[0]):
+        beaten = incumbent.representative(goal)[0]
+        value = unit.representative(goal)[0]
+        if not goal.better(value, beaten):
             continue
-        if compare(goal, incumbent, group, all_groups).admitted is not False:
-            incumbent = group
+        if not rows_mode and compare(goal, incumbent, unit,
+                                     all_groups).admitted is False:
+            continue
+        gain = _gain(goal, beaten, value)
+        why = _suspicion(goal, gain, steps, all_groups)
+        if why and not _released(goal, unit, beaten, by_config, promoted):
+            suspects.append((unit, why + "; held until another session "
+                                         "re-measures this config, or `ar promote`"))
+            continue
+        steps.append(gain)
+        incumbent = unit
     held = []
-    if incumbent is not None:
+    if incumbent is not None and not rows_mode:
         top = incumbent.representative(goal)
+        suspect_ids = {id(unit) for unit, _ in suspects}
         for group in all_groups:
-            if group is incumbent or not goal.better(
-                    group.representative(goal)[0], top[0]):
+            if (group is incumbent or id(group) in suspect_ids
+                    or not goal.better(group.representative(goal)[0], top[0])):
                 continue
             verdict = compare(goal, incumbent, group, all_groups)
             held.append((group, f"within noise of {top[1].id} "
                                 f"({verdict.why})"))
-    return incumbent, held
+    return incumbent, held, suspects
 
 
 def confirmation_problems(goal, scored, entry_id) -> list[str]:
@@ -231,7 +327,7 @@ def confirmation_problems(goal, scored, entry_id) -> list[str]:
         return [f"confirmed under noise.method {goal.noise.method} needs a "
                 f"valid row of {entry_id} in the current epoch to test"]
     others = [(v, r) for v, r in scored if r.entry != entry_id]
-    baseline, _ = admit(goal, others)
+    baseline, _, _ = admit(goal, others)
     if baseline is None:
         return []
     mine = groups(own)

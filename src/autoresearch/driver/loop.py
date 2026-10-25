@@ -980,9 +980,16 @@ class Coordinator:
                      paths.iterations, paths.workspaces, paths.receipts,
                      *(paths.root / name for name in evaluator_mod.files(self.config)))
 
+        bases = {}
+
         def work(entry_id):
             slot = pool.acquire(f"it{it.n}-{entry_id}")
             pool.retain(slot.name, "worker evidence has not been harvested")
+            if slot.kind == "worktree":
+                # Where the worker started: a confirmed verdict's diff since
+                # here is scanned for tamper-shaped hunks (#39).
+                from .. import tamper as tamper_mod
+                bases[entry_id] = tamper_mod.base_of(slot.path)
             before, reply, error = None, None, None
             try:
                 relative = self.config.paths.runs.relative_to(self.config.paths.root)
@@ -1130,8 +1137,16 @@ class Coordinator:
                 except AutoresearchError as exc:
                     phase.detail.append(f"{entry_id}: {exc}")
             else:
+                hunks = None
+                if (report.get("verdict") == "confirmed" and slot is not None
+                        and bases.get(entry_id)):
+                    from .. import tamper as tamper_mod
+                    hunks = tamper_mod.scan_tree(self.config, slot.path,
+                                                 bases[entry_id])
                 verdict = self._apply_verdict(entry_id, report, phase,
                                               expected_claim_at=claim.at)
+                if verdict == "confirmed" and hunks:
+                    self._record_tamper_scan(entry_id, hunks, phase)
                 if slot is not None:
                     pool.retain(slot.name, None)
                     pool.release(slot.name)
@@ -1139,6 +1154,20 @@ class Coordinator:
             phase.did += 1
         phase.seconds = time.time() - start
         return phase
+
+    def _record_tamper_scan(self, entry_id, hunks, phase):
+        """Typed tamper-shaped hunks on a confirmed closure (#39): on the
+        iteration record for QC, and on the entry for a person. Data only --
+        the verdict already stands."""
+        from .. import tamper as tamper_mod
+        phase.detail.append(f"{entry_id}: tamper-shaped hunks (for QC and a "
+                            f"person to read; they decide nothing):")
+        phase.detail.extend(f"{entry_id}:   {hunk}" for hunk in hunks)
+        with self.claims._lock():
+            entry = self.store.load(entry_id)
+            entry.history.append(Event(_iso(), "tamper-scan", self.session,
+                                       tamper_mod.event_detail(hunks)))
+            self.store.save(entry)
 
     def _apply_verdict(self, entry_id: str, report: dict, phase: Phase,
                        expected_claim_at=None) -> str:

@@ -385,15 +385,18 @@ def frontier(store, records, goal):
             left_out.append(record)
         else:
             findings.append(record)
-    if goal.noise.method == "none":
+    if goal.noise.method == "none" and goal.suspect.k is None:
         best = best_run(findings, goal)
     else:
         # #37: groups by config, and a gain inside the floor does not move
-        # the frontier. The held rows are named like any other exclusion.
+        # the frontier. #39: a gain far past it, or far past every step so
+        # far, waits for a second session. Both are named like any other
+        # exclusion.
         from . import noise
-        incumbent, held = noise.admit(goal, scored_rows(findings, goal))
+        incumbent, held, suspects = noise.admit(
+            goal, scored_rows(findings, goal), promoted(store))
         best = incumbent.representative(goal) if incumbent else None
-        for group, reason in held:
+        for group, reason in held + suspects:
             for _, record in group.scored:
                 why[id(record)] = reason
                 left_out.append(record)
@@ -722,3 +725,16 @@ def noise_problems(config, store, records, entry_id) -> list[str]:
     rows = [r for r in epochs.current_rows(config, records)
             if exclusion_reason(store, r, goal) is None]
     return noise.confirmation_problems(goal, scored_rows(rows, goal), entry_id)
+
+
+def promotions_dir(store) -> pathlib.Path:
+    """Where `ar promote` records a person's release of a suspect row (#39):
+    beside the entry store, so every frontier reader finds the same set."""
+    return pathlib.Path(store.dir).parent / "promotions"
+
+
+def promoted(store) -> frozenset:
+    directory = promotions_dir(store)
+    if not directory.is_dir():
+        return frozenset()
+    return frozenset(path.stem for path in directory.glob("*.json"))

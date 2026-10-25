@@ -14,7 +14,7 @@ import os
 import shlex
 from pathlib import Path
 
-from . import attempts, budget, evaluator, runs
+from . import attempts, budget, evaluator, runs, tamper
 from .claims import Lock
 from .driver.loop import Coordinator, Phase
 from .entries import Event, Store
@@ -70,12 +70,15 @@ def assign(config, entry_id, session, seconds, max_runs):
         try:
             slot = pool.acquire(name)
             pool.retain(name, "external assignment evidence; recover only after reviewing receipt")
+            # Where the worker starts: a confirmed completion's diff since
+            # here is scanned for tamper-shaped hunks (#39).
+            base = (tamper.base_of(slot.path) if slot.kind == "worktree" else None)
             relative = config.paths.runs.relative_to(config.paths.root)
             before = runs.snapshot(slot.path / relative)
             entry = Store(config.paths.entries).load(entry_id)
             with attempts.claims(config, session)._lock():
                 attempts.live_claim(config, row)
-                row.update(status="assigned",
+                row.update(status="assigned", base=base,
                            snapshot={str(k): [v[0], v[1].hex()] for k, v in before.items()},
                            brief=dataclasses.asdict(entry),
                            scopes={"root": str(slot.path), "workspace": str(slot.path)},
@@ -301,9 +304,22 @@ def complete(config, identity, session, report):
             coordinator.store = store
             coordinator.claims = attempts.claims(config, session)
             phase = Phase("external-complete")
+            hunks = (tamper.scan_tree(config, workspace, row["base"])
+                     if report.get("verdict") == "confirmed" and row.get("base")
+                     else None)
             verdict = coordinator._apply_verdict_locked(row["entry"], report, phase,
                                                         receipt_id=identity,
                                                         release_on_refuse=False)
+            if verdict == "confirmed" and hunks:
+                # The claims lock is already held here, so the event is written
+                # directly rather than through the coordinator's helper.
+                phase.detail.append(f"{row['entry']}: tamper-shaped hunks (for QC "
+                                    "and a person to read; they decide nothing):")
+                phase.detail.extend(f"{row['entry']}:   {hunk}" for hunk in hunks)
+                closed = store.load(row["entry"])
+                closed.history.append(Event(attempts.now(), "tamper-scan", session,
+                                            tamper.event_detail(hunks)))
+                store.save(closed)
             if verdict == "refused":
                 # H9: the close gate refused the report; no verdict was
                 # applied. The claim is kept and the row returns to assigned

@@ -29,7 +29,7 @@ from typing import Any
 
 from . import expr
 from .errors import GoalError
-from .noise import Noise
+from .noise import Noise, Suspect
 
 MINIMISE, MAXIMISE = "minimise", "maximise"
 DIRECTIONS = (MINIMISE, MAXIMISE)
@@ -162,6 +162,8 @@ class Goal:
     #: How a better number is told from a noisy one (#37); see `noise.py`.
     #: The default method `none` keeps the single-best-row frontier.
     noise: Noise = field(default_factory=Noise)
+    #: When a gain is too large to take on one execution's word (#39).
+    suspect: Suspect = field(default_factory=Suspect)
 
     def __post_init__(self):
         if self.direction not in DIRECTIONS:
@@ -359,4 +361,5 @@ class Goal:
             required_gates=tuple(gates),
             allow_degenerate_target=degenerate,
             confirm_independently=confirm,
-            noise=Noise.from_dict(data.get("noise"), gid))
+            noise=Noise.from_dict(data.get("noise"), gid),
+            suspect=Suspect.from_dict(data.get("suspect"), gid))
