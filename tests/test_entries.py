@@ -448,3 +448,13 @@ def test_a_valid_evidence_class_passes_through_unchanged():
     """The default must not downgrade a closure that DID record its class."""
     for good in ("census", "ledger", "official"):
         assert result(evidence_class=good).evidence_class == good
+
+
+def test_a_terminal_table_of_only_superseded_keeps_the_verdicts():
+    """mldsa87: declaring `superseded` alone replaced the terminal set, so the
+    track could no longer confirm or refute. A full table still replaces."""
+    tuned = default_machine({"superseded": {"requires_evidence": False}})
+    assert {"confirmed", "refuted", "superseded"} <= tuned.terminal_names
+    assert tuned.status("superseded").requires_evidence is False
+    harness = default_machine({"fixed": {"requires_evidence": True}})
+    assert "confirmed" not in harness.terminal_names

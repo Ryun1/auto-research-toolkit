@@ -194,10 +194,16 @@ def default_machine(terminal: dict[str, dict] | None = None) -> StateMachine:
     point a domain can override. Research used confirmed/refuted; harness debt
     used fixed/wontfix/refuted. The differences are entirely in the terminal
     set, which is why it is the only parameter."""
-    terminal = terminal or {
+    defaults = {
         "confirmed": {"requires_evidence": True},
         "refuted": {"requires_evidence": True, "requires_closure_kind": True},
     }
+    # A table naming only retirement states (`superseded`) is tuning one, not
+    # replacing the verdicts: read as a replacement it left the track with no
+    # way to confirm or refute anything (mldsa87, 2026-10-25). Any other
+    # declared table is the whole terminal set, as a harness track's is.
+    if not terminal or set(terminal) <= set(RETIREMENT):
+        terminal = {**defaults, **(terminal or {})}
     statuses = {
         "queued": Status("queued", description="filed, unclaimed"),
         "in-progress": Status("in-progress", description="claimed; work started"),
