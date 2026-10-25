@@ -929,6 +929,21 @@ def cmd_close(args):
     entry.apply(track.machine, args.status, who=args.session, why=args.why or "",
                 result=result,
                 memo_exists=lambda m: (memo_root / m).exists())
+    # An entry settled outside the assignment that was cancelled on it said
+    # nothing of that assignment: the row read `cancelled`, the entry
+    # `confirmed`, and nothing tied the two (#17). Name them on the closure.
+    try:
+        from . import attempts as attempts_mod
+        cancelled = [r["id"] for r in attempts_mod.records(config)
+                     if r.get("kind") == "external" and r.get("entry") == entry.id
+                     and r.get("status") == "cancelled"]
+    except AutoresearchError:
+        cancelled = []
+    if cancelled:
+        entry.history.append(Event(
+            _iso(), "external-link", args.session,
+            json.dumps({"cancelled_assignments": cancelled,
+                        "settled_as": args.status})))
     if isinstance(replacement, str):
         entry.history.append(Event(
             _iso(), "superseded", args.session,

@@ -378,3 +378,23 @@ def test_cancel_folds_back_and_any_session_can_list_and_show(
     assert record["stop_detail"].startswith("every assignment settled")
     assert cli.main([*root, "external", "list"]) == 0
     assert identity not in capsys.readouterr().out
+
+
+def test_settling_an_entry_after_its_assignment_was_cancelled_links_them(
+        coordinator, store):
+    """#17: the assignment read `cancelled`, the entry `confirmed`, and
+    nothing in the record tied the two."""
+    from autoresearch import cli
+    from conftest import memo
+    it = coordinator.run_iteration(1)
+    identity = it.attempt_ids[0]
+    external.cancel(coordinator.config, identity, "coordinator", "abandoned",
+                    confirm_inactive=True)
+    root = ["--domain", str(coordinator.config.paths.root), "--session", "hand"]
+    assert cli.main([*root, "claim", "Q1", "--why", "finishing by hand"]) == 0
+    assert cli.main([*root, "close", "Q1", "refuted", "--closure", "cell",
+                     "--reopen-condition", "a wider sweep",
+                     "--summary", "no gain", "--memo",
+                     memo(coordinator.config)]) == 0
+    link = next(e for e in store.load("Q1").history if e.kind == "external-link")
+    assert identity in link.detail
