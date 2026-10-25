@@ -426,3 +426,25 @@ def test_the_replace_happens_inside_the_write_lock(sandbox, store, monkeypatch):
     # and the lock is not left behind: a committed or stale lock would stall
     # the next writer on a machine that is not this one
     assert not (sandbox.paths.entries.parent / ".locks" / "Q1.lock").exists()
+
+
+def test_a_missing_or_blank_evidence_class_reads_as_unlabelled():
+    """A null from a merge must not take the store down (qsb 2026-09-27), and
+    must not be stamped with a class it never earned (QSB H87)."""
+    assert result(evidence_class=None).evidence_class is None
+    assert result(evidence_class="   ").evidence_class is None
+
+
+def test_a_present_but_wrong_evidence_class_is_still_refused():
+    """The tolerance is for a MISSING key, not for a wrong one. If this stopped
+    raising, a closure that claimed `official` provenance with none would load
+    silently and the gate would be decorative."""
+    for bad in ("bogus", "Census", "ledger,official", " census "):
+        with pytest.raises(SchemaError, match="evidence_class"):
+            result(evidence_class=bad)
+
+
+def test_a_valid_evidence_class_passes_through_unchanged():
+    """The default must not downgrade a closure that DID record its class."""
+    for good in ("census", "ledger", "official"):
+        assert result(evidence_class=good).evidence_class == good

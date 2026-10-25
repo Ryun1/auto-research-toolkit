@@ -189,6 +189,10 @@ class Result:
         if self.mechanisms is not None and (not isinstance(self.mechanisms, list)
                 or any(not isinstance(m, str) or not m.strip() for m in self.mechanisms)):
             raise SchemaError("result.mechanisms must be a list of non-empty strings")
+        # Absence reads as unlabelled (QSB H87); a blank string is absence too.
+        # A value that is present but wrong still raises.
+        if isinstance(self.evidence_class, str) and not self.evidence_class.strip():
+            self.evidence_class = None
         if (self.evidence_class is not None
                 and self.evidence_class not in EVIDENCE_CLASSES):
             raise SchemaError(
