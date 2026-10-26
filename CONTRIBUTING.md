@@ -77,7 +77,9 @@ is an opinion, and the gate lives upstream at export for the same reason.
 
 ## Testing
 
-- Full suite: `pytest` (about 40 seconds).
+- Full suite: `uv run --extra dev pytest -n auto` (about 40 seconds on 8
+  cores; serial `pytest` takes nearly three minutes). A single file runs
+  faster without `-n`.
 - Every behaviour change needs a test that fails without the change.
 - New record fields, validators, or gate logic need tests for the invalid
   case, not just the valid one — invalid-but-tolerated data is how the
