@@ -966,7 +966,13 @@ def reprice(store, entry, *, machine, changes, session, why, at=None):
     H140: never reprice a closed entry -- a terminal verdict is the record's
     last word on those numbers. A re-price without a `why` is a guess moving
     the ranking, and a re-price that moves nothing is refused rather than
-    recorded as if it happened. Returns the names of the fields that moved.
+    recorded as if it happened; a field set to the value it already holds
+    has not moved. Returns the names of the fields that moved.
+
+    The event's `snapshot` keeps each moved field's old and new value, as
+    `{field: {"was": old, "now": new}}`: a record of reasons alone cannot say
+    what a prior was before a verdict corrected it, which is the question
+    calibration asks (scripts/calibrate-priors.py had to replay git for it).
     """
     if machine.status(entry.status).terminal:
         raise AutoresearchError(
@@ -975,7 +981,7 @@ def reprice(store, entry, *, machine, changes, session, why, at=None):
     if not why or not why.strip():
         raise AutoresearchError(
             "a re-price without a reason is a guess moving the ranking; pass --why")
-    moved = []
+    moved = {}
     for name in REPRICE_FIELDS:
         value = changes.get(name)
         if value is None:
@@ -994,16 +1000,21 @@ def reprice(store, entry, *, machine, changes, session, why, at=None):
         if name == "confidence" and not 0.0 <= value <= 1.0:
             raise AutoresearchError(
                 f"confidence must be a probability in [0, 1], got {value:g}")
-        setattr(entry, name, value)
-        moved.append(name)
+        if value == getattr(entry, name):
+            continue
+        moved[name] = {"was": getattr(entry, name), "now": value}
     if not moved:
         raise AutoresearchError(
             "nothing to reprice: pass at least one of "
-            + ", ".join(f"--{f}" for f in REPRICE_FIELDS))
+            + ", ".join(f"--{f}" for f in REPRICE_FIELDS)
+            + " with a value the entry does not already hold")
+    for name, change in moved.items():
+        setattr(entry, name, change["now"])
     # `updated` is what staleness measures ("what has the board learned since
     # this entry was last priced", rank.py) -- a re-price IS a pricing, so it
     # must move the timestamp or the correction never lifts the penalty.
     entry.updated = at or _now()
-    entry.history.append(Event(entry.updated, "repriced", session, why))
+    entry.history.append(Event(entry.updated, "repriced", session, why,
+                               snapshot=moved))
     store.save(entry)
-    return moved
+    return list(moved)

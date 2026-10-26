@@ -28,6 +28,10 @@ def test_reprice_moves_the_prices_and_records_the_event(sandbox, store):
     event = saved.history[-1]
     assert event.kind == "repriced" and event.who == "curator-native-1"
     assert "4438427a" in event.detail
+    # The numbers it replaced ride along, so a later reader can see the
+    # prior as it stood before the correction; cost did not move.
+    assert event.snapshot == {"confidence": {"was": 0.5, "now": 0.85},
+                              "impact": {"was": 0.0, "now": 0.3}}
     # `updated` is what staleness measures; a re-price is a pricing.
     assert saved.updated == event.at and saved.updated >= saved.created
 
@@ -54,6 +58,31 @@ def test_a_reprice_that_moves_nothing_is_refused(sandbox, store):
         reprice(store, entry, machine=sandbox.track_for("Q1").machine,
                 changes={}, session="s", why="n/a")
     assert store.load("Q1").history == before, "no event for a no-op"
+
+
+def test_a_value_the_entry_already_holds_has_not_moved(sandbox, store):
+    """Restating a price is not a re-price: it would move `updated` (and so
+    staleness) and record a change that never happened."""
+    entry = make_entry(store, "Q1", confidence=0.5, cost=2.0)
+    with pytest.raises(AutoresearchError, match="does not already hold"):
+        reprice(store, entry, machine=sandbox.track_for("Q1").machine,
+                changes={"confidence": 0.5}, session="s", why="same")
+    assert store.load("Q1").history == []
+    moved = reprice(store, entry, machine=sandbox.track_for("Q1").machine,
+                    changes={"confidence": 0.5, "cost": 3.0}, session="s",
+                    why="cost only")
+    assert moved == ["cost"]
+    assert store.load("Q1").history[-1].snapshot == {
+        "cost": {"was": 2.0, "now": 3.0}}
+
+
+def test_the_old_and_new_prices_survive_a_reload(sandbox, store):
+    make_entry(store, "Q1", confidence=0.5)
+    assert cli.main(["--domain", str(sandbox.paths.root), "--session", "hand",
+                     "entry", "reprice", "Q1", "--confidence", "0.2",
+                     "--why", "sibling refuted the shared mechanism"]) == 0
+    assert store.load("Q1").history[-1].snapshot == {
+        "confidence": {"was": 0.5, "now": 0.2}}
 
 
 def test_confidence_is_a_probability_not_a_percentage(sandbox, store):

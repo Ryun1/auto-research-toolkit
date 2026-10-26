@@ -23,6 +23,12 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   `--reopen-reason weak|overclaim|context|clerical`, and the refusal lists
   what each means. Reopening a `blocked` entry is unchanged. The reason is
   stored in the reopen event's `snapshot`, so no record floor moves.
+- **Behavioural: a re-price keeps what it replaced, and a restated price
+  is not a move.** The `repriced` event's `snapshot` now carries
+  `{field: {was: old, now: new}}` for each price that moved. A price passed
+  at the value the entry already holds is skipped, and a re-price where every
+  price is unchanged is refused ("nothing to reprice") instead of recorded and
+  moving `updated`; the loop's curator phase already skips refused re-prices.
 - **Optional: two read-only scripts.** `scripts/calibrate-priors.py` scores
   whether the domain's `confidence`/`impact`/`cost` predicted its verdicts,
   replayed from git; `scripts/audit-fast-closures.py` lists verdicts closed

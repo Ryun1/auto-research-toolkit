@@ -400,7 +400,9 @@ bounce. `ar close` now warns at the moment it happens, naming the track's
 terminal set; `ar entry reprice` corrects filing-time confidence/impact/cost
 on an open entry with the same writer (and the same H140 guard) the loop's
 curator phase uses, because a hand-driven curator pass once had no path
-except editing the YAML.
+except editing the YAML. The `repriced` event keeps each moved price's old
+and new value as `snapshot: {confidence: {was: 0.5, now: 0.85}}`, and a price
+restated at the value it already holds is not a move.
 
 One terminal status is not per-track: `superseded` retires an entry because a
 sibling covers it, which is neither a claim about a hypothesis nor a statement
@@ -1031,9 +1033,10 @@ python scripts/calibrate-priors.py /path/to/domain [more domains ...] \
   [--track research] [--jsonl rows.jsonl]
 ```
 
-**It reads git history, not the entry file.** A re-price records its reason
-but not the numbers it replaced, and an amend can rewrite a prior after the
-verdict, so the stored values may already know the outcome. The script replays
+**It reads git history, not the entry file.** Older re-prices recorded their
+reason but not the numbers they replaced (a re-price now keeps both, in the
+event's `snapshot`), and an amend can rewrite a prior after the verdict, so
+the stored values may already know the outcome. The script replays
 every committed version of each entry and scores the prior as filed, as it
 stood in the last commit before the verdict, and as stored now; a gap between
 the columns is leakage. An entry filed and closed in the same commit has no

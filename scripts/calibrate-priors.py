@@ -7,9 +7,10 @@ how well it separates entries that closed `confirmed` from entries that closed
 `refuted`, measured as AUC (the chance a confirmed entry's value beats a
 refuted one's; 0.5 is no signal, below 0.5 points the wrong way).
 
-The entry file alone cannot answer that. A re-price records only its reason,
-and an amend can rewrite a prior after the verdict, so the stored numbers may
-know the outcome. Every domain commits its entry store, so this replays git
+The entry file alone cannot answer that. Older re-prices recorded only their
+reason (a re-price now keeps the old value in its event `snapshot`, but the
+records that matter predate it), and an amend can rewrite a prior after the
+verdict, so the stored numbers may know the outcome. Every domain commits its entry store, so this replays git
 history and scores each prior at three points:
 
     filed        the first committed version
