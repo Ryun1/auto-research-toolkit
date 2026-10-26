@@ -58,6 +58,11 @@ Runs a server until interrupted. Binds to localhost by default.
 - **API layer:** thin functions that call existing loaders (entries, runs, claims,
   iterations, skills, epochs, noise, rank, budget, tree) and return JSON. Where a CLI
   `--json` document already exists, reuse its builder rather than re-deriving.
+- **Prerequisite refactor:** the board's facts (epoch segmentation, frontier, excluded
+  rows, overruns, holdout) are computed inline in `cli.cmd_board` and printed. Extract
+  them into a function that returns data, and have both `ar board` and the UI call it.
+  This is the only way the "UI never disagrees with the CLI" anti-goal holds. It also
+  gives `ar board --json` almost for free.
 - **Watcher:** mtime polling of `state/`, `data/runs/`, `inbox/`, `docs/skills/`,
   `guides/`, plus the branch and transcript sources. Polling (not fsevents) keeps it
   dependency-free; a 1–2 s interval is fine.
@@ -92,11 +97,20 @@ Runs a server until interrupted. Binds to localhost by default.
 - Skills (`docs/skills/`) and guides (the domain's `knowledge` list).
 - Inbox memos and artifacts referenced by entries.
 
-**Edges**
-- `parent` (branch lineage), `supersedes`, `related` — as in `ar entry graph`.
-- Entry → skill where a skill was distilled from that entry.
-- Entry → memo/artifact where the entry records the pointer.
-- Entry → run rows is shown in the side panel, not drawn (there are thousands of rows).
+**Edges** (only fields the record stores)
+- `parent` and `derived_from` (lineage), `supersedes`, `related` — as in `ar entry graph`.
+- **`sources`** — the entry's typed citation list. Items that are entry ids become
+  entry → entry "cites" edges. Items that are paths (`inbox/…`, `guides/…`, `docs/…`)
+  become edges to memo/guide nodes. Other paths (`bin/`, `src/`, `data/`) are listed in
+  the side panel, not drawn.
+- `result.memo` — entry → its evidence memo.
+- Skill → entry from the skill's `cites` list.
+- Entry → run rows (`RunRecord.entry`) is shown in the side panel, not drawn.
+
+On ECDSA Fail, `sources` is the graph. No entry there sets `parent`, `supersedes` or
+`related`, but 406 of 470 entries carry `sources` (1,468 items, mostly entry ids and
+`inbox/` paths). The existing mermaid view, which ignores `sources`, would draw ECDSA
+Fail as 470 unconnected nodes.
 
 **Encoding**
 - Fill = status (same palette meaning as the existing mermaid view). Shape = node kind.
@@ -132,10 +146,20 @@ UI only highlights; nothing is reopened.
 
 ### View 2: Agents
 
-**Agent identity.** The claim's `session` value is the agent (e.g. `loop-lynx-m5z3`,
-`grind-pickup-0905`). Joined to its `session/<name>` branch, its worktree, its run files
-(e.g. `data/runs/aloof-egret-ek7x-slot0.jsonl`) and any transcripts. Coordinator slots
-and `ar external` assignees are agents too, by the same key.
+**Agent identity.** An agent is a name the core records as an actor:
+- an entry's live `claim` holder,
+- the `who` on entry history events,
+- a run row's `session`.
+
+ECDSA Fail has 166 distinct `who` values, for example `lambda-frontier-0825` and
+`loop-lynx-m5z3`. Tool actors are not agents; `ar migrate` alone wrote 463 events. A
+small exclusion list handles them.
+
+Each agent is joined to its `session/<name>` branch, its worktree and any transcripts.
+Coordinator slots and `ar external` assignees are agents too, under the same key.
+
+ECDSA Fail's `state/claims/*.json` files are a domain-local, pre-adoption format. They
+carry `why` and `budget`, but the core does not read them, so neither does the UI.
 
 **One lane per agent** with:
 - What it is doing now (live claim, entry, elapsed time, the claim's `why`).
@@ -166,6 +190,27 @@ The `ar board` content as panels:
   moves).
 - Hover shows the config knobs; click opens the entry.
 
+## What the reference corpus can and cannot show
+
+Measured on `~/amanita/edcsa-fail-research`, 2026-10-26, against core 0.12.0:
+
+- **Speed is fine for live refresh:** `ar board` takes 0.55 s and `ar entry list --json`
+  0.28 s.
+- **The graph has plenty to show:** 470 entries (298 Q, 172 H), 452 with an evidence
+  memo, and 406 with `sources`.
+- **The board and frontier have nothing to show.** All 13,375 run rows are skipped as
+  foreign (pre-adoption schema), so the core sees 0 measurements and "no valid
+  measurement yet". The UI will faithfully show that. The run rows will appear only if the
+  ECDSA ledger is converted to `ar-run-1`. `ar migrate` does not convert runs, so that is
+  separate work, outside this design.
+- **There are no skills (0 distilled, 452 undistilled) and no iterations.** The skill
+  nodes and the iteration panel cannot be checked here either.
+- **The live claims are stale:** three claims from 2026-09-02, flagged OVERRUN. Use them
+  to check the overrun styling.
+
+So step 1 and the graph steps are judged on ECDSA Fail. The board and frontier are judged
+on a populated fixture until a real ledger exists.
+
 ## Testing
 
 - API functions are unit-tested against `domains/toy` fixtures. Add a populated fixture
@@ -177,6 +222,7 @@ The `ar board` content as panels:
 
 ## Build order (each step usable on its own)
 
+0. Extract the board snapshot from `cmd_board` (no behaviour change).
 1. Server, API and **knowledge graph** on committed state, plus the side panel. Live
    refresh.
 2. Branch/worktree overlay (uncommitted) and poison propagation.
@@ -190,9 +236,10 @@ The user wants to build and iterate: ship step 1, look at it on ECDSA Fail, adju
 - Endpoint names and JSON shapes.
 - Exact libraries/versions within "vendored, no build".
 - Colours (keep the mermaid view's status meanings).
-- How skill → entry and entry → memo links are discovered, from whatever fields the record
-  already has (if a link isn't recorded, it isn't drawn — no prose parsing, per the
-  harness's own rule).
+- Telling an entry id from a path in `sources`: match against the store's ids; anything
+  else is a path. Do not parse ids out of prose. 440 ECDSA entries mention other ids in
+  their prose, but drawing those mentions would be the regex-reaches-a-decision failure
+  the harness forbids.
 - Poll interval and debounce.
 
 ## Prior art
