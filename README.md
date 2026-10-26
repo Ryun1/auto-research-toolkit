@@ -955,7 +955,9 @@ score decides; an unfilled share returns to the other partition; a single-slot
 iteration (`k=1`) is never spent on a partition. Risk appetite is a domain
 decision, which is why it is a domain's to set: a domain chasing a frontier
 that moved 22.5% in 18.8 days wants a different one from a domain polishing a
-converged number. Both ends are legitimate stances — `0` refines the
+converged number. It is an appetite, not a formula output: raise it while the
+frontier is moving; lower it once a direction is winning and every slot is
+better spent deepening it. Both ends are legitimate stances — `0` refines the
 incumbent only, `1` opens new territory only. `ar rank --risk R` overrides it
 for one look.
 
@@ -975,7 +977,8 @@ the same burn in any search shape.
 
 **A domain may own the score itself.** `[commands] score = "bin/score"` hands
 the *pricing* of claimable branches to a domain command — the same seam shape
-as `bin/measure`. It receives `{"risk": <float>, "entries": [<entry dict>,
+as `bin/measure`: split into argv the same way, run with the domain root as its
+working directory. It receives `{"risk": <float>, "entries": [<entry dict>,
 ...]}` on stdin (claimable candidates only — hard filters have already run)
 and must print `{"scores": [{"id", "score", "reason"}]}`, one row per entry.
 A nonzero exit, a missing id, or a non-finite score refuses the rank phase
