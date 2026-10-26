@@ -32,7 +32,7 @@ fi
 if [ -n "$RUFF" ]; then
   "$RUFF" check . || fail=1
 else
-  echo "pre-commit: ruff not found; skipping (install with: pip install -e '.[dev]')" >&2
+  echo "pre-commit: ruff not found; skipping (install with: uv sync --extra dev)" >&2
 fi
 
 exit $fail
