@@ -69,5 +69,5 @@ distilled: {at: <re-stamp when the cited entries move>, core: <core version>}
 
 One bullet per defect: what it was, whether it is fixed (and in which core
 version), and the standing rule it taught. File new findings on the harness
-track with evidence (`ar entry new --track harness --repro ... --observed
-...`) — the map points at the records, it does not replace them.
+track with evidence (`ar entry new --track harness --core auto --repro ...
+--observed ...`) — the map points at the records, it does not replace them.

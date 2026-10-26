@@ -465,8 +465,8 @@ distilled: {at: <re-stamp when the cited entries move>, core: <core version>}
 
 One bullet per defect: what it was, whether it is fixed (and in which core
 version), and the standing rule it taught. File new findings on the harness
-track with evidence (`ar entry new --track harness --repro ... --observed
-...`) — the map points at the records, it does not replace them.
+track with evidence (`ar entry new --track harness --core auto --repro ...
+--observed ...`) — the map points at the records, it does not replace them.
 """
 
 
@@ -502,15 +502,17 @@ a hand-maintained map would.
   claim lock exists to prevent.
 - **Run experiments through `bin/ar measure`**, never around it: it writes the
   validated run rows that ranking and every meter read.
-- **Close with evidence**: `bin/ar close ID <status> --memo path/to/memo.md`.
-  The memo must exist, and any gates the track declares are enforced. A
+- **Close with evidence**: `bin/ar close ID <status> --memo path/to/memo.md
+  --summary "..."`. A terminal close needs both: the memo must exist, the
+  summary is the result the record keeps, and any gates the track declares are enforced. A
   hand-applied closure gets no discount for being applied by a person.
 - **A refutation says how far it reaches**: `refuted` also needs `--closure`.
   `mechanism` holds outside the range measured, and drops every open entry
   sharing a mechanism tag from `ar rank`; `slope` and `cell` hold only within
   what was measured, so they also need `--reopen-condition "..."` naming the
   band and what leaving it would take. A wrong label is corrected with
-  `bin/ar close ID --relabel KIND --why "..."`, not by reopening.
+  `bin/ar close ID --relabel KIND --why "..."` (plus `--reopen-condition`
+  when KIND is `slope` or `cell` and none is recorded), not by reopening.
 - Stuck past your ceiling: `bin/ar release` with a reason. A claim abandoned
   by a dead session is freed with `bin/ar reap ID` once past its TTL.
 
@@ -527,7 +529,9 @@ yourself instead, and price them as you file:
         --impact 0.05 --confidence 0.4 --cost 2 --mechanism <tag>
 
 `ar rank` prices nothing: it orders the queue on the numbers each entry
-carries (by default confidence x impact / cost). `--impact`, the fractional
+carries (by default confidence x impact / cost; a domain that declares
+`[commands] score` prices with its own command instead, which may read only
+some of these). `--impact`, the fractional
 move on the objective if it confirms, defaults to 0, so an entry filed without
 it scores about zero and sinks to the bottom; `--confidence` defaults to 0.5
 and `--cost` (runs to decide it) to 1. `--mechanism` (repeatable) is what
@@ -623,7 +627,7 @@ evidence, never into prose:
 
 `bin/ar harness export` packages the open defects for upstream; publishing is
 a person's act. Closing uses this track's terminal verdicts (`fixed`/`wontfix`,
-not `confirmed`): `bin/ar close H1 fixed --memo inbox/...`.
+not `confirmed`): `bin/ar close H1 fixed --memo inbox/... --summary "..."`.
 
 ## Do not start the coordinator
 
@@ -634,7 +638,7 @@ domain is driven by hand; leave `ar loop` alone.
 
 
 GITIGNORE = '''# Per-machine state. Stopping work on one machine and resuming on another is a
-# supported workflow; these two are exactly what must NOT travel with it.
+# supported workflow; everything below is exactly what must NOT travel with it.
 #
 # state/claims/ holds the claim lock. It names a holder and a pid that mean
 # nothing on the other machine, so a committed lock buys a stall until it goes
@@ -644,7 +648,8 @@ GITIGNORE = '''# Per-machine state. Stopping work on one machine and resuming on
 state/claims/
 
 # state/.locks/ holds the per-entry write locks `Store.save` takes so its
-# compare and its replace cannot interleave. Same argument as state/claims/: a
+# compare and its replace cannot interleave, and the filing lock that
+# serialises new ids. Same argument as state/claims/: a
 # lock names a pid and a holder that mean nothing on another machine, and a
 # committed one buys a stall until it goes stale.
 state/.locks/
@@ -654,6 +659,11 @@ state/.locks/
 # retained evidence is recovered through `autoresearch workspace inspect NAME`
 # and `autoresearch workspace recover`, never by bulk branch deletion.
 .ar/
+
+# The domain-local toolkit venvs bin/ar probes: an interpreter and its
+# site-packages built for one machine.
+.venv/
+.venv312/
 '''
 
 

@@ -11,7 +11,7 @@ claimable candidates by expected value on the score:
 * a branch inherits its parent's verdict: a confirmed parent is worth more
   (its mechanism was validated), a refuted parent worth almost nothing.
 
-The parent verdict comes from the record (`state/entries/<id>.json`,
+The parent verdict comes from the record (`state/entries/<id>.yaml`,
 `result.verdict`). Read-only: it never writes. On any problem it exits nonzero
 with a message on stderr -- the loop records the failure and skips dispatch.
 """
@@ -25,11 +25,31 @@ REFUTED_PENALTY = 0.25
 
 def parent_verdict(record_dir, parent_id):
     """The parent's verdict from the record, or None if unknown/inconclusive."""
-    path = os.path.join(record_dir, parent_id + ".json")
+    path = os.path.join(record_dir, parent_id + ".yaml")
     try:
         with open(path) as f:
-            entry = json.load(f)
-    except (OSError, json.JSONDecodeError):
+            text = f.read()
+    except OSError:
+        return None
+    try:
+        import yaml
+    except ImportError:
+        # bin/score runs under whatever `python3` is on PATH, which need not
+        # carry the toolkit's PyYAML. Core writes `result:` as a top-level
+        # block with `verdict:` one level in; a toy may read just that.
+        in_result = False
+        for line in text.splitlines():
+            if not line.startswith(" "):
+                in_result = line.rstrip() == "result:"
+            elif in_result and line.strip().startswith("verdict:"):
+                value = line.split(":", 1)[1].strip().strip("'\"")
+                return value or None
+        return None
+    try:
+        entry = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(entry, dict):
         return None
     verdict = entry.get("result", {}).get("verdict")
     return verdict if isinstance(verdict, str) else None

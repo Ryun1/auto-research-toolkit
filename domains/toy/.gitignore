@@ -1,5 +1,5 @@
 # Per-machine state. Stopping work on one machine and resuming on another is a
-# supported workflow; these two are exactly what must NOT travel with it.
+# supported workflow; everything below is exactly what must NOT travel with it.
 #
 # state/claims/ holds the claim lock. It names a holder and a pid that mean
 # nothing on the other machine, so a committed lock buys a stall until it goes
@@ -9,7 +9,8 @@
 state/claims/
 
 # state/.locks/ holds the per-entry write locks `Store.save` takes so its
-# compare and its replace cannot interleave. Same argument as state/claims/: a
+# compare and its replace cannot interleave, and the filing lock that
+# serialises new ids. Same argument as state/claims/: a
 # lock names a pid and a holder that mean nothing on another machine, and a
 # committed one buys a stall until it goes stale.
 state/.locks/
@@ -19,3 +20,8 @@ state/.locks/
 # retained evidence is recovered through `autoresearch workspace inspect NAME`
 # and `autoresearch workspace recover`, never by bulk branch deletion.
 .ar/
+
+# The domain-local toolkit venvs bin/ar probes: an interpreter and its
+# site-packages built for one machine.
+.venv/
+.venv312/
