@@ -6,8 +6,11 @@ moves between machines.
 
 Everything here is drawn from `src/autoresearch/driver/loop.py` (the
 coordinator), `driver/brain.py` (the model seam), `states.py` (the lifecycle),
-`rank.py` (scoring, the risk dial and the domain score seam) and `workspaces.py`
-(the pool).
+`rank.py` (the formula, hard filters and the risk dial), `scoring.py` (the
+domain score seam), `tree.py` (the filing gate), `preflight.py` (the dispatch
+gate), `claims.py` and `attempts.py` (claims and run reservations),
+`external.py` (native handoff), `budget.py` (meters and the stop decision),
+`skills.py` (distillation) and `workspaces.py` (the pool).
 
 ## 1. The three layers
 
@@ -30,7 +33,7 @@ flowchart TB
         direction LR
         coord["Coordinator<br/>driver/loop.py"]
         store["Store<br/>one record per entry"]
-        rank["rank.py<br/>formula over recorded numbers,<br/>risk dial, optional domain score seam"]
+        rank["rank.py · scoring.py<br/>formula over recorded numbers,<br/>risk dial, optional domain score seam"]
         budget["budget.py<br/>every ceiling is a meter,<br/>campaign spend read back from disk"]
         render["render.py<br/>every view is generated"]
         skills["skills.py<br/>distilled prose, cited to entries<br/>and refused when they move"]
@@ -39,6 +42,7 @@ flowchart TB
 
     subgraph brainlayer["Brain (the one seam)"]
         direction LR
+        routing["RoutingBrain<br/>[brain] routes per role,<br/>else default"]
         typesafe["TypeSafeBrain<br/>Jev: judge, qc"]
         process["ProcessBrain<br/>any command"]
         scripted["ScriptedBrain<br/>offline, no model"]
@@ -59,13 +63,13 @@ Core never calls a model directly and the brain never touches the record: a
 role returns JSON, and the coordinator decides what — if anything — that JSON
 is allowed to change.
 
-The campaign meters are the ones to watch on the left. `domain.money` and
+The campaign meters are the ones to watch in `budget.py`. `domain.money` and
 `domain.gpu_hours` are rebuilt at startup from what the iteration records on
 disk already say was spent, not from zero: a campaign ceiling reconstructed
 fresh in each process is not a ceiling but a per-invocation allowance, renewable
 with the up-arrow.
 
-## 2. One iteration, eight phases
+## 2. One iteration, seven phases
 
 Every phase is metered and records what it *read* and what it *did*, so a phase
 that did nothing is distinguishable from a phase that did not run.
@@ -74,38 +78,43 @@ that did nothing is distinguishable from a phase that did not run.
 flowchart LR
     start(["run_iteration(n)"]) --> orient
     orient["orient<br/>read record, resolve target,<br/>reap dead claims,<br/>report resumed history"]
-    generate["generate<br/>N generators, in parallel"]
-    rankp["rank<br/>score, risk dial splits root/branch,<br/>then judge may reorder"]
-    dispatch["dispatch<br/>claim → worker → verdict"]
+    generate["generate<br/>N generators, in parallel<br/>with each other"]
+    rankp["rank<br/>score + hard filters, domain seam,<br/>judge vetoes, then the risk dial<br/>picks the shortlist"]
+    dispatch["dispatch<br/>claim → reserve → worker → verdict<br/>(native: claim → assignment)"]
     curate["curate<br/>re-price what moved,<br/>write views"]
     distil["distil<br/>promote closed work into<br/>cited skills, on a cadence"]
     qc["qc<br/>mechanical first, model second"]
     stop{"should_stop?"}
 
-    c1{"time?"}
-    c2{"time?"}
-    c3{"time?"}
+    c1{"time and<br/>money?"}
+    c2{"time and<br/>money?"}
+    c3{"time and<br/>money?"}
+    nat{"native, with<br/>assignments<br/>outstanding?"}
 
     orient --> c1
     c1 -->|"yes"| generate --> c2
     c2 -->|"yes"| rankp --> c3
-    c3 -->|"yes"| dispatch --> curate
+    c3 -->|"yes"| dispatch --> nat
     c1 -.->|"no"| c2
     c2 -.->|"no"| c3
-    c3 -.->|"no"| curate
+    c3 -.->|"no"| nat
+    nat -->|"no"| curate
     curate --> distil --> qc --> stop
+    nat -.->|"yes: curate, distil, qc<br/>recorded as skipped"| stop
     stop -->|"running"| orient
-    stop -->|"target met /<br/>budget spent /<br/>yield floor"| done(["stop"])
+    stop -->|"target met /<br/>budget spent /<br/>yield floor /<br/>native-handoff"| done(["stop"])
 
     teardown["pool.release_all()<br/>in a finally"]
     dispatch -.-> teardown
     qc -.-> teardown
 ```
 
-Four things about this shape are deliberate:
+Six things about this shape are deliberate:
 
-- **Generate runs every iteration**, concurrently with the work, so the queue
-  cannot starve behind a rule that forbids draining it.
+- **Generate runs first, every iteration the gate allows**, so the queue is
+  refilled before rank drains it rather than starving behind a rule that
+  forbids draining it. It finishes before rank begins; only its N generators
+  (`coordinator.generators_per_iteration`) run in parallel, with each other.
 - **The coordinator owns the pool.** Teardown is a `finally`, not a runbook.
 - **`distil` is not clock-gated, and sits before `qc`.** Like `curate` it closes
   out work already paid for -- a verdict that never became knowledge is the run
@@ -121,73 +130,96 @@ Four things about this shape are deliberate:
   number in it must be a row metric, that row's objective value, the row
   count, or arithmetic over matched values (AgentRxiv's fabricated results,
   arXiv 2503.18102; CodeScientist's unfaithful experiments, arXiv 2503.22708).
-- **Wall clock gates the three phases that start new work.** `generate`, `rank`
-  and `dispatch` each ask whether the iteration's `iteration_max_seconds`
-  remains before beginning; `curate` and `qc` are not gated, because they close
-  out work that has already been paid for. A phase the clock skips is written to
-  the record *with its reason* — which is what makes the distinguishability
-  claim above true rather than aspirational. The check is made separately before
-  each of the three (the dotted edges), not once for the group: an iteration can
+- **Wall clock and money gate the three phases that start new work.**
+  `generate`, `rank` and `dispatch` each ask `_time_left` before beginning,
+  and it refuses on either meter: the iteration's `iteration_max_seconds` is
+  spent, or the campaign's money is exhausted or unknown (`_require_money` —
+  an unpriced spend under a finite ceiling refuses, as it does for every
+  metered call). `curate`, `distil` and `qc` are not gated, because they close
+  out work that has already been paid for; the one case that skips them is
+  native dispatch, below. A phase the gate skips is written to the record
+  *with its reason* — which is what makes the distinguishability claim above
+  true rather than aspirational. The check is made separately before each of
+  the three (the dotted edges), not once for the group: an iteration can
   generate, then run out of clock before it dispatches.
+- **Native dispatch ends the iteration at the handoff.** With `[coordinator]
+  dispatch = "native"`, dispatch goes to `_dispatch_native`: each shortlisted
+  card gets the same preflight, meter charges and claim, then an external
+  assignment (`external.assign`) instead of a worker, and no model runs in this
+  process for the work. While any assignment is outstanding there is nothing
+  to close out, so `curate`, `distil` and `qc` do not run but are recorded
+  with the reason (`native dispatch: N assignment(s) outstanding`), and the
+  stop decision is replaced by `native-handoff`, whose detail names the
+  resume: settle with `ar external complete`, then run `ar loop` again.
+  Looping on would re-rank a queue whose claims are still held. `ar loop`
+  prints the manifest of assignments; the full shape is in
+  [native-driver.md](native-driver.md).
 
 Every model call spends a `spawns` meter, QC's included, so the ceiling that
 makes a runaway iteration structurally impossible counts every role that ran.
 
-The rank phase is where the search becomes a **tree**. Every entry carries a
-`parent`: a branch off work already in the record (the child refines, narrows,
-or re-runs its parent with one premise exchanged) or a novel root. The
-coordinator owns the structure — an unknown parent, a lineage deeper than
-`tree_max_depth`, more siblings per parent than `tree_max_children`, or a
-branch crossing tracks is refused at filing, with a reason, in the generate
-phase's detail lines. The shortlist splits on the same field:
-`[coordinator] risk` (default 0.5 — the neutral 50/50 stance between improving
-the incumbent and opening new territory) decides what share of the slots goes
-to roots; within each partition the score decides; an unfilled share returns
-to the other partition; `k=1` is never spent on a partition. Another hard
-filter guards yield: with `branch_stagnation` set, a parent whose children
-closed `refuted` at least that many times without a single `confirmed` is
-stagnant — its remaining children are excluded from ranking and a new child
-is refused at filing. The exclusion is recomputed from the record every rank,
-so one confirmed sibling clears it. A domain may
-replace the formula's pricing with its own through `[commands] score =
-"bin/score"` — a seam shaped like `preflight` (stdin `{"risk", "entries"}`,
-stdout `{"scores": [{id, score, reason}]}`, claimable candidates only). The
-hard filters run before the seam either way, so neither the dial nor a
-domain's prices can resurrect a `mechanism`-refuted direction or a stagnant
-lineage; and a seam
-failure refuses the rank phase and skips dispatch rather than falling back to
-the formula the domain replaced.
+The rank phase is where the search becomes a **tree**: every entry is a
+branch (its `parent` names work already in the record) or a novel root, and
+the coordinator refuses an unknown parent, a lineage past `tree_max_depth`,
+a parent past `tree_max_children`, a stagnant parent or a cross-track branch
+at filing (`tree.py`), with the reason in the generate phase's detail lines.
+The order inside the phase is fixed (`Coordinator.rank`):
 
-## 3. Roles, and what each may do
+1. `rank.rank` applies the hard filters — a `mechanism`-refuted direction, a
+   stagnant lineage, a cost the remaining runs cannot pay — and prices the
+   survivors by the formula;
+2. a declared `[commands] score` seam (`scoring.seam_ranking`) re-prices the
+   claimable survivors; a seam failure refuses the phase and skips dispatch
+   rather than falling back to the formula the domain replaced;
+3. the judge's vetoes are applied to the full ranking (`apply_veto` refuses
+   one against an excluded entry);
+4. only then does `shortlist(k)` apply the risk dial, splitting the `k` slots
+   between novel entries and branches.
 
-Seven prompts in `src/autoresearch/agents/`. Only the worker and curator get
-write tools; everyone else is read-only -- the librarian included, deliberately:
-it returns a skill body and the coordinator writes it, so no role certifies its
-own output.
+Because the hard filters run first, neither the dial nor a domain's prices
+can resurrect what they excluded. An entry counts as novel only with no
+`parent` *and* no `derived_from`: a follow-up filed past the depth cap is
+lineage, not new territory. The formula, the dial, stagnation and the seam's
+contract are documented once, in the README's
+[Ranking: the tree, the risk dial, and the domain's own score](../README.md#ranking-the-tree-the-risk-dial-and-the-domains-own-score).
+
+## 3. Roles, and what each may return
+
+Seven prompts in `src/autoresearch/agents/`. Core does not grant or withhold
+tools: a brain is a command, `ProcessBrain` substitutes only `{role}`,
+`{prompt_file}`, `{workspace}` and `{cost_file}` into it, and what that
+command's agent may touch is the backend's configuration — route a role to a
+restricted agent if you want it restricted. (Per-role tool lists belonged to
+the SDK brain, removed in 0.2.0.) What core enforces is the other half: every
+role returns JSON, the coordinator is the only writer of the record, and each
+reply passes a check before it changes anything — the librarian returns a
+skill body and the coordinator writes it, so no role certifies its own
+output. The worker is the one role handed a `{workspace}`: a pool slot, whose
+results reach the record only through harvest.
 
 ```mermaid
 flowchart TB
     coord["Coordinator"]
 
-    coord -->|"brief: goal, open entries,<br/>closed_directions, host, budget"| gen["generator ×N<br/>read-only"]
-    gen -->|"proposed entries"| file["file new entries<br/>(dedup by title)"]
+    coord -->|"brief: goal, open entries,<br/>closed_directions, host, budget"| gen["generator ×N<br/>returns proposals"]
+    gen -->|"proposed entries"| file["_file<br/>scoring fields required;<br/>tree gate; dedup by title"]
 
-    coord -->|"brief + ranking + excluded"| judge["judge<br/>read-only"]
+    coord -->|"brief + ranking + excluded"| judge["judge<br/>returns vetoes"]
     judge -->|"vetoes: promote/demote/drop"| veto["apply_veto<br/>may not touch the excluded list"]
 
-    coord -->|"brief + entry + workspace"| worker["worker ×K<br/>Read/Grep/Glob/Bash/Write/Edit<br/>in an isolated workspace"]
-    worker -->|"verdict, memo, closure_kind, verification"| apply["_apply_verdict<br/>memo must exist;<br/>refutation must name a kind;<br/>no verification block → refused"]
+    coord -->|"brief + entry + workspace"| worker["worker ×K<br/>works in its pool slot"]
+    worker -->|"verdict, memo, closure_kind, verification"| apply["harvest, then _apply_verdict<br/>memo must exist;<br/>refutation must name a kind;<br/>no verification block → refused"]
 
-    coord -->|"brief + this iteration's verdicts"| cur["curator<br/>read + write"]
-    cur -->|"reprice: confidence/impact/cost"| repr["never a closed entry"]
+    coord -->|"brief + this iteration's verdicts"| cur["curator<br/>returns reprices + notes"]
+    cur -->|"reprice: confidence/impact/cost"| repr["entries.reprice<br/>terminal, unpriced or<br/>no-op change → skipped"]
 
-    coord -->|"brief + undistilled + stale"| lib["librarian<br/>read-only"]
+    coord -->|"brief + undistilled + stale"| lib["librarian<br/>returns skill bodies"]
     lib -->|"write / retire skills"| skw["skills.write<br/>cites must be terminal;<br/>refusal is recorded, not written"]
 
-    coord -->|"brief + mechanical problems"| qc["qc<br/>read-only"]
-    qc -->|"problems, harness_debt"| debt["file debt on the<br/>harness track, not research"]
+    coord -->|"brief + mechanical problems"| qc["qc<br/>returns problems + debt"]
+    qc -->|"problems, harness_debt"| debt["file debt on the<br/>harness track, not research;<br/>no such track → named, dropped"]
 
-    coord -.->|"brief: question + board<br/>out of band, `ar research`"| scout["scout ×N<br/>read-only + web"]
+    coord -.->|"brief: question + board<br/>out of band, `ar research`"| scout["scout ×N<br/>returns proposals"]
     scout -->|"proposals with sources"| file
 
     file --> store[("record<br/>one file per entry")]
@@ -201,7 +233,7 @@ flowchart TB
 The right-hand boxes are the enforcement points. A role proposes; the
 coordinator is the only thing that writes, and it refuses anything that breaks
 an invariant — a close with a missing memo, a veto against a hard filter, a
-re-price of a terminal entry.
+re-price of a terminal entry, a proposal without its scoring inputs.
 
 ## 4. An entry's lifecycle
 
@@ -270,8 +302,10 @@ so neither can bypass the other's guard. A short ledger refuses the close and
 releases the claim back to the queue; `refuted` verdicts are exempt, because a
 legitimate refutation may hold only `invalid`/`failed` rows and demanding
 clean rows for a `no` would cry wolf. This is per-entry replication, weaker
-than the goal-level `confirm_independently` (different session or entry), and
-the two guard different threats: one noisy run closing a discovery versus a
+than the goal-level `confirm_independently` — a second row from a different
+*source*, meaning another workspace slot or a proven claim (a free session
+name is not one, #43; `runs.source_of`), or a passing holdout — and the two
+guard different threats: one noisy run closing a discovery versus a
 proxy overfitting across claims.
 
 ```mermaid
@@ -279,6 +313,7 @@ sequenceDiagram
     participant C as Coordinator
     participant B as Budget
     participant Cl as Claims
+    participant A as Attempts
     participant P as Workspace pool
     participant W as worker (thread)
     participant Br as Brain
@@ -289,6 +324,8 @@ sequenceDiagram
         B-->>C: ok / BudgetExceeded → stop dispatching
         C->>Cl: claim(entry, why="ranked #k")
         Cl-->>C: ok / held by another session → skip
+        C->>A: reserve(entry, claim token, claim's max_hours)
+        A-->>C: ok / claim, domain-run, money or concurrency<br/>ceiling refused → release claim, skip
     end
 
     par up to max_parallel
@@ -350,16 +387,10 @@ flowchart LR
     local -.->|"never travels"| b
 ```
 
-Three consequences, each of which was a defect before it was a design:
-
-- **Numbering continues from the highest record**, and reusing a recorded number
-  is refused *before* any phase runs rather than at record time, when the fanout
-  has already been spent. Numbering from zero in each process overwrote the
-  previous session's audit trail — silently, and by the session resuming it.
-- **`yield_floor` needs history to work at all.** The third exit wants
-  `over_iterations` samples of confirmed-per-iteration; seeing only the current
-  process's, it never fired under `--iterations 1`.
-- **The claim lock and the workspace pool never travel.** They name a holder, a
-  pid and absolute paths that mean nothing on the other machine, so the findings
-  lane enumerates `state/entries` and `state/iterations` rather than taking
-  `state/` whole.
+`Coordinator.__init__` reads every iteration record back, so numbering
+continues from the highest one (reusing a recorded number is refused before
+any phase runs) and `yield_floor` keeps its window across the handoff. The
+claim lock and the workspace pool never travel: they name a holder, a pid and
+absolute paths that mean nothing on the other machine. What to commit, what
+stays behind, the one-session-name rule and crash recovery are in the
+README's [Working across two machines](../README.md#working-across-two-machines).

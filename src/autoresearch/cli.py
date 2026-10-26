@@ -2750,10 +2750,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
         "--accept-drift", action="store_true",
         help="proceed even though domain.toml changed since the session was cut")
     ssn_prune = ssn.add_parser(
-        "prune", help="report sessions past their settle window (destroys nothing)")
+        "prune", help="report sessions past their settle window; "
+                      "destroys only with --destroy")
     ssn_prune.add_argument(
         "--destroy", action="store_true",
-        help="destroy the sessions prune reports as eligible")
+        help="destroy the sessions prune reports as eligible (clean, settled, "
+             "nothing unharvested), each through destroy's own refusals")
     ssn_create.set_defaults(func=cmd_session, session_action="create")
     ssn_destroy.set_defaults(func=cmd_session, session_action="destroy")
     ssn_prune.set_defaults(func=cmd_session, session_action="prune")
