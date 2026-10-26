@@ -1056,6 +1056,31 @@ and provably.fast's decided entries were born closed. Read the domain's own
 report before re-weighting anything: the numbers are per domain and move as
 the record grows.
 
+### Which verdicts to audit: `scripts/audit-fast-closures.py`
+
+A verdict closed soon after it was filed is the one closure-time signal found
+to predict a weak verdict. In qsb, 28 of 1,295 first closures were later
+reopened as `weak` (hand-labelled; a blind second labelling agreed on 92 of 95
+reopens). Time from filing to closure ranked them at AUC 0.78, and held at
+0.73-0.84 with any one closing session left out. Closed within an hour of
+filing flagged 23% of closures and held 20 of the 28 (6.6% weak, against 2.2%
+overall). A logistic model over twenty closure-time features did no better and
+collapsed to 0.42 with its largest session held out, so this ships as a rule,
+not a model.
+
+```sh
+python scripts/audit-fast-closures.py /path/to/domain [--hours 1] \
+  [--track research] [--labels reopens.tsv]
+```
+
+It back-tests the rule on the domain's own reopens that carry a
+`--reopen-reason` (or hand labels via `--labels`, a TSV with `id`,
+`history_index` and `label` columns, for a record that predates the flag), then
+lists every verdict first closed inside the window and never reopened, fastest
+first. Read the list as unreviewed, not as suspect: the label it was tuned on is
+"weak and caught", and nearly every caught one was caught within hours by a
+curator pass, so the weak verdicts nobody reviewed are in the negatives too.
+
 ## The brain is a command, not a vendor
 
 Every role is judgement delegated through one seam, and the seam does not know

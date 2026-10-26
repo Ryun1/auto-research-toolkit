@@ -23,6 +23,11 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   `--reopen-reason weak|overclaim|context|clerical`, and the refusal lists
   what each means. Reopening a `blocked` entry is unchanged. The reason is
   stored in the reopen event's `snapshot`, so no record floor moves.
+- **Optional: two read-only scripts.** `scripts/calibrate-priors.py` scores
+  whether the domain's `confidence`/`impact`/`cost` predicted its verdicts,
+  replayed from git; `scripts/audit-fast-closures.py` lists verdicts closed
+  within an hour of filing for audit. See "Are the priors any good?" and
+  "Which verdicts to audit" in the README.
 
 ## 0.12.0
 
