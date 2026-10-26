@@ -65,6 +65,7 @@ def test_the_shim_finds_an_enclosing_projects_venv(tmp_path):
     venv still wins over it."""
     init(tmp_path / "project" / "domains" / "d", name="d")
     domain = tmp_path / "project" / "domains" / "d"
+    (tmp_path / "project" / ".git").mkdir()
     stub(tmp_path / "project", ".venv/bin/ar", "project")
     done = run_shim(domain, "board")
     assert done.returncode == 0, done.stderr
@@ -72,6 +73,49 @@ def test_the_shim_finds_an_enclosing_projects_venv(tmp_path):
                                            str(domain.resolve())]
     stub(domain, ".venv/bin/ar", "domain")
     assert json.loads(run_shim(domain, "board").stdout)[0] == "domain"
+
+
+def no_toolkit_env(tmp_path):
+    """A PATH whose python3 lacks the module, so only the venv probes count."""
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir(exist_ok=True)
+    python3 = fakebin / "python3"
+    python3.write_text("#!/bin/sh\nexit 1\n")
+    python3.chmod(0o755)
+    return {"PATH": str(fakebin), "HOME": os.environ.get("HOME", "")}
+
+
+def run_shim_isolated(domain, env):
+    return subprocess.run(
+        [sys.executable, str(domain / "bin" / "ar"), "board"],
+        capture_output=True, text=True, timeout=10, env=env)
+
+
+def test_the_walk_stops_at_the_repository_root(tmp_path):
+    """A venv above the enclosing repository -- a shared /tmp, say -- is never
+    run, and a domain in no repository walks nowhere."""
+    init(tmp_path / "shared" / "repo" / "d", name="d")
+    domain = tmp_path / "shared" / "repo" / "d"
+    planted = stub(tmp_path / "shared", ".venv/bin/ar", "planted")
+    env = no_toolkit_env(tmp_path)
+    assert run_shim_isolated(domain, env).returncode != 0, "no repo: no walk"
+    (tmp_path / "shared" / "repo" / ".git").mkdir()
+    done = run_shim_isolated(domain, env)
+    assert done.returncode != 0 and "planted" not in done.stdout
+    assert planted.exists()
+
+
+def test_a_venv_others_can_write_is_not_run(tmp_path):
+    init(tmp_path / "repo" / "d", name="d")
+    domain = tmp_path / "repo" / "d"
+    (tmp_path / "repo" / ".git").mkdir()
+    ar = stub(tmp_path / "repo", ".venv/bin/ar", "writable")
+    ar.parent.chmod(0o777)
+    done = run_shim_isolated(domain, no_toolkit_env(tmp_path))
+    assert done.returncode != 0 and "writable" not in done.stdout
+    ar.parent.chmod(0o755)
+    # The real PATH: the stub's own `env python3` shebang needs it.
+    assert json.loads(run_shim(domain, "board").stdout)[0] == "writable"
 
 
 def test_arguments_pass_through_to_the_toolkit(root):

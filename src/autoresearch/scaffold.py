@@ -323,9 +323,14 @@ toolkit reachable the way every other tool here is (`bin/<name>`), and
 Probes this domain's venvs -- `.venv312/bin/ar` first, the toolkit needs
 Python >= 3.11 and many machines ship an older system `python3` -- then
 `.venv/bin/ar`, and execs the first found with all arguments, naming THIS
-domain. Then the same two venvs in each enclosing directory, nearest first: a
-domain kept in a subdirectory of its project (or of the toolkit, as
-`domains/toy` is) finds the project's venv at the repository root. Otherwise
+domain. Then the same two venvs in each enclosing directory up to the git
+repository's root, nearest first: a domain kept in a subdirectory of its
+project (or of the toolkit, as `domains/toy` is) finds the project's venv at
+the repository root. The walk never passes that root or the home directory,
+and a domain outside any repository walks nowhere -- a `.venv` planted in a
+shared parent such as /tmp must not be executed. A candidate is run only if
+the current user owns it and its directory is not group- or world-writable.
+Otherwise
 it falls back to `python3 -m autoresearch`; if no interpreter
 has the module the failure is LOUD and names the remedy, never a quiet
 fall-through to the archiver.
@@ -336,6 +341,7 @@ answers for whatever domain the caller is standing in, with a plausible exit
 code (sig.golf H17). An explicit --domain in the user's own arguments still
 wins, because argparse keeps the last occurrence.
 """
+import os
 import pathlib
 import subprocess
 import sys
@@ -344,9 +350,35 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 CANDIDATES = (".venv312/bin/ar", ".venv/bin/ar")
 
 
+def bases():
+    """This domain, then its enclosing directories up to the git repository
+    root -- never past it, never past home, nowhere without a repository."""
+    home = pathlib.Path.home().resolve()
+    chain = [ROOT]
+    for base in (ROOT, *ROOT.parents):
+        if base != ROOT:
+            if base == home or base == base.parent:
+                return [ROOT]
+            chain.append(base)
+        if (base / ".git").exists():
+            return chain
+    return [ROOT]
+
+
+def trusted(path):
+    """Owned by whoever runs the shim, and neither it nor its directory
+    writable by anyone else."""
+    try:
+        mine, parent = path.stat(), path.parent.stat()
+    except OSError:
+        return False
+    owner_ok = not hasattr(os, "getuid") or mine.st_uid == os.getuid()
+    return owner_ok and not (mine.st_mode | parent.st_mode) & 0o022
+
+
 def main():
-    for ar in (base / c for base in (ROOT, *ROOT.parents) for c in CANDIDATES):
-        if ar.is_file():
+    for ar in (base / c for base in bases() for c in CANDIDATES):
+        if ar.is_file() and trusted(ar):
             raise SystemExit(subprocess.run(
                 [str(ar), "--domain", str(ROOT), *sys.argv[1:]]).returncode)
     try:
@@ -361,7 +393,7 @@ def main():
     sys.exit(
         "bin/ar: the auto-research-toolkit is not installed anywhere this "
         f"shim can reach (probed {', '.join(str(ROOT / c) for c in CANDIDATES)}"
-        " and the same in every enclosing directory, then `python3 -m "
+        " and the same up to the enclosing repository root, then `python3 -m "
         "autoresearch`).\\n"
         "  Remedy: install the toolkit into a venv at this domain root:\\n"
         "    python3.12 -m venv .venv312 && .venv312/bin/pip install "
