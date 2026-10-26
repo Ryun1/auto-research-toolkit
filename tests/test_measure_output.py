@@ -56,6 +56,9 @@ def test_measure_passes_domain_flags_through_without_a_separator():
     unknown argument; only `-- --patch X` reached the domain command."""
     for argv in (["measure", "--entry", "Q55", "--patch", "p"],
                  ["--domain", "d", "measure", "--entry=Q55", "--patch", "p"],
+                 # the claim token is a valued global flag too, and the form
+                 # AGENTS.md teaches: it must not hide the verb
+                 ["--claim-token", "t", "measure", "--entry", "Q55", "--patch", "p"],
                  ["measure", "--entry", "Q55", "--", "--patch", "p"]):
         args = cli.build_parser().parse_args(cli._measure_passthrough(argv))
         assert args.entry == "Q55" and args.rest == ["--patch", "p"], argv

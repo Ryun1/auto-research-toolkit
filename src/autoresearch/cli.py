@@ -2810,7 +2810,7 @@ def _measure_passthrough(argv):
     # appearing later is some other verb's argument (a title, a summary).
     i = 0
     while i < len(argv) and argv[i].startswith("-"):
-        i += 2 if argv[i] in ("--domain", "--session") else 1
+        i += 2 if argv[i] in ("--domain", "--session", "--claim-token") else 1
     if i >= len(argv) or argv[i] != "measure":
         return argv
     j = i + 1
