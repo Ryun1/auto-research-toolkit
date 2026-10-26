@@ -890,6 +890,17 @@ supersession facts; they create neither negative calibration nor mechanism
 overlap, because "the frontier already shipped it" is not evidence the idea
 failed.
 
+**A reopen says what kind it is.** `ar close ID --reopen --reopen-reason
+REASON --why "..."` is the only way back from a verdict, and REASON is one of
+`weak` (the verdict did not survive: wrong, stale, below its own bar, or never
+tested), `overclaim` (it stands; its summary or scope is narrowed), `context`
+(sound when made; the tree moved or its reopen condition fired) or `clerical`
+(duplicates, backfills, provenance). It lands on the reopen event as
+`snapshot: {reopen_reason: ...}`. Free text alone made the qsb corpus's 95
+research reopens uncountable until a hand-labelling pass: 29 weak, 10
+overclaim, 8 context, 48 clerical. With the category recorded, which verdicts
+hold is something the record can answer.
+
 ## Acceptance gates
 
 An entry may declare **gates**: named, ordered stages (`pending | passed |

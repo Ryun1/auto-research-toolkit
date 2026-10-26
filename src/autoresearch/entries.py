@@ -48,7 +48,7 @@ import yaml
 from .errors import AutoresearchError, SchemaError, TransitionError
 from .gates import Gate
 from .gates import validate as validate_gates
-from .states import CLOSURE_KINDS
+from .states import CLOSURE_KINDS, REOPEN_REASONS
 
 DISPOSITIONS = ("experiment", "superseded", "already-shipped")
 
@@ -474,6 +474,24 @@ class Entry:
         self.history.append(Event(_now(), f"{self.status}->{dest}", who, why))
         self.status = dest
         self.updated = _now()
+
+    def reopen(self, machine, who: str, why: str, reason: str | None = None) -> None:
+        """Return the entry to the queue. A closed entry must say which kind of
+        reopen this is (REOPEN_REASONS), recorded on the transition event; a
+        live one (blocked) carries no verdict to categorise and refuses one."""
+        closed = machine.status(self.status).terminal
+        if closed and reason not in REOPEN_REASONS:
+            raise TransitionError(
+                f"{self.id} is {self.status!r}: reopening a verdict needs "
+                "--reopen-reason, one of:\n"
+                + "\n".join(f"  {k}: {v}" for k, v in REOPEN_REASONS.items()))
+        if not closed and reason is not None:
+            raise TransitionError(
+                f"{self.id} is {self.status!r}, not a verdict: --reopen-reason "
+                "categorises a reopened verdict and has nothing to say here")
+        self.apply(machine, machine.initial, who=who, why=why)
+        if closed:
+            self.history[-1].snapshot = {"reopen_reason": reason}
 
     def relabel(self, kind: str, who: str, why: str,
                 reopen_condition: str | None = None) -> None:

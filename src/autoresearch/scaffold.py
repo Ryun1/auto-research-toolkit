@@ -548,6 +548,11 @@ a hand-maintained map would.
   band and what leaving it would take. A wrong label is corrected with
   `bin/ar close ID --relabel KIND --why "..."` (plus `--reopen-condition`
   when KIND is `slope` or `cell` and none is recorded), not by reopening.
+- **Reopening a verdict says which kind of reopen it is**:
+  `bin/ar close ID --reopen --reopen-reason REASON --why "..."`, where REASON
+  is `weak` (the verdict did not survive), `overclaim` (it stands; its claim
+  is narrowed), `context` (sound then, changed since) or `clerical`
+  (bookkeeping). The record counts these to learn which verdicts hold.
 - Stuck past your ceiling: `bin/ar release` with a reason. A claim abandoned
   by a dead session is freed with `bin/ar reap ID` once past its TTL.
 

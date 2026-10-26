@@ -252,10 +252,10 @@ stateDiagram-v2
     in_progress --> confirmed: ar close (memo required)
     in_progress --> refuted: ar close (memo + closure_kind)
 
-    confirmed --> queued: ar close --reopen (why)
-    refuted --> queued: ar close --reopen (why)
+    confirmed --> queued: ar close --reopen (why + reason)
+    refuted --> queued: ar close --reopen (why + reason)
     in_progress --> superseded: ar close (memo + --superseded-by)
-    superseded --> queued: ar close --reopen (why)
+    superseded --> queued: ar close --reopen (why + reason)
 
     note right of refuted
       closure_kind decides reach:
@@ -267,6 +267,12 @@ stateDiagram-v2
 
 `in_progress` is spelled `in-progress` in the record; Mermaid will not take the
 hyphen in a state id.
+
+Reopening a verdict also names its kind, `--reopen-reason` (`REOPEN_REASONS` in
+`states.py`): `weak`, `overclaim`, `context` or `clerical`. It is stored on the
+transition event as `snapshot: {reopen_reason: ...}`, a field every core
+already reads, so records written with it load on older cores. `blocked` is not
+a verdict, so its reopen takes no reason and refuses one.
 
 This is the research track's machine. A track declares its own terminal set and
 nothing else about the shape changes — the harness-debt track the toy domain

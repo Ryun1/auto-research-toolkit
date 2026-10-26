@@ -16,6 +16,14 @@ breaks without it), **behavioural** (it loads, but acts differently), or
 
 ---
 
+## Unreleased
+
+- **Required (scripts that reopen verdicts): pass `--reopen-reason`.**
+  `ar close ID --reopen` on a closed entry now refuses without
+  `--reopen-reason weak|overclaim|context|clerical`, and the refusal lists
+  what each means. Reopening a `blocked` entry is unchanged. The reason is
+  stored in the reopen event's `snapshot`, so no record floor moves.
+
 ## 0.12.0
 
 - **Behavioural: two tables got shorter.** `ar entry list` shows open

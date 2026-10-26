@@ -228,7 +228,8 @@ def test_a_retired_entry_reopens(sandbox, store, capsys):
                      "--memo", memo(sandbox, "inbox/Q2.md"),
                       "--summary", "retired by Q1"]) == 0
 
-    assert cli.main([*root_of(sandbox), "close", "Q2", "--reopen", "--why",
+    assert cli.main([*root_of(sandbox), "close", "Q2", "--reopen",
+                     "--reopen-reason", "context", "--why",
                      "the sibling it deferred to was refuted"]) == 0
     assert store.load("Q2").status == "queued"
 

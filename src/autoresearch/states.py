@@ -61,6 +61,21 @@ CLOSURE_KINDS = {
     "cell":      "a direct point measurement; re-opens if the cell moves",
 }
 
+#: Why a closed entry went back to the queue. Free text alone made the qsb
+#: corpus's 95 research reopens uncountable: a hand-labelling pass found 29
+#: verdicts that did not survive among 48 pieces of bookkeeping. Recorded on
+#: the reopen event, so a verdict's reliability can be measured from the record.
+REOPEN_REASONS = {
+    "weak":      "the verdict did not survive: its evidence was wrong, stale, "
+                 "below the entry's own bar, or never actually tested",
+    "overclaim": "the verdict stands; its summary, scope or numbers overstated "
+                 "something and are being narrowed or corrected",
+    "context":   "the verdict was sound when made; something has changed since "
+                 "(the tree moved, the entry's own reopen condition fired)",
+    "clerical":  "bookkeeping: a duplicate, a backfilled summary, refreshed "
+                 "provenance, a mis-issued id",
+}
+
 
 @dataclass
 class StateMachine:

@@ -51,7 +51,7 @@ from .claims import Claims, claim_state_problems
 from .config import DomainConfig, discover
 from .entries import EVIDENCE_CLASSES, Entry, Event, Result, Store
 from .errors import AutoresearchError, SchemaError
-from .states import CLOSURE_KINDS
+from .states import CLOSURE_KINDS, REOPEN_REASONS
 
 
 def _load(args) -> DomainConfig:
@@ -1160,6 +1160,11 @@ def cmd_close(args):
     entry = store.load(args.id)
     track = config.track_for(args.id)
 
+    reopen_reason = getattr(args, "reopen_reason", None)
+    if reopen_reason and not args.reopen:
+        raise AutoresearchError(
+            "--reopen-reason categorises a reopen; pass it with --reopen")
+
     if args.relabel:
         entry.relabel(args.relabel, who=args.session, why=args.why or "",
                       reopen_condition=args.reopen_condition)
@@ -1175,8 +1180,8 @@ def cmd_close(args):
             # to reopen, as before.
             Claims(store, config, args.session,
                    token=getattr(args, "claim_token", None)).require_owner(entry)
-        entry.apply(track.machine, track.machine.initial, who=args.session,
-                    why=args.why or "")
+        entry.reopen(track.machine, who=args.session, why=args.why or "",
+                     reason=reopen_reason)
         entry.claim = None
         store.save(entry)
         _render_views(config)
@@ -2653,6 +2658,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                                      "reopen, relabel or correct a closure)")
     close.add_argument("--reopen", action="store_true",
                        help="put a closed entry back in the queue")
+    close.add_argument("--reopen-reason", dest="reopen_reason",
+                       choices=list(REOPEN_REASONS),
+                       help="required to reopen a verdict: weak (it did not "
+                            "survive), overclaim (it stands, its claim is "
+                            "narrowed), context (sound then, changed since) "
+                            "or clerical (bookkeeping)")
     close.add_argument("--relabel", choices=sorted(CLOSURE_KINDS),
                        help="change a refutation's closure kind without reopening")
     close.add_argument("--evidence-class", dest="evidence_class",
