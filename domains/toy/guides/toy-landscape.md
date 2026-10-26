@@ -8,18 +8,23 @@ the map of closed directions.
 
 | Knob | Range | Notes |
 |---|---|---|
-| `unroll` | 1–24 | Trades operation count against width: `ops` falls as `1e6/unroll`, but `peak` pays `2·unroll`. Interior optimum. |
+| `unroll` | ≥ 1 (1–24 by convention) | Trades operation count against width: `ops` is `1e6/unroll + 5000·unroll`, so it falls until `unroll` ≈ 14 and rises after, and `peak` pays `2·unroll` throughout. Interior optimum. Nothing enforces the upper bound; `bin/measure` clamps only below, to 1. |
 | `width` | any int | Enters `peak` directly. **Validity gate: below 16 the run is `invalid` and does not score.** |
 | `fold` | 0/1 | −15% ops, no width cost. |
 | `cache` | 0/1 | −5% ops **only when `fold` is on**; costs 8 peak unconditionally. |
 
-## Closed directions
+## Known dead ends
 
-- **`cache` alone is refuted (mechanism).** With `fold=0` it changes `ops` by
-  exactly nothing and costs 8 `peak`. This holds for every config, not just the
-  ones measured — it is a property of the evaluator, so it does not re-open.
-- **`width` below 16 is refuted (mechanism).** It is a validity gate, not a
-  trade.
+Prior knowledge from whoever wrote this guide, read off `bin/measure` rather
+than closed in the record: the store ships empty, so no entry backs these and
+`ar rank` excludes nothing on their account. Each is what a `mechanism`
+refutation would say if someone filed and measured it.
+
+- **`cache` alone does not pay.** With `fold=0` it leaves `ops` untouched
+  (beyond the ±0.2% per-config jitter) and costs 8 `peak`. This holds for every
+  config, not just the ones measured — it is a property of the evaluator.
+- **`width` below 16 does not trade.** It is a validity gate: the run comes
+  back `invalid` and does not score.
 
 ## Open
 

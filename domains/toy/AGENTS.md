@@ -32,20 +32,34 @@ a hand-maintained map would.
 - **Close with evidence**: `bin/ar close ID <status> --memo path/to/memo.md`.
   The memo must exist, and any gates the track declares are enforced. A
   hand-applied closure gets no discount for being applied by a person.
+- **A refutation says how far it reaches**: `refuted` also needs `--closure`.
+  `mechanism` holds outside the range measured, and drops every open entry
+  sharing a mechanism tag from `ar rank`; `slope` and `cell` hold only within
+  what was measured, so they also need `--reopen-condition "..."` naming the
+  band and what leaving it would take. A wrong label is corrected with
+  `bin/ar close ID --relabel KIND --why "..."`, not by reopening.
 - Stuck past your ceiling: `bin/ar release` with a reason. A claim abandoned
   by a dead session is freed with `bin/ar reap ID` once past its TTL.
 
 ## Researching
 
 `bin/ar research "your question"` spins up scout agents whose proposals land
-as ordinary entries, priced by the next `ar rank` -- **but only if domain.toml
-names a `[brain]`**: scouts are model asks behind the brain seam, and the
-command refuses without one. The same goes for `bin/ar skill distil`. In a
-hand-driven domain without a brain, file ideas yourself instead:
+as ordinary entries, each carrying the scout's own impact, confidence and cost
+-- **but only if domain.toml names a `[brain]`**: scouts are model asks behind
+the brain seam, and the command refuses without one. The same goes for
+`bin/ar skill distil`. In a hand-driven domain without a brain, file ideas
+yourself instead, and price them as you file:
 
-    bin/ar entry new --track research "title" --hypothesis ... --prediction ...
+    bin/ar entry new --track research "title" --hypothesis ... --prediction ... \
+        --impact 0.05 --confidence 0.4 --cost 2 --mechanism <tag>
 
-and let the next `ar rank` price them.
+`ar rank` prices nothing: it orders the queue on the numbers each entry
+carries (by default confidence x impact / cost). `--impact`, the fractional
+move on the objective if it confirms, defaults to 0, so an entry filed without
+it scores about zero and sinks to the bottom; `--confidence` defaults to 0.5
+and `--cost` (runs to decide it) to 1. `--mechanism` (repeatable) is what
+calibration and dead-direction exclusion route on: an untagged entry learns
+nothing from its siblings' verdicts and no mechanism refutation reaches it.
 
 ## Set the harness goal from goal.yaml
 
@@ -84,9 +98,9 @@ subagents, use that instead of working entries one at a time:
   holder when it refuses. The claim **is** the coordination primitive -- two
   subagents claiming different entries need no other locking.
 - **Each subagent passes its own `--session <name>`** (a global flag, before
-  the verb: `bin/ar --session scout-3 claim Q-12 --why ...`). Claims, usage
+  the verb: `bin/ar --session scout-3 claim Q12 --why ...`). Claims, usage
   rows and history all attribute to that name; a dead subagent's claim is
-  freed with `bin/ar reap Q-12` once past its TTL, and nothing else is
+  freed with `bin/ar reap Q12` once past its TTL, and nothing else is
   touched.
 - **The orchestrating agent keeps the judgement-heavy verbs**: `board`,
   `rank`, `entry new`, `close` (a closure's memo and gates are a verdict --
@@ -136,7 +150,7 @@ evidence, never into prose:
 
 `bin/ar harness export` packages the open defects for upstream; publishing is
 a person's act. Closing uses this track's terminal verdicts (`fixed`/`wontfix`,
-not `confirmed`): `bin/ar close H-1 fixed --memo inbox/...`.
+not `confirmed`): `bin/ar close H1 fixed --memo inbox/...`.
 
 ## Do not start the coordinator
 

@@ -75,6 +75,23 @@ def test_shipped_toy_domain_ships_the_hand_driven_protocol_in_sync():
     assert (TOY / "AGENTS.md").read_text() == AGENTS_MD
 
 
+def test_shipped_toy_domain_carries_what_the_scaffold_writes():
+    """AGENTS.md says `bin/ar ...` on every line and points at
+    `docs/skills/README.md`, and for a while the example shipped neither: the
+    protocol named a shim the repo it was read in did not have. Every
+    machine-independent file `ar init` writes verbatim is checked here.
+    `bin/autoresearch` is not: its shebang is the scaffolding interpreter's
+    absolute path. `bin/measure`, `guides/`, `domain.toml` and `goal.yaml` are
+    not either: those are the domain's own, and the toy's are meant to differ."""
+    import os
+
+    from autoresearch.scaffold import AR, GITIGNORE, SKILLS_README
+    assert (TOY / "bin" / "ar").read_text() == AR
+    assert os.access(TOY / "bin" / "ar", os.X_OK)
+    assert (TOY / "docs" / "skills" / "README.md").read_text() == SKILLS_README
+    assert (TOY / ".gitignore").read_text() == GITIGNORE
+
+
 def test_the_package_runs_as_a_module():
     """The fallback every `bin/ar` shim advertises (sig.golf H7). A machine
     whose toolkit lives in its default python3 has no `ar` on PATH, and this is

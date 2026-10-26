@@ -8,9 +8,14 @@
 # whose whole purpose is local mutual exclusion.
 state/claims/
 
+# state/.locks/ holds the per-entry write locks `Store.save` takes so its
+# compare and its replace cannot interleave. Same argument as state/claims/: a
+# lock names a pid and a holder that mean nothing on another machine, and a
+# committed one buys a stall until it goes stale.
+state/.locks/
+
 # .ar/ holds the workspace pool: markers recording absolute paths that exist on
 # one machine only. The coordinator destroys its own slots in a `finally`;
-# anything left here after a crash is cleared with:
-#     git worktree prune
-#     git branch --list 'ar/*' | xargs -n1 git branch -D
+# retained evidence is recovered through `autoresearch workspace inspect NAME`
+# and `autoresearch workspace recover`, never by bulk branch deletion.
 .ar/
