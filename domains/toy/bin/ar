@@ -14,7 +14,10 @@ toolkit reachable the way every other tool here is (`bin/<name>`), and
 Probes this domain's venvs -- `.venv312/bin/ar` first, the toolkit needs
 Python >= 3.11 and many machines ship an older system `python3` -- then
 `.venv/bin/ar`, and execs the first found with all arguments, naming THIS
-domain. Otherwise it falls back to `python3 -m autoresearch`; if no interpreter
+domain. Then the same two venvs in each enclosing directory, nearest first: a
+domain kept in a subdirectory of its project (or of the toolkit, as
+`domains/toy` is) finds the project's venv at the repository root. Otherwise
+it falls back to `python3 -m autoresearch`; if no interpreter
 has the module the failure is LOUD and names the remedy, never a quiet
 fall-through to the archiver.
 
@@ -33,8 +36,7 @@ CANDIDATES = (".venv312/bin/ar", ".venv/bin/ar")
 
 
 def main():
-    for candidate in CANDIDATES:
-        ar = ROOT / candidate
+    for ar in (base / c for base in (ROOT, *ROOT.parents) for c in CANDIDATES):
         if ar.is_file():
             raise SystemExit(subprocess.run(
                 [str(ar), "--domain", str(ROOT), *sys.argv[1:]]).returncode)
@@ -50,7 +52,8 @@ def main():
     sys.exit(
         "bin/ar: the auto-research-toolkit is not installed anywhere this "
         f"shim can reach (probed {', '.join(str(ROOT / c) for c in CANDIDATES)}"
-        ", then `python3 -m autoresearch`).\n"
+        " and the same in every enclosing directory, then `python3 -m "
+        "autoresearch`).\n"
         "  Remedy: install the toolkit into a venv at this domain root:\n"
         "    python3.12 -m venv .venv312 && .venv312/bin/pip install "
         "<path-to-auto-research-toolkit>\n"

@@ -59,6 +59,21 @@ def test_the_shim_probes_the_venv_when_venv312_is_absent(root):
     assert json.loads(done.stdout)[0] == "venv"
 
 
+def test_the_shim_finds_an_enclosing_projects_venv(tmp_path):
+    """A domain in a subdirectory of its project -- `domains/toy` inside the
+    toolkit is one -- finds the venv at the repository root; the domain's own
+    venv still wins over it."""
+    init(tmp_path / "project" / "domains" / "d", name="d")
+    domain = tmp_path / "project" / "domains" / "d"
+    stub(tmp_path / "project", ".venv/bin/ar", "project")
+    done = run_shim(domain, "board")
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout)[:3] == ["project", "--domain",
+                                           str(domain.resolve())]
+    stub(domain, ".venv/bin/ar", "domain")
+    assert json.loads(run_shim(domain, "board").stdout)[0] == "domain"
+
+
 def test_arguments_pass_through_to_the_toolkit(root):
     stub(root, ".venv/bin/ar", "venv")
     done = run_shim(root, "--board", "x")
