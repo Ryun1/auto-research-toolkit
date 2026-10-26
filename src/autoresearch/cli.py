@@ -2420,9 +2420,10 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                      help="which queue this entry belongs to; no default, "
                           "because a forgotten track misfiles scaffolding as "
                           "research (H15)")
-    new.add_argument("--id")
-    new.add_argument("--hypothesis")
-    new.add_argument("--prediction")
+    new.add_argument("--id", help="explicit id (default: the track's next number)")
+    new.add_argument("--hypothesis", help="the claim that could be wrong")
+    new.add_argument("--prediction", help="what the measurement should show if "
+                                          "the hypothesis holds")
     new.add_argument("--bar", help="pre-registered confirm/refute criteria")
     new.add_argument("--why", help="why it is filed")
     new.add_argument("--gate", help="precondition on shippability, not on investigating")
@@ -2431,11 +2432,20 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                           "(a wiring check, a placeholder). Its run rows are "
                           "excluded from the frontier and named on the board "
                           "(sig.golf H4)")
-    new.add_argument("--confidence", type=float, default=0.5)
-    new.add_argument("--impact", type=float, default=0.0)
-    new.add_argument("--cost", type=float, default=1.0)
-    new.add_argument("--mechanism", action="append")
-    new.add_argument("--source", action="append")
+    new.add_argument("--confidence", type=float, default=0.5,
+                     help="prior that it confirms, 0-1 (default 0.5); "
+                          "calibration pulls it toward the observed rate")
+    new.add_argument("--impact", type=float, default=0.0,
+                     help="expected gain on the objective if it confirms "
+                          "(default 0)")
+    new.add_argument("--cost", type=float, default=1.0,
+                     help="expected runs to decide it (default 1); ranking "
+                          "divides by it and the run ceiling charges it")
+    new.add_argument("--mechanism", action="append",
+                     help="mechanism tag; repeat for several. Ranking, "
+                          "dead-direction exclusion and calibration route on them")
+    new.add_argument("--source", action="append",
+                     help="where the idea came from (path, URL, entry id); repeatable")
     new.add_argument("--parent", help="the entry this branches from; omit "
                                       "for a novel root")
     new.add_argument("--kind", help="branch intent: improve, debug or probe "
@@ -2450,7 +2460,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     new.add_argument("--observed", help="what actually happened")
     new.add_argument("--expected", help="what should have happened instead")
     new.set_defaults(func=cmd_entry_new)
-    show = esub.add_parser("show")
+    show = esub.add_parser("show", help="one entry as JSON: bar, claim, "
+                                        "result, gates")
     show.add_argument("id")
     show.add_argument("--history", action="store_true",
                       help="include the append-only history (default: the "
@@ -2458,8 +2469,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     show.set_defaults(func=cmd_entry_show)
     amend = esub.add_parser("amend", help="complete or correct evidence fields")
     amend.add_argument("id")
-    amend.add_argument("--title")
-    amend.add_argument("--hypothesis")
+    amend.add_argument("--title", help="correct the title")
+    amend.add_argument("--hypothesis", help="correct the hypothesis text")
     amend.add_argument("--core", help="core version the defect was observed on")
     amend.add_argument("--repro", help="command or path that demonstrates it")
     amend.add_argument("--observed", help="what actually happened")
@@ -2566,7 +2577,7 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                        help="every term must appear in a skill's name or "
                             "description (case-insensitive)")
     sfind.set_defaults(func=cmd_skill_find)
-    sshow = ssub.add_parser("show")
+    sshow = ssub.add_parser("show", help="print one skill's body")
     sshow.add_argument("name")
     sshow.set_defaults(func=cmd_skill_show)
     ssub.add_parser("check", help="validate every skill against the record"
@@ -2574,10 +2585,13 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     sdistil = ssub.add_parser("distil", help="run the distil phase once")
     sdistil.add_argument("--dry-run", action="store_true",
                          help="show what would be distilled; write nothing")
-    sdistil.add_argument("--max-usd", type=float, dest="max_usd")
-    sdistil.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain")
+    sdistil.add_argument("--max-usd", type=float, dest="max_usd",
+                         help="hard ceiling on model spend; defaults to policy.spend_ceiling")
+    sdistil.add_argument("--allow-paid-brain", action="store_true", dest="allow_paid_brain",
+                         help="authorize the built-in TypeSafe brain to spend API money "
+                              "for this run (otherwise domain.toml must set [brain] authorize_spend)")
     sdistil.set_defaults(func=cmd_skill_distil)
-    sretire = ssub.add_parser("retire")
+    sretire = ssub.add_parser("retire", help="delete one skill, with a reason")
     sretire.add_argument("name")
     sretire.add_argument("--why", required=True,
                          help="a skill removed without a reason is a skill that "
@@ -2586,22 +2600,29 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     claim = sub.add_parser("claim", help="take one entry (serialised)")
     claim.add_argument("id")
-    claim.add_argument("--why")
+    claim.add_argument("--why", help="what you intend to do; recorded in history")
     claim.add_argument("--budget", help="human-readable ceiling, recorded beside the numbers")
-    claim.add_argument("--max-runs", type=int, dest="max_runs")
-    claim.add_argument("--max-hours", type=float, dest="max_hours")
+    claim.add_argument("--max-runs", type=int, dest="max_runs",
+                       help="run ceiling for this claim (default budgets.claim_max_runs)")
+    claim.add_argument("--max-hours", type=float, dest="max_hours",
+                       help="wall-clock ceiling for this claim "
+                            "(default budgets.claim_wall_clock_hours)")
     claim.set_defaults(func=cmd_claim)
 
     rel = sub.add_parser("release", help="hand a claim back, with a reason")
     rel.add_argument("id")
-    rel.add_argument("--why", required=True)
+    rel.add_argument("--why", required=True,
+                     help="why it goes back; the next claimant reads it")
     rel.set_defaults(func=cmd_release)
 
     reap = sub.add_parser(
         "reap",
         help="repair an unowned in-progress record, or free ONE expired claim")
-    reap.add_argument("id", nargs="?")
-    reap.add_argument("--ttl-hours", type=float, dest="ttl_hours")
+    reap.add_argument("id", nargs="?",
+                      help="the entry to free; omit to list what is reapable")
+    reap.add_argument("--ttl-hours", type=float, dest="ttl_hours",
+                      help="silence after which a claim is reapable "
+                           "(default budgets.claim_ttl_hours)")
     reap.set_defaults(func=cmd_reap)
 
     close = sub.add_parser("close", help="close, reopen or relabel an entry")
@@ -2614,7 +2635,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                             "named with a scheme (https://..., hosted:<id>). The relation is recorded "
                             "in that entry's `supersedes`, so retirement "
                             "always names its replacement (H15)")
-    close.add_argument("--summary")
+    close.add_argument("--summary", help="the numbers and the arithmetic to the "
+                                         "verdict, in a sentence or two")
     close.add_argument("--closure", choices=sorted(CLOSURE_KINDS),
                        help="how far a refutation reaches")
     close.add_argument("--reopen-condition", dest="reopen_condition",
@@ -2627,9 +2649,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                        help="for a confirmed close, list tamper-shaped hunks "
                             "in the diff since this revision (default HEAD: "
                             "uncommitted changes) (#39)")
-    close.add_argument("--why")
-    close.add_argument("--reopen", action="store_true")
-    close.add_argument("--relabel", choices=sorted(CLOSURE_KINDS))
+    close.add_argument("--why", help="reason recorded in history (needed to "
+                                     "reopen, relabel or correct a closure)")
+    close.add_argument("--reopen", action="store_true",
+                       help="put a closed entry back in the queue")
+    close.add_argument("--relabel", choices=sorted(CLOSURE_KINDS),
+                       help="change a refutation's closure kind without reopening")
     close.add_argument("--evidence-class", dest="evidence_class",
                        choices=sorted(EVIDENCE_CLASSES),
                        help="which evidence class backs this closure. No "
@@ -2640,7 +2665,7 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     close.set_defaults(func=cmd_close)
 
     meas = sub.add_parser("measure", help="run the domain's measurement, record the row")
-    meas.add_argument("--entry")
+    meas.add_argument("--entry", help="the claimed entry this run is charged to")
     meas.add_argument("--candidate", type=pathlib.Path,
                       help="a workspace slot to measure: the command, policy "
                            "and evaluator come from this domain, the tree "

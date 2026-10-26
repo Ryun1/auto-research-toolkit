@@ -416,19 +416,29 @@ def _command(args):
 def register_parser(subparsers):
     parser = subparsers.add_parser("external", help="bounded native coordinator handoff; no model dispatch")
     subs = parser.add_subparsers(dest="external_action", required=True)
+    helps = {"assign": "reserve runs and export a workspace for a claimed entry",
+             "complete": "settle an assignment from a worker report: harvest, then verdict",
+             "cancel": "abandon an assignment; its evidence is retained",
+             "show": "one assignment record, as JSON",
+             "reap": "free an expired assignment held by another session",
+             "list": "open assignments (all sessions)"}
     for action in ("assign", "complete", "cancel", "show", "reap", "list"):
-        child = subs.add_parser(action)
+        child = subs.add_parser(action, help=helps[action])
         if action == "list":
             child.add_argument("--all", action="store_true",
                                help="include settled and cancelled assignments")
         elif action == "assign":
-            child.add_argument("--entry", required=True)
-            child.add_argument("--timeout", type=float, required=True)
-            child.add_argument("--max-runs", type=int, required=True)
+            child.add_argument("--entry", required=True, help="the claimed entry")
+            child.add_argument("--timeout", type=float, required=True,
+                               help="seconds the worker has")
+            child.add_argument("--max-runs", type=int, required=True,
+                               help="runs reserved for this assignment")
         else:
             child.add_argument("id")
         if action == "complete":
-            child.add_argument("--report", required=True)
+            child.add_argument("--report", required=True,
+                               help="path to the worker's JSON report "
+                                    "(the worker output contract)")
         if action == "cancel":
             child.add_argument("--reason", required=True,
                                help="why the assignment is abandoned; recorded on the row")

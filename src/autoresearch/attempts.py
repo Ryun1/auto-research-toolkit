@@ -615,23 +615,29 @@ def _command(args):
 
 def register_parser(subparsers):
     parser = subparsers.add_parser("exec", help="bounded shell-free execution (not a sandbox)")
-    parser.add_argument("--entry", required=True)
-    parser.add_argument("--timeout", type=float, required=True)
-    parser.add_argument("argv", nargs=argparse.REMAINDER)
+    parser.add_argument("--entry", required=True, help="the claimed entry this run is charged to")
+    parser.add_argument("--timeout", type=float, required=True, help="seconds before the run is killed")
+    parser.add_argument("argv", nargs=argparse.REMAINDER, help="the command, run without a shell")
     parser.set_defaults(func=_command, command="exec")
     parser = subparsers.add_parser("attempt", help="inspect persistent execution reservations")
     subs = parser.add_subparsers(dest="attempt_action", required=True)
+    helps = {"list": "every attempt record, problem and tombstone, as JSON",
+             "show": "one attempt record, as JSON",
+             "checkpoint": "append a note; with --confirm-inactive, cancel an abandoned attempt",
+             "reconcile": "archive an invalid record behind a tombstone stating its spend"}
     for name in ("list", "show", "checkpoint", "reconcile"):
-        child = subs.add_parser(name)
+        child = subs.add_parser(name, help=helps[name])
         if name not in ("list",):
             child.add_argument("id")
         if name == "checkpoint":
-            child.add_argument("--note", required=True)
-            child.add_argument("--confirm-inactive", action="store_true")
+            child.add_argument("--note", required=True, help="recorded on the attempt")
+            child.add_argument("--confirm-inactive", action="store_true",
+                               help="attest the owner is not running; cancels the "
+                                    "attempt (PID age alone never proves it)")
         if name == "reconcile":
             child.add_argument("--charged-runs", type=int, required=True,
                                help="runs this attempt consumed and is not counted "
                                     "anywhere else; 0 is a real answer when you can "
                                     "confirm it, never a default")
-            child.add_argument("--reason", required=True)
+            child.add_argument("--reason", required=True, help="recorded on the tombstone")
         child.set_defaults(func=_command, command="attempt")

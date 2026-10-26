@@ -111,13 +111,19 @@ def _command(args):
 def register_parser(subparsers):
     parser = subparsers.add_parser("gates", help="configure and record acceptance evidence")
     actions = parser.add_subparsers(dest="gates_action", required=True)
+    helps = {"configure": "attach the track's declared gates to a claimed entry",
+             "update": "set one gate's state, with evidence (claim required)",
+             "show": "an entry's gates and their readiness, as JSON"}
     for action in ("configure", "update", "show"):
-        command = actions.add_parser(action)
+        command = actions.add_parser(action, help=helps[action])
         command.add_argument("id")
         if action != "show":
-            command.add_argument("--why", required=True)
+            command.add_argument("--why", required=True,
+                                 help="reason recorded in the entry's history")
         if action == "update":
-            command.add_argument("name")
+            command.add_argument("name", help="the gate to update")
             command.add_argument("--state", choices=STATES, required=True)
-            command.add_argument("--evidence", action="append")
+            command.add_argument("--evidence", action="append",
+                                 help="path or note backing the state; repeatable "
+                                      "(`passed` requires at least one)")
         command.set_defaults(func=_command)
