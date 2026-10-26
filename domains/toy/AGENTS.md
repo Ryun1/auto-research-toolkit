@@ -7,8 +7,8 @@ through the `ar` verbs. There is no coordinator process to wait for.
 macOS). Start every session with the board:
 
     bin/ar board         # goal, distance to target, queues, live claims
-    bin/ar rank          # why the queue is ordered the way it is
-    bin/ar entry list    # the entries themselves
+    bin/ar rank          # why the queue is ordered the way it is (--all: every row)
+    bin/ar entry list    # the open entries (--all: closed ones too)
     bin/ar budget        # every meter, and the stop decision
 
 The record draws its own map: `bin/ar entry graph` prints the hypothesis tree

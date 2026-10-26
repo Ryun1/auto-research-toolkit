@@ -1090,6 +1090,17 @@ def cmd_entry_list(args):
         print(json.dumps([_entry_row(e) for e in entries], indent=2))
         return 0
     print(f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} read")
+    if not args.status and not args.all:
+        # The table is what a session reads to pick work, and on a mature
+        # record nearly every row is closed: 1,542 rows (~167 KB) around a
+        # few dozen open ones. A filter the reader asked for is honoured
+        # as given; otherwise closed entries are counted, not listed.
+        shown = [e for e in entries
+                 if not config.track_for(e.id).machine.status(e.status).terminal]
+        if len(shown) < len(entries):
+            print(f"  ({len(entries) - len(shown)} terminal not listed -- "
+                  "`--all` or `--status STATUS` lists them)")
+        entries = shown
     for e in entries:
         held = f" [{e.claim.session}]" if e.claim else ""
         print(f"  {e.id:6} {e.status:12}{held:24} {e.title[:70]}")
@@ -2515,9 +2526,14 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                          help="a re-price without a reason is a guess moving "
                               "the ranking")
     reprice.set_defaults(func=cmd_entry_reprice)
-    lst = esub.add_parser("list")
-    lst.add_argument("--status", action="append")
-    lst.add_argument("--track")
+    lst = esub.add_parser("list", help="one line per entry: id, status, "
+                                        "holder, title (open entries by default)")
+    lst.add_argument("--status", action="append",
+                     help="only this status; repeat for several")
+    lst.add_argument("--track", help="only this track")
+    lst.add_argument("--all", action="store_true",
+                     help="list terminal entries in the table too (--json "
+                          "always carries every entry)")
     lst.add_argument("--json", action="store_true",
                      help="print the pick-work projection (no history, no "
                           "prose) as JSON")

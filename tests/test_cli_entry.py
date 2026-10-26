@@ -282,3 +282,23 @@ def test_entry_new_moves_past_a_number_another_session_just_took(
     assert _ar(sandbox, "entry", "new", "mine", "--track", "research") == 0
     assert store.load(taken[0]).title == "theirs"
     assert [e.title for e in store.all()] == ["theirs", "mine"]
+
+
+def test_list_table_shows_open_entries_and_counts_the_closed(sandbox, store, capsys):
+    """The table is what a session reads to pick work; on a mature record it
+    was 1,542 rows around a few dozen open ones. A status filter is honoured
+    as given, `--all` is the full table, and `--json` stays complete."""
+    close(sandbox, store, make_entry(store, "Q1"))
+    make_entry(store, "Q2")
+    assert _ar(sandbox, "entry", "list") == 0
+    out = capsys.readouterr().out
+    assert "2 entries read" in out and "1 terminal not listed" in out
+    assert "Q2" in out and "Q1 " not in out
+    assert _ar(sandbox, "entry", "list", "--all") == 0
+    assert "Q1 " in capsys.readouterr().out
+    assert _ar(sandbox, "entry", "list", "--status", "confirmed") == 0
+    out = capsys.readouterr().out
+    assert "Q1 " in out and "not listed" not in out
+    assert _ar(sandbox, "entry", "list", "--json") == 0
+    assert [r["id"] for r in json.loads(capsys.readouterr().out)] == ["Q1", "Q2"]
+
