@@ -18,8 +18,13 @@ if [ -z "$subject" ]; then
   exit 1
 fi
 
-if [ "${#subject}" -gt 88 ]; then
-  echo "commit-msg: subject exceeds 88 chars (got ${#subject}):" >&2
+# Characters, not bytes: bash's ${#subject} counts bytes under a C locale, so
+# an em-dash cost three. Python decodes argv as UTF-8 (PEP 538/540 coerce the C
+# locale), and a missing python3 falls back to bash's count.
+length="$(python3 -c 'import sys; print(len(sys.argv[1]))' "$subject" 2>/dev/null \
+  || echo "${#subject}")"
+if [ "$length" -gt 88 ]; then
+  echo "commit-msg: subject exceeds 88 chars (got $length):" >&2
   echo "  $subject" >&2
   exit 1
 fi
