@@ -75,6 +75,7 @@ class Score:
     terms: dict = field(default_factory=dict)
     excluded: str | None = None      # the hard filter that removed it, if any
     novel: bool = False              # a root branch: no parent, new territory
+    mechanisms: tuple = ()           # the entry's tags: which calibration rows matter
 
     def explain(self) -> str:
         if self.excluded:
@@ -133,7 +134,16 @@ class Ranking:
         picks = novel[:n_novel] + incumbent[:n_incumbent]
         return sorted(picks, key=lambda s: -s.score)
 
-    def explain(self) -> str:
+    def explain(self, full: bool = False) -> str:
+        """The table a human corrects, sized for the decision in front of it.
+
+        On a mature record nearly every exclusion is a closed entry and nearly
+        every calibration row is a tag no candidate carries: on a 1,542-entry
+        domain the full dump was 3,500 lines (~50k tokens) around 32 candidates,
+        and every agent session starts by reading it. By default closed entries
+        collapse to one count per status and calibration shows only the tags
+        the candidates carry; `full` lists every row.
+        """
         out = [f"ranked {len(self.scored)} candidate(s), "
                f"excluded {len(self.excluded)}"]
         out += ["", "score = confidence x impact / cost x staleness x overlap"]
@@ -144,14 +154,40 @@ class Ranking:
         out += [""]
         out += ["  " + s.explain() for s in self.scored]
         if self.excluded:
+            closed: dict[str, int] = {}
+            listed = []
+            for s in self.excluded:
+                status = _terminal_status(s.excluded)
+                if status is None or full:
+                    listed.append(s)
+                else:
+                    closed[status] = closed.get(status, 0) + 1
             out += ["", "excluded by hard filter:"]
-            out += ["  " + s.explain() for s in self.excluded]
+            out += ["  " + s.explain() for s in listed]
+            if closed:
+                counts = ", ".join(f"{n} {status}" for status, n in
+                                   sorted(closed.items(), key=lambda kv: -kv[1]))
+                out += [f"  {sum(closed.values())} terminal entries ({counts}) "
+                        "-- `ar rank --all` lists them"]
         if self.calibration:
+            relevant = {m for s in self.scored for m in s.mechanisms}
+            rows = sorted(self.calibration.items())
+            shown = rows if full else [(m, v) for m, v in rows if m in relevant]
             out += ["", "calibration (confirm rate by mechanism, from history):"]
-            out += [f"  {m:28} {v['rate']:.2f}  (n={v['n']})"
-                    for m, v in sorted(self.calibration.items())]
+            out += [f"  {m:28} {v['rate']:.2f}  (n={v['n']})" for m, v in shown]
+            if len(shown) < len(rows):
+                out += [f"  (+{len(rows) - len(shown)} mechanism(s) no candidate "
+                        "carries -- `ar rank --all` shows every row)"]
         out += ["  " + n for n in self.notes] if self.notes else []
         return "\n".join(out)
+
+
+def _terminal_status(reason: str | None) -> str | None:
+    """The status named by a terminal exclusion, or None for any other filter."""
+    prefix = "terminal ("
+    if reason and reason.startswith(prefix) and ")" in reason:
+        return reason[len(prefix):reason.index(")")]
+    return None
 
 
 def calibrate(entries, machine_for, candidate=None) -> dict:
@@ -257,7 +293,8 @@ def rank(entries, config, *, prior_weight: float = 3.0,
     scored, excluded = [], []
     for entry in entries:
         machine = machine_for(entry.id)
-        card = Score(entry_id=entry.id, title=entry.title)
+        card = Score(entry_id=entry.id, title=entry.title,
+                     mechanisms=tuple(entry.mechanisms))
 
         # -- hard filters, in the order a human would apply them ----------
         if machine.status(entry.status).terminal:

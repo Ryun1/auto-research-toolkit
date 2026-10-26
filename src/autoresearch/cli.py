@@ -1574,7 +1574,7 @@ def cmd_rank(args):
             "remaining": remaining if math.isfinite(remaining) else None,
         }, indent=2))
         return 0
-    print(ranking.explain())
+    print(ranking.explain(full=args.all))
     if args.top:
         print(f"\nshortlist (top {args.top}):")
         for s in shortlist:
@@ -2349,7 +2349,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                    ).set_defaults(func=cmd_policy)
 
     rankp = sub.add_parser("rank", help="score the queue and explain the numbers")
-    rankp.add_argument("--top", type=int, default=3)
+    rankp.add_argument("--top", type=int, default=3,
+                       help="size of the shortlist printed last (default 3)")
+    rankp.add_argument("--all", action="store_true",
+                       help="list every terminal exclusion and every calibration "
+                            "row; by default closed entries are counted and "
+                            "calibration shows only the candidates' tags")
     rankp.add_argument("--json", action="store_true",
                        help="print the ranking, shortlist and exclusions as JSON")
     rankp.add_argument("--risk", type=float, default=None, metavar="R",

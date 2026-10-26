@@ -348,3 +348,38 @@ def test_newly_scoped_closure_does_not_hide_later_matching_closure(sandbox, stor
     assert "Q2" in next(card.excluded for card in ranking.excluded if card.entry_id == "Q3")
 
 
+
+
+def test_explain_counts_closed_entries_and_lists_what_still_matters(sandbox, store):
+    """On a 1,542-entry record `ar rank` printed 3,528 lines around 32
+    candidates: one per closed entry and one calibration row per tag ever
+    used. The default table counts closed entries by status and shows the
+    calibration rows the candidates carry; `full` is the old dump."""
+    close(store, "Q1", "refuted", kind="cell", mechanisms=["old"], reopen="r")
+    close(store, "Q2", "refuted", kind="cell", mechanisms=["live"], reopen="r")
+    close(store, "Q3", "confirmed", mechanisms=["old"])
+    make_entry(store, "Q4", impact=1.0, mechanisms=["live"])
+    make_entry(store, "Q5", status="blocked")
+    r = rank(store.all(), sandbox)
+
+    short = r.explain()
+    assert "3 terminal entries (2 refuted, 1 confirmed)" in short
+    assert "Q1     EXCLUDED" not in short
+    assert "Q5     EXCLUDED  not claimable from 'blocked'" in short
+    assert "  live " in short and "  old " not in short
+    assert "+1 mechanism(s) no candidate carries" in short
+
+    full = r.explain(full=True)
+    assert "Q1     EXCLUDED  terminal (refuted)" in full
+    assert "  old " in full and "terminal entries (" not in full
+
+
+def test_rank_all_flag_prints_the_full_table(sandbox, store, capsys):
+    from autoresearch import cli
+    close(store, "Q1", "refuted", kind="cell", reopen="r")
+    make_entry(store, "Q2", impact=1.0)
+    root = ["--domain", str(sandbox.paths.root)]
+    assert cli.main([*root, "rank"]) == 0
+    assert "1 terminal entries (1 refuted)" in capsys.readouterr().out
+    assert cli.main([*root, "rank", "--all"]) == 0
+    assert "Q1     EXCLUDED  terminal (refuted)" in capsys.readouterr().out

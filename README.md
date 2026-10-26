@@ -294,7 +294,8 @@ ar hardware    what this machine is, what it can run, and what it cannot
 ar escalate    whether to rent compute, which class, and the arithmetic
 ar board       one screen: goal, distance to target, queues, live claims, measurements
 ar rank        score the queue and show the numbers it ranked on
-               (--risk R overrides the domain's novel-branch dial)
+               (--risk R overrides the domain's novel-branch dial; closed
+               entries are counted, not listed, unless --all)
 ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar skill       list, find, show, check, distil and retire the domain's skills

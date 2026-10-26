@@ -63,7 +63,7 @@ def seam_ranking(config, ranking, entries, risk: float):
                        # seam that dropped it would silently meter every card
                        # at the 1-run default.
                        terms={"domain": by_id[e.id]["reason"], "cost": e.cost},
-                       novel=e.parent == "")
+                       novel=e.parent == "", mechanisms=tuple(e.mechanisms))
         for e in claimable]
     scored.sort(key=lambda s: -s.score)
     return rank_mod.Ranking(
