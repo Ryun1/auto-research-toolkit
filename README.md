@@ -4,8 +4,8 @@ A domain-agnostic harness for running autonomous research loops: typed goals,
 structured hypothesis state, ranked selection, a coordinator that dispatches
 parallel workers, and budgets that actually stop things.
 
-It is extracted from a harness that drove **271 hypotheses to 257 verdicts in
-eight days** on one problem, and — more usefully — filed **143 defects against
+It is extracted from a harness that drove **270 hypotheses to 258 verdicts in
+eight days** on one problem, and — more usefully — filed **142 defects against
 itself** in the same period, with dates and evidence. Those defects are the
 design input. `docs/EVALUATION.md` classifies all of them and says what each one
 becomes here.
@@ -42,8 +42,10 @@ flowchart LR
     s -->|"target met · budget spent · yield floor"| stop(["stop"])
 ```
 
-Every phase is metered. Generation runs *every* iteration, concurrently with the
-work, so the queue never starves. Ranking is a formula over recorded numbers that
+Every phase is metered. Generation runs every iteration, before rank and
+dispatch, so the queue is refilled before it is drawn from; only the
+iteration's wall-clock ceiling skips it, and a skipped phase is recorded with
+its reason. Ranking is a formula over recorded numbers that
 a judge may reorder but not overrule, with a configured share of every
 shortlist (`risk`) spent on novel branches — entries with no `parent` — so
 the loop can still attempt a big swing, and still open a direction it has
@@ -210,9 +212,12 @@ ranking, not the stop decision:
 ## Install
 
 ```bash
-pip install -e .
-ar --domain domains/toy board
+uv sync                      # or: python -m venv .venv && .venv/bin/pip install -e .
+uv run ar --domain domains/toy board
 ```
+
+Either path leaves the toolkit in `.venv/`, which is where the repository's git
+hooks look for it. `CONTRIBUTING.md` has the development setup.
 
 ## Start a new research project
 
@@ -269,7 +274,8 @@ file ships where agents look first.
 host, the interpreter and a hash of `bin/measure` — not the core version. So if
 ranking or closure semantics move under you mid-project, nothing in the corpus
 says which core produced which decision. Replace the `@main` above with a tag or
-a commit SHA, or commit a lockfile, and bump deliberately. An editable install
+a commit SHA, or commit a lockfile, and bump deliberately —
+[CHANGELOG.md](CHANGELOG.md) says what each version changes. An editable install
 against a local checkout is fine while the two are developed together — then the
 pin is a SHA the project records.
 
@@ -300,7 +306,9 @@ ar budget      every meter, and the stop decision
 ar loop        run the coordinator until it stops
 ar skill       list, find, show, check, distil and retire the domain's skills
 ar entry       file, show, amend, reprice and list entries
-               (entry graph: the hypothesis tree as a mermaid diagram)
+               (entry graph: the hypothesis tree as a mermaid diagram;
+               entry collisions REF: ids this branch and REF both filed or
+               changed since they diverged, exit 1 if any)
 ar claim       take one entry (serialised, always with a ceiling); prints
                the token that proves the claim is yours (--claim-token)
 ar release     hand a claim back, with a reason
@@ -309,9 +317,9 @@ ar close       close, reopen, or relabel a closure
 ar measure     run the domain's measurement and record the row
 ar epochs      the ledger's measurement epochs; closures pinned to a superseded one
 ar promote     release a suspect row onto the frontier (a person's call)
-ar holdout     consult the held-out check on the current best config
+ar holdout     consult the held-out check on the current best config (check)
 ar research    spin up targeted research agents; their ideas land in the record
-ar harness     check for and pull the latest core; export defects upstream
+ar harness     check for and update to the latest core; export defects upstream
 ar doctor      which core answered, and whether it meets the domain's floor
 ar migrate     convert an existing prose corpus into records (one way)
 ar render      write the generated queue views (--install-merge-driver: merges
@@ -320,13 +328,15 @@ ar validate    check records, views, runs and policy
 ar policy      show the never-rules and prove each refuses something
 ar exec         reserve and run one bounded local command under a live claim
 ar attempt      execution ledger: list, show, checkpoint, reconcile
-ar external     assign work to an external coordinator, settle or cancel it
+ar external     hand one claimed entry to an external agent: assign, complete,
+                cancel, show, list (open assignments, all sessions), reap
+                (free an expired assignment another session holds)
 ar challenge    the public challenge's shared intel: pull, show, check, target
 ar usage        record, list and price out-of-band spend
 ar gates        per-entry acceptance gates: configure, update, show
 ar evidence     portable integrity-only evidence bundles: pack, verify, import
 ar relocate     move oversized inbox evidence into the findings lane, rewriting every recorded pointer
-ar workspace    inspect or archive an abandoned workspace slot
+ar workspace    inspect or recover (archive) an abandoned workspace slot
 ar session      persistent worktree sessions for hand-driven work: create, destroy, prune
 ```
 
@@ -401,9 +411,12 @@ relation is recorded in the replacement's own `supersedes` (H15).
 
 **The record is correctable in place.** `ar entry amend` reaches the fields
 that make a record a record, not only its prose: `--parent` (through the same
-`tree.py` gate a filing runs), `--kind`, and `--source`/`--mechanism`, which
+`tree.py` gate a filing runs), and `--source`/`--mechanism`, which
 *add* rather than replace, because a blind full-value write on a list is how
-one session's sources silently lose another's. Every amendment records the
+one session's sources silently lose another's. Removal is its own verb:
+`--drop-source`/`--drop-mechanism` name the one value to take out, and a value
+that is not there is refused rather than ignored. A branch's `--kind` is set
+at filing (`ar entry new`) and has no amend path. Every amendment records the
 value it replaced, so a concurrent correction is visible in history instead of
 only in a session's notes. The filing-time fields are writers too:
 `--prediction`, `--bar` and `--why-filed` correct what an entry promised
@@ -640,7 +653,9 @@ iteration number is refused before any phase runs.
 Each comes from a failure class in `docs/EVALUATION.md`, and each has a test.
 
 1. **One record per entry; every document is generated.** A hand-edited view is a
-   validation failure, not a divergence found four hours later. **One declared
+   validation failure, not a divergence found four hours later (a tree several
+   sessions work at once may take it as a warning: `[render] stale_views =
+   "warning"`). **One declared
    exception:** a *skill* is model prose and cannot be byte-identical to a
    re-render, so it is a third category — cited-and-checked prose. Its
    compensating control is that every claim names the entry behind it and
@@ -673,7 +688,8 @@ must not be indistinguishable from one that read nothing.
 
 A verdict is a record. A *skill* is what the next agent should have known before
 it started, and the two are not the same artefact. The corpus this core came
-from grew thirteen hand-written guides — 2,730 lines — at which point "read the
+from grew thirteen hand-written guides — 2,730 lines of `SKILL.md`, 4,190 with
+the instrument READMEs and references beside them — at which point "read the
 guides" is either a full-corpus read in every brief or a guess, and it grew a
 separate tool whose only job was failing the build when a guide quoted a number
 the record had since moved. Both mechanisms are core now, per project.
@@ -794,13 +810,13 @@ The other half of the loop: fixes made upstream have to be easy enough to take
 that "bump deliberately" actually happens instead of decaying into "pin
 forever, drift silently."
 
-**Upgrading from 0.1.x to 0.2.0 is a breaking release for `domain.toml`** —
-the ranking reserves were replaced by the tree and the risk dial, and a
-domain carrying the old keys forward is refused at load. Read
-[docs/MIGRATION.md](docs/MIGRATION.md) before taking the update; the
-one-line version is: delete `explore_fraction`/`coverage_fraction`, set
-`[coordinator] risk = 0.5` (or your stance), and everything else is
-additive.
+**Read before you bump.** [CHANGELOG.md](CHANGELOG.md) lists what each
+version changed; [docs/MIGRATION.md](docs/MIGRATION.md) says what a domain has
+to edit to take an upgrade, version by version. 0.2.0 is the shape to expect:
+it replaced the ranking reserves with the tree and the risk dial, and a
+`domain.toml` still carrying `explore_fraction`/`coverage_fraction` is refused
+at load, naming the migration, rather than silently ranked by the new default.
+Delete the keys and set `[coordinator] risk` (default `0.5`) to your stance.
 
 ```
 $ ar harness check
@@ -1051,22 +1067,13 @@ command can no longer freeze the iteration while the wall-clock meter runs.
 ## Plugins: a declared seam for domain tooling
 
 Domains grow tooling the core has no home for — a GPU dev-loop, an evidence
-adaptor, a leaderboard probe. Before now the only route was composing the
-toolkit's own parser privately, which is an undeclared seam every domain
-re-invents differently. Declare it instead:
-
-```toml
-# domain.toml
-plugins = ["qsbtools"]
-```
-
-Each name is an importable module resolved with the domain root on `sys.path`,
-exposing `register_cli(subparsers, config)`. Its subcommands appear on `ar`
-and run through the same policy engine, meters and record as every core verb —
-because they are written against core functions, not around them. The honest
-boundary: the core refuses a plugin that does not declare the contract; it
-cannot prove a plugin never bypasses the record, and a plugin that does is
-forking by other means.
+adaptor, a leaderboard probe. `plugins = ["qsbtools"]` in `domain.toml` names
+modules, imported with the domain root on `sys.path`, that expose
+`register_cli(subparsers, config)`; their subcommands appear on `ar` and run
+through the same policy engine, meters and record as every core verb. The core
+refuses a plugin that does not declare the contract, but cannot prove one never
+bypasses the record — a plugin that does is forking by other means. The
+contract is in [docs/native-driver.md](docs/native-driver.md#extending-the-cli-plugins).
 
 ## Bounded execution and external coordination
 
@@ -1083,9 +1090,11 @@ Two verbs make an execution budget real rather than declarative:
   stable assignment identity, an explicit scope and ceiling, and a receipt.
   `complete` settles through the same ownership checks and evidence retention
   as an in-loop worker; `cancel` recovers the assignment and preserves
-  unharvested evidence. This is a handoff protocol, not a sandbox: policy
-  checking and human-only gates are unchanged, and the coordinator that
-  dispatches the work remains responsible for what it dispatches.
+  unharvested evidence; `list` shows open assignments across sessions and
+  `reap` frees an expired one another session holds. This is a handoff
+  protocol, not a sandbox: policy checking and human-only gates are
+  unchanged, and the coordinator that dispatches the work remains
+  responsible for what it dispatches.
 - **Workers measure from the primary checkout.** A worker's brief (and an
   external assignment's `record_command`) runs `ar --domain <primary>
   measure --candidate <slot>`: the measure command, `[policy]` and the
@@ -1113,44 +1122,27 @@ Two verbs make an execution budget real rather than declarative:
 
 ### Native dispatch: the loop hands off, native agents do the work
 
-`[coordinator] dispatch = "native"` makes the loop's dispatch phase reserve one
-bounded external assignment per shortlisted card — the same claim, run ceiling,
-wall clock and workspace a core worker would get — and then stop the iteration
-there (`stop: native-handoff`), printing a manifest of what to pick up. No
-model runs in the coordinator's process: the surrounding harness runs its own
-subagents, which settle each assignment with `ar external complete --report`,
-and the next `ar loop` invocation's orient sees the applied verdicts. The
-judgement roles (generate, judge, curate, distil, qc) still run through
-whatever backend `[brain]` routes them to — route them to commands, or let the
-parent file entries and prices itself. This is the answer to a real failure:
-the unattended path must never reach for API spend nobody has approved — the
-loop refuses to start without an explicitly named brain, and paid backends
-stay fail-closed. The full no-coordinator shape — claims, meters,
-sessions and plugins for hand-driven work — is documented in
-`docs/native-driver.md`.
+`[coordinator] dispatch = "native"` keeps the loop's ranking, claims and meters
+and moves the work out of its process: dispatch reserves one bounded external
+assignment per shortlisted card, the iteration stops with
+`stop: native-handoff`, and `ar loop` prints a manifest for the surrounding
+harness's subagents, which settle each assignment with `ar external complete`.
+No model runs in the coordinator for the work, so the unattended path never
+reaches for API spend nobody approved. What is charged, what is skipped and
+how a settlement lands are in
+[docs/native-driver.md](docs/native-driver.md#native-dispatch-the-loop-ranks-native-agents-work).
 
 ### Out-of-band spend is metered too: `ar usage`
 
-A spender the brain's cost file never sees — a curator's decision API, a
-hand-paid GPU rental — is invisible to a money ceiling, and a ceiling that
-cannot see a spender is not a ceiling. `ar usage record --tool jev --kind api
---cost 0.42 --session s --note "why"` appends a row to `state/usage.jsonl`
-(committed with the corpus, like every meter), and `ar budget` sums it into
-the campaign money ceiling. `--unknown` records spend whose price is not
-knowable yet: unknown is never free, and a finite ceiling refuses further
-spend until `ar usage reconcile <lineno> --cost N --session s` prices the row
-by appending a correction. Rows feed the ceiling, so a malformed row is a named refusal,
-never a silent skip.
-
-And one more verb for the execution ledger: `ar attempt reconcile <id>
---charged-runs N --reason ...` archives an attempt record the meter cannot
-trust (a legacy-schema row, for instance) behind a tombstone whose digest pins
-the preserved bytes. The record's spend is asserted by the operator, never
-inferred — truthful zero is a real answer, stated not defaulted — and the
-assertion feeds the campaign ceiling exactly as stated. Until reconciled, the
-invalid record refuses metered commands by name; `ar attempt list` reports it
-instead of dying, because a ledger one legacy row bricks is a ledger nobody
-can even enumerate to fix.
+A spender the brain's cost file never sees — an outer harness's model calls, a
+hand-paid GPU rental — is invisible to a money ceiling unless recorded.
+`ar usage record` appends a row to `state/usage.jsonl`, which `ar budget` sums
+into the campaign money ceiling; `--unknown` records spend not yet priced, and
+since unknown is never free, a finite ceiling refuses further spend until
+`ar usage reconcile` prices it. `ar attempt reconcile` is the execution
+ledger's counterpart: it archives an attempt record the meter cannot trust
+behind a tombstone, with the operator stating its spend. Both are in
+[docs/native-driver.md](docs/native-driver.md#out-of-band-spend-ar-usage).
 
 ## Portable evidence bundles
 
@@ -1161,6 +1153,7 @@ import` validates the whole bundle and atomically retains it under a
 content-addressed path, idempotently and without manufacturing run records.
 The manifest proves integrity of the bytes it names — never trusted origin,
 executed identity, or ranked eligibility.
+
 ## Roles
 
 Prompt per role in `src/autoresearch/agents/`, dispatched by the coordinator:
@@ -1204,7 +1197,7 @@ here says whether a model writes a *good* skill. The offline loop is
 proven; the model-in-the-loop path is not.
 
 `docs/ARCHITECTURE.md` draws the same picture in more detail: the three
-layers, the eight phases, what each role may and may not do, the entry
+layers, the seven phases, what each role may and may not do, the entry
 lifecycle, and the worker pool.
 
 `docs/EVALUATION.md` carries the harness critique this was built from, plus an

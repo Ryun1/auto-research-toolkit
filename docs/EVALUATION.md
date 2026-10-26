@@ -5,9 +5,15 @@ says about why.*
 
 Method: read every tool in `bin/` (24 executables, 7,165 lines), the two work queues,
 the runbooks and architecture notes, the 13 guides, and — the most valuable artefact in
-the repository — all 143 entries of `docs/log/Harness Debt.md`, which is a candid,
+the repository — all 142 entries of `docs/log/Harness Debt.md`, which is a candid,
 dated, evidence-backed log of this harness failing at itself. Where a claim below has a
 number, it came from the record, not from an impression.
+
+Paths such as `bin/…`, `guides/…`, `tests/`, `inbox/`, `config/project.toml`,
+`docs/log/…` and `schemas/run-v1` name files in the source harness — the ECDSA Fail
+repository `Ryun1/auto-research` — not in this toolkit. Unless a figure says otherwise,
+it is taken at that repository's commit `60687be3` (2026-08-31, the 2,129th commit), the
+snapshot the migration below also ran on.
 
 ---
 
@@ -18,21 +24,26 @@ number, it came from the record, not from an impression.
 | Elapsed | 2026-08-23 → 2026-08-31 (8 days) |
 | Commits | 2,129 |
 | Distinct agent sessions | 92 |
-| Hypotheses filed | 271 — 151 refuted, 106 confirmed, 7 queued, 6 blocked |
-| Harness defects filed | 143 — 134 fixed, 6 queued, 3 wontfix |
+| Hypotheses filed | 270 — 152 refuted, 106 confirmed, 6 queued, 6 blocked |
+| Harness defects filed | 142 — 134 fixed, 5 queued, 3 wontfix |
 | Inbox memos | 918 files, 98,355 lines |
 | Docs | 20,653 lines, of which the four append-only logs are 18,274 |
-| Tooling | `bin/` 7,165 lines; `tests/` 7,460 lines; `guides/` 4,190 lines |
+| Tooling | `bin/` 7,165 lines; `tests/` 7,460 lines; `guides/` 4,190 lines of markdown (the 13 `SKILL.md` files are 2,730 of them) |
+
+An earlier version of this table said 271 hypotheses and 143 defects: it counted every
+`## Q…` and `## H…` heading, and each log's *Entry template* section carries one
+(`## Qnn — <short name>`, `## Hnn — <short name>`) with a `queued` status line. The
+figures above count entries only, and agree with the migration's 412 = 270 + 142.
 
 Two of these deserve to be read together.
 
-**257 hypotheses reached a verdict in eight days.** That is a working research loop, and
+**258 hypotheses reached a verdict in eight days.** That is a working research loop, and
 the loop is the thing worth generalising. Very little agent scaffolding gets this far.
 
-**143 harness defects in the same eight days, against 7,165 lines of tooling.** That is
+**142 harness defects in the same eight days, against 7,165 lines of tooling.** That is
 roughly one filed defect per 50 lines of `bin/`. The scaffolding was, by volume of
 recorded work, competitive with the research as a consumer of agent time. This is not an
-indictment — a harness that *notices* 143 of its own defects is far ahead of one that
+indictment — a harness that *notices* 142 of its own defects is far ahead of one that
 notices none. But it is the central design input for the core: **the failure classes are
 knowable in advance, and most of them are structural rather than incidental.**
 
@@ -56,7 +67,7 @@ opinion into a claim with a stated re-open condition. **Port exactly, including
 `--relabel` and `--reopen`.**
 
 **Never-delete, append-only results.** A refutation is a result, and it is the thing
-agents most reliably lose. 151 of 271 verdicts here are refutations; without them the
+agents most reliably lose. 152 of 258 verdicts here are refutations; without them the
 loop re-runs dead work forever. `guides/ecadd-explore` opens with a map of closed axes
 precisely so the next agent does not re-open them. Port as a hard invariant — and in
 core it becomes cheap, because records are addressed by id rather than by document
@@ -90,7 +101,7 @@ test it.
 
 ## 3. Seven failure classes, and the invariant each becomes
 
-I classified all 143 debt titles. Entries overlap classes; the point is the shape, not a
+I classified all 142 debt titles. Entries overlap classes; the point is the shape, not a
 partition.
 
 ### 3.1 State stored twice, in two formats (~12 entries)
@@ -105,8 +116,12 @@ in place so `lint-entry` refuses the entry it just created (H137); a closure lab
 be corrected without reopening the entry (H133).
 
 > **Core invariant.** One record per entry is the sole truth. Every markdown view is
-> generated and never parsed back. `ar validate` fails if a generated view is dirty in
-> git — a hand-edit becomes a build failure instead of a silent divergence.
+> generated and never parsed back. `ar validate` re-renders each view from the records
+> and fails if the file on disk differs (`render.check_views`) — a hand-edit becomes a
+> build failure instead of a silent divergence. It compares against the render, not
+> against git, so an uncommitted but correct view passes. A domain whose tree is worked
+> by several sessions at once may set `[render] stale_views = "warning"`, which
+> downgrades a stale view to a warning `ar render` fixes; the default is the failure.
 
 ### 3.2 Prose parsed by regex, failing silently (~17 entries)
 
@@ -132,9 +147,11 @@ it**. H05: `bin/validate`'s prose greps were being counted as tests. H101: a gui
 verification block reported OK having checked strictly less than the gate.
 
 > **Core invariant.** Every guard ships with a **negative test** proving it refuses
-> something. A guard with no proof-of-refusal is not a guard, and `ar validate` rejects
-> the suite if one exists. Assertions on match counts are mandatory wherever a search can
-> return zero.
+> something. A guard with no proof-of-refusal is not a guard. For code this is a
+> convention, held by review and by the suite's own negative tests — nothing inspects the
+> test suite for a guard that lacks one. The one mechanical part is policy: `ar validate`
+> runs `policy.selftest()`, which fails any declared never-rule that refuses none of its
+> probes. Assertions on match counts are mandatory wherever a search can return zero.
 
 ### 3.4 Constants copied instead of referenced (~14 entries)
 
@@ -227,7 +244,7 @@ Core should not inherit 24 tools by default. Each of these stays behind, with th
 | `bin/orphans` | "Memos reachable from nothing" (H109: 71 of them, and a front-matter index would miss 79%). Reachability is a graph property of records; it stops being a discoverable defect. |
 | `bin/board` | Superb docstring, wrong shape: it exists because a cold session had to read ~8,000 lines of append-only prose (H108). Core renders a board from records. **Keep its two rules verbatim** — reuse the owning reader, and report how many things you read. |
 | `bin/qarton-trace` | Already dead by the repo's own finding: 183 lines serving a closed programme, sitting in `bin/` where every session reads the set of live tools (H103). Cited here as the standard core should apply to itself. |
-| The "fewer than three queued → generate instead" rule | H95 proved it deadlocks: it forbids draining a short queue. Replaced by continuous generation running *in parallel* with the work. |
+| The "fewer than three queued → generate instead" rule | H95 proved it deadlocks: it forbids draining a short queue. Replaced by a generate phase in every iteration, before rank and dispatch, whatever the queue length. |
 | `--budget` as free text | H125. Replaced by real meters. |
 | Prose re-rank passes | ~30 of them, ~1,500 lines in `Research Directions.md`, and H140 caught one ranking a terminal entry four hours after it closed. Replaced by a scored ranking with a recorded justification. |
 
@@ -288,7 +305,7 @@ the core exists rather than a refactor.
 
 The evaluation converts into seven testable invariants, each traceable to entries above:
 
-1. One record per entry; every view generated; a dirty generated view fails validation.
+1. One record per entry; every view generated; a view that differs from its render fails validation.
 2. No regex over prose reaches a decision.
 3. Every guard ships a negative test proving it refuses something.
 4. Constants are computed from a typed goal, never stored as prose.
@@ -302,7 +319,7 @@ how many things it read.**
 
 The harness being evaluated here is better than its defect count suggests. Almost
 everything in section 4 is on the kill list because it was *compensating* for prose being
-the system of record — and a harness that filed 143 defects against itself in eight days,
+the system of record — and a harness that filed 142 defects against itself in eight days,
 with dated evidence and honest `wontfix`es, is one whose authors were paying attention.
 The core's job is to keep the judgement and delete the compensation.
 
@@ -320,7 +337,8 @@ the code — but only ever with a claim from outside it in hand.
 ### Tier 1 — caught by running it against real data
 
 Four defects survived design, review-by-author, and a passing test suite, and
-died the first time the code met 412 real entries and 9,443 real rows. Three are
+died the first time the code met 412 real entries and 9,443 real rows (the source
+corpus's `data/runs/` at the migration snapshot). Three are
 failure classes this document had just finished cataloguing, reproduced by the
 person who catalogued them.
 
@@ -373,7 +391,8 @@ The same config file sets `max_parallel = 3`, and the harvest step merges *every
 worktree's results — so three parallel workers would all see freshly-modified
 files and all claim the same row, two of them attributing another
 configuration's numbers to their own knobs. Silently, and in the direction that
-looks like a clean result. `timestamp` is integer seconds across all 9,453 rows,
+looks like a clean result. `timestamp` is integer seconds across all 9,453 rows (the
+ledger had grown by ten since the migration snapshot when the review ran),
 so even sequential runs tie, and the tie broke on filename order. This is
 failure class 3.6 — results escaping the record — arriving by a route the
 original corpus had not found.
@@ -468,6 +487,10 @@ loop, and `Throughput` was constructed only in tests. This document and the
 README both described the behaviour and printed its output. The tell was a dead
 `escalate as escalate_mod` import in `cli.py`.
 
+The fix gave it a verb, `ar escalate`. The loop still never calls it: a run
+that is too slow for its deadline is noticed only when someone asks. That half
+remains a gap.
+
 Number 18 is the one to keep. A passing test suite, a written design and a
 README worked example all agreed the feature existed; nothing checked that a
 user could reach it. **Documentation is a claim about reachability, and no test
@@ -522,6 +545,13 @@ The migration is also an audit, and the source harness comes out of it well:
 | Disagreements between section, Closed table and claim record | **0** |
 | Closed entries whose evidence memo is missing from disk | **0** |
 | Open entries needing a price before ranking | 11 |
+
+Same snapshot as section 1, counted differently. The 401 closed are 152 refuted + 106
+confirmed + 6 blocked + 134 fixed + 3 wontfix, and the 11 open are the 6 queued hypotheses
+and the 5 queued defects: the migration run took `blocked` as closed, as the source
+harness's own Closed table lists it, with a memo. Section 1 keeps the 6 blocked apart, so
+it implies 17 open, not 11. The current core's state machine does not follow the
+migration: `blocked` is non-terminal, waiting on a named condition.
 
 Zero missing evidence across 401 closed entries is the strongest single
 statement in this document about the discipline of that harness. The rule that
