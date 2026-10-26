@@ -303,7 +303,8 @@ def test_identical_changes_on_both_sides_are_not_a_collision(sandbox, store, cap
     store.save(entry)
     _commit(root, "other")
     _git(root, "checkout", "-q", "main")
-    _git(root, "cherry-pick", "other")
+    _git(root, "-c", "user.name=T", "-c", "user.email=t@example.invalid",
+         "cherry-pick", "other")
     assert _ar(sandbox, "entry", "collisions", "other") == 0
 
 
