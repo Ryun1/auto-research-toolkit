@@ -1007,6 +1007,44 @@ refused at the door, so the ranking can never silently fall back to defaults
 the way the corpus this core was extracted from did (1 mechanism tag on 470
 entries, the two largest wins novel mechanism families).
 
+### Are the priors any good? `scripts/calibrate-priors.py`
+
+The formula trusts `confidence`, `impact` and `cost` as the filing agent wrote
+them. Whether those guesses predict anything is a question the record can
+answer: for each prior, the script reports the AUC between entries that closed
+`confirmed` and entries that closed `refuted` (0.5 is no signal; below 0.5 the
+prior points the wrong way), with a bootstrap interval.
+
+```sh
+python scripts/calibrate-priors.py /path/to/domain [more domains ...] \
+  [--track research] [--jsonl rows.jsonl]
+```
+
+**It reads git history, not the entry file.** A re-price records its reason
+but not the numbers it replaced, and an amend can rewrite a prior after the
+verdict, so the stored values may already know the outcome. The script replays
+every committed version of each entry and scores the prior as filed, as it
+stood in the last commit before the verdict, and as stored now; a gap between
+the columns is leakage. An entry filed and closed in the same commit has no
+pre-verdict version and is counted as *born closed*, not scored. A domain whose
+entry store is not in git is refused by name.
+
+It also splits the filed priors by how long each entry waited for its verdict
+(from the entry's own timestamps; commit times trail them, by up to 39 hours
+in qsb), and pools the AUC within each filing session, which tells "agents
+rank well within a batch" apart from "some batches were weak".
+
+On the four field domains on 2026-10-26: leakage was small (68 of 1,073 qsb
+entries changed a prior after the verdict, moving no AUC by more than 0.01);
+qsb confidence held at 0.84 [0.81, 0.87], or 0.76 pooled within sessions;
+falcon `impact` pointed the wrong way at 0.26 [0.08, 0.47]; `cost` came out
+below 0.5 in qsb and falcon (cheaper entries confirm more often), which is
+the direction the formula divides by; and provably.fast's priors carried no
+usable signal (intervals spanning 0.2-0.9 on 54 entries). Half of falcon's
+and provably.fast's decided entries were born closed. Read the domain's own
+report before re-weighting anything: the numbers are per domain and move as
+the record grows.
+
 ## The brain is a command, not a vendor
 
 Every role is judgement delegated through one seam, and the seam does not know
