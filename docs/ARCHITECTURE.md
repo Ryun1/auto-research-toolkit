@@ -148,7 +148,8 @@ Six things about this shape are deliberate:
   assignment (`external.assign`) instead of a worker, and no model runs in this
   process for the work. While any assignment is outstanding there is nothing
   to close out, so `curate`, `distil` and `qc` do not run but are recorded
-  with the reason (`native dispatch: N assignment(s) outstanding`), and the
+  with the reason (`native dispatch: N assignment(s) outstanding` for curate
+  and distil; `settle assignments first; qc runs with the verdicts` for qc), and the
   stop decision is replaced by `native-handoff`, whose detail names the
   resume: settle with `ar external complete`, then run `ar loop` again.
   Looping on would re-rank a queue whose claims are still held. `ar loop`
@@ -319,7 +320,7 @@ sequenceDiagram
     participant Br as Brain
 
     loop each entry on the shortlist
-        C->>C: policy + optional domain preflight; blocked → skip card
+        C->>C: policy + optional domain preflight, blocked → skip card
         C->>B: spend fanout + spawns + runs (entry's declared cost)
         B-->>C: ok / BudgetExceeded → stop dispatching
         C->>Cl: claim(entry, why="ranked #k")

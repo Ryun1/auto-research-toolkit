@@ -43,9 +43,9 @@ flowchart LR
 ```
 
 Every phase is metered. Generation runs every iteration, before rank and
-dispatch, so the queue is refilled before it is drawn from; only the
-iteration's wall-clock ceiling skips it, and a skipped phase is recorded with
-its reason. Ranking is a formula over recorded numbers that
+dispatch, so the queue is refilled before it is drawn from; it is skipped
+only when the iteration's wall clock or the campaign's money is spent, and a
+skipped phase is recorded with its reason. Ranking is a formula over recorded numbers that
 a judge may reorder but not overrule, with a configured share of every
 shortlist (`risk`) spent on novel branches — entries with no `parent` — so
 the loop can still attempt a big swing, and still open a direction it has
@@ -387,8 +387,8 @@ agents never maintain a diagram beside the record that would drift from it;
 hovering a node shows the full title and the entry's summary — a closure's
 verdict summary, or the hypothesis claim for an entry with no verdict yet.
 A diagram
-of the agent's own — a mechanism sketch, a decision tree — is a ```mermaid
-fence in an entry body or a memo: markdown renders it, and nothing parses
+of the agent's own — a mechanism sketch, a decision tree — is a `mermaid`
+code fence in an entry body or a memo: markdown renders it, and nothing parses
 markdown back, so a picture cannot become a second source of truth.
 
 **Which verdicts are terminal is per-track config.** The default machine closes

@@ -182,7 +182,9 @@ No `Release:` commit; the tag is on e9e4dca.
 - Breaking: `--explore` and `--coverage` are gone; `ar rank --risk R`
   replaces them.
 
-Also in this release: the built-in Claude SDK brain was removed (route roles
+Also in this release: native dispatch (`[coordinator] dispatch =
+"native"`), the out-of-band usage ledger (`ar usage`) and `ar attempt
+reconcile`; the built-in Claude SDK brain was removed (route roles
 to commands; `[brain] default` is required to build a brain) and the agent
 protocol ships as a scaffolded `AGENTS.md`; the TypeSafe (Jev) backend for
 judge and qc; a goal's required gates bind the stop decision; `ar session`
@@ -190,8 +192,9 @@ worktrees for hand-driven work; declared CLI plugins.
 
 ## v0.1.0 — 2026-08-31 to 2026-09-17
 
-Untagged; the version `pyproject.toml` carried from the first commit
-(b3b445a) to 444bf3c. The core skeleton (typed goal, total state machine,
+Untagged. `pyproject.toml` said 0.1.0 from the first commit (b3b445a) until
+e9e4dca bumped it; the commits of 2026-09-18 before that bump are listed
+under v0.2.0, which is how the tag groups them. The core skeleton (typed goal, total state machine,
 declarative policy, lanes), structured entries with generated views and
 claims, ranking and budgets, the seven-phase coordinator, `ar migrate`,
 hardware awareness, skills, upstream defect filing and core updates, and —

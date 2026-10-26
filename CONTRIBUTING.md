@@ -8,12 +8,13 @@ tests exist because every rule here was once violated by the code itself.
 ## Setup
 
 ```bash
-uv sync --extra dev            # .venv/, from uv.lock, with pytest, pytest-xdist, ruff
+uv sync --extra dev            # .venv/ with pytest, pytest-xdist, ruff
 ./scripts/install-hooks.sh
 ```
 
 Without uv, `python -m venv .venv && .venv/bin/pip install -e ".[dev]"` builds
-the same environment, unpinned. Either way it must be `.venv/` at the repo
+the same environment. Neither is pinned: `uv.lock` is gitignored, so both
+resolve `pyproject.toml` afresh. Either way it must be `.venv/` at the repo
 root: the hooks run `.venv/bin/python` and `.venv/bin/ruff` when they exist,
 and fall back to whatever `python3` and `ruff` are on `PATH` — which may not
 have this package or pytest installed.
@@ -117,7 +118,8 @@ Ruff is the only linting tool (`ruff check .`). `[tool.ruff.lint]` in
 `pyproject.toml` selects `E`, `F`, `W`, `I` (import sorting), `B` (bugbear) and
 `UP` (pyupgrade), and ignores `E501`: prose-heavy docstrings and prompts are
 judged by eye, not by a line limit. No style debates beyond that. The
-pre-commit hook, the pre-push hook and CI all run the same config.
+pre-commit hook, the pre-push hook and CI all run the same config, but the
+hooks skip ruff with a warning when they cannot find it; only CI always lints.
 
 ## Pull requests
 

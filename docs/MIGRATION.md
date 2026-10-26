@@ -32,6 +32,9 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   silently. Set `[upstream] min_core = "0.11.0"` so `ar doctor` refuses an
   older install before it meets one; `ar validate` warns when the record
   carries those fields and the floor is lower.
+- **Behavioural (close scripts): relabelling to `cell` or `slope` needs a
+  re-open condition.** `ar close ID --relabel slope` keeps the closure's
+  existing `--reopen-condition` or must be given one; it is refused otherwise.
 - **Required (measure scripts): workers are measured from the primary.** A
   worker, an external assignment and a session measure with `ar --domain
   <primary> measure --candidate <slot>`: the measure command, `[policy]` and
@@ -78,12 +81,20 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   or commit and tag the tree you serve.
 - **Behavioural: `ar measure` passes domain flags through** without a `--`
   separator.
+- **Behavioural: `ar measure --entry` refuses a closed entry.** A script that
+  records rows against an entry after closing it now fails.
+- **Behavioural: a row that fails a goal `constraint`, or is marked
+  `config: {scaffold: true}`, is named on the board and is never `best`.**
+  A frontier that used to land on such a row moves to the best admissible one.
 
 ## 0.9.0
 
 - **Required (scripts): `ar entry new` needs `--track`.** There is no
   default, because a forgotten track filed harness debt as a research lead.
   A filing now reads `ar entry new --track research "title" ...`.
+- **Behavioural: `requires_defect_evidence` is enforced at filing.** `ar
+  entry new` on such a track without `--core`, `--repro` and `--observed` is
+  refused (and costs no id), not only flagged later by validate and export.
 - **Behavioural: `superseded` is terminal on every track**, without being
   declared. Only `ar close --superseded-by` writes it, the replacement records
   it in its own `supersedes`, and a retirement is not counted as a refuted
@@ -182,9 +193,9 @@ default = ["bin/agent", "{role}", "{prompt_file}", "{workspace}", "{cost_file}"]
   from) and optionally `kind` (`improve`, `debug`, `probe`). Old records are
   valid as-is: an absent `parent` reads as a novel root. `ar validate`
   passes on pre-0.2.0 records unchanged.
-- **Branches can be filed by humans too.** `ar entry new --track research
-  --parent Q12 --kind debug "title" ...` (`--track` and the title are required
-  since 0.9.0) runs the same filing gate the loop's generators run (unknown
+- **Branches can be filed by humans too (from 0.3.0).** `ar entry new --track
+  research --parent Q12 --kind debug "title" ...` (`--track` and the title
+  are required since 0.9.0) runs the same filing gate the loop's generators run (unknown
   parent, depth, sibling caps, cross-track, kind-on-root are all refused
   with reasons).
 - **`mechanism_coverage` stays in the briefs.** The generator is still told
@@ -203,7 +214,7 @@ default = ["bin/agent", "{role}", "{prompt_file}", "{workspace}", "{cost_file}"]
 | --- | --- |
 | `ar rank --explore F` | `ar rank --risk R` |
 | `ar rank --coverage F` | (no equivalent — one dial) |
-| `ar entry new` (no tree) | `ar entry new --track research --parent Q12 --kind debug "title"` (`--parent`, `--kind` optional) |
+| `ar entry new` (no tree) | from 0.3.0: `ar entry new --track research --parent Q12 --kind debug "title"` (`--parent`, `--kind` optional) |
 
 ### Behavioural: briefs (additive, for custom prompt parsers)
 
@@ -259,8 +270,8 @@ holdout also satisfies the flag (see 0.11.0 above).
 
 ## No action required
 
-0.3.0 (adds `[upstream] min_core` and `ar doctor`; declaring a floor is
-worth doing), 0.6.0, 0.7.0 and 0.7.1 are additive: nothing a domain declared
+0.3.0 (adds `[upstream] min_core` and `ar doctor`, where declaring a floor
+is worth doing, and `ar entry new --parent/--kind` for hand-filed branches), 0.6.0, 0.7.0 and 0.7.1 are additive: nothing a domain declared
 changes meaning, and records from the previous release load unchanged.
 
 ## References

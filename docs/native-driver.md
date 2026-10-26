@@ -134,9 +134,10 @@ ar session destroy fixes --harvest
   run id, and copies worktree-only entries into the primary. The session
   record is archived under the sessions directory, never deleted.
 - **prune reports; `--destroy` acts on what it reports.** `ar session prune`
-  lists every session with its idle time against the settle window and its
-  blockers. A session is eligible only when its worktree exists, is clean,
-  has nothing unharvested and nothing divergent, and has been idle past
+  lists every session with its age (hours since it was created — reported as
+  `idle_hours`, but nothing measures activity) against the settle window,
+  whether it is eligible, and its blockers. A session is eligible only when its worktree exists, is clean,
+  has nothing unharvested and nothing divergent, and is older than
   `settle_hours`. `ar session prune --destroy` destroys each eligible session
   through `destroy`'s own refusals, without `--harvest` — so a session with
   evidence still to harvest is never pruned; destroy it by hand.
@@ -160,8 +161,8 @@ with `stop: native-handoff` rather than re-ranking a queue whose claims are
 still held, and `ar loop` prints a manifest: one line per assignment with
 its entry, run ceiling, expiry and workspace, and `ar external show <id>`
 for its brief. The surrounding harness's subagents do the work and settle
-each one with `ar external complete <id> --report report.json --session
-<session>`, which harvests and applies the verdict through the same
+each one with `ar --session <session> external complete <id> --report
+report.json` (`--session` is global and goes before the verb), which harvests and applies the verdict through the same
 ownership checks, close gates and evidence retention as an in-loop worker.
 The next `ar loop` invocation's orient sees the applied verdicts. `ar
 external list` shows open assignments across sessions; `ar external cancel`

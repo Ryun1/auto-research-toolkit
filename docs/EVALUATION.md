@@ -10,7 +10,7 @@ dated, evidence-backed log of this harness failing at itself. Where a claim belo
 number, it came from the record, not from an impression.
 
 Paths such as `bin/…`, `guides/…`, `tests/`, `inbox/`, `config/project.toml`,
-`docs/log/…` and `schemas/run-v1` name files in the source harness — the ECDSA Fail
+`docs/log/…` and `schemas/run-v1.schema.json` name files in the source harness — the ECDSA Fail
 repository `Ryun1/auto-research` — not in this toolkit. Unless a figure says otherwise,
 it is taken at that repository's commit `60687be3` (2026-08-31, the 2,129th commit), the
 snapshot the migration below also ran on.
@@ -359,7 +359,7 @@ not close a category. Fixed by separating `tags` (never excludes) from
 `mechanisms`. The ranking still looked plausible, which is the argument.
 
 **3. The staleness term was a constant factor wearing a penalty's name.** It
-counted total closed entries; against 400 verdicts that put every entry at 0.048
+counted total closed entries; against some 400 closed entries that put every entry at 0.048
 and ordered nothing. A penalty applied equally to everything is not a penalty.
 
 **4. `_map`'s failure path lost which item failed** — in the function whose
@@ -391,8 +391,9 @@ The same config file sets `max_parallel = 3`, and the harvest step merges *every
 worktree's results — so three parallel workers would all see freshly-modified
 files and all claim the same row, two of them attributing another
 configuration's numbers to their own knobs. Silently, and in the direction that
-looks like a clean result. `timestamp` is integer seconds across all 9,453 rows (the
-ledger had grown by ten since the migration snapshot when the review ran),
+looks like a clean result. `timestamp` is integer seconds across all 9,453 rows (at
+`c80fa519`: the ledger had grown by ten since the migration snapshot when the
+review ran),
 so even sequential runs tie, and the tie broke on filename order. This is
 failure class 3.6 — results escaping the record — arriving by a route the
 original corpus had not found.
@@ -516,7 +517,7 @@ Eighteen defects, four mechanisms, none found by reading the code unprompted:
 
 | mechanism | found | the class it is good at |
 |---|--:|---|
-| running against real data | 4 | assumptions that are wrong about *scale* — 400 verdicts, 9,443 rows, a real lane structure |
+| running against real data | 4 | assumptions that are wrong about *scale* — 401 closed entries, 9,443 rows, a real lane structure |
 | rechecking finished work | 1 | the gap between what is tested and what is shipped |
 | independent review | 6 | concurrency, and defects whose own verification was circular |
 | auditing a claim against the code | 7 | things declared and never wired — the gap between what is *written* and what runs |
