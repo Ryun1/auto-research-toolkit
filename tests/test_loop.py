@@ -989,22 +989,40 @@ def test_the_judge_brief_carries_an_excluded_summary_not_the_rows(
         assert key not in payload, "the judge gets no board fields"
 
 
-def test_the_excluded_summary_names_every_rank_filter():
+def test_the_excluded_summary_names_every_rank_filter(sandbox, store):
     """Every hard filter rank.py applies gets its own key: a stagnant-parent
     exclusion counted as `other` hid the one filter a judge most needs to
-    see the shape of."""
-    from types import SimpleNamespace
-
+    see the shape of. The reasons come from rank() itself, so rewording one
+    there fails here instead of silently landing in `other`."""
     from autoresearch.driver.loop import _excluded_summary
-    reasons = ["terminal (refuted) — H140", "held by s1",
-               "not claimable from 'blocked'", "cost 9 exceeds the remaining budget",
-               "host cannot run 'gpu': no gpu",
-               "mechanism 'm' was refuted by Q1 with closure_kind=mechanism",
-               "parent Q1 stagnant: 3 refuted branch(es), none confirmed"]
-    summary = _excluded_summary([SimpleNamespace(excluded=r) for r in reasons])
+    from autoresearch.entries import Claim
+    from autoresearch.hardware import Requirement
+    from autoresearch.rank import rank
+    from conftest import close
+    from test_hardware import m2
+
+    close(sandbox, store, make_entry(store, "Q1"))
+    make_entry(store, "Q2", claim=Claim(session="s1", at="2026-01-01T00:00:00+00:00"))
+    make_entry(store, "Q3", status="blocked")
+    make_entry(store, "Q4", cost=99.0)
+    sandbox.hardware["wide"] = Requirement(name="wide", min_memory_gb=1024)
+    make_entry(store, "Q5", hardware="wide")
+    close(sandbox, store, make_entry(store, "Q6", mechanisms=["dead"]),
+          verdict="refuted", closure_kind="mechanism")
+    make_entry(store, "Q7", mechanisms=["dead"])
+    make_entry(store, "Q8")
+    close(sandbox, store, make_entry(store, "Q9", parent="Q8"),
+          verdict="refuted", closure_kind="cell", reopen_condition="the cell moves")
+    make_entry(store, "Q10", parent="Q8")
+    sandbox.branch_stagnation = 1
+
+    result = rank(store.all(), sandbox, host=m2(),
+                  budget_ok=lambda e: e.cost <= 10)
+    summary = _excluded_summary(result.excluded)
     assert summary["by_filter"] == {
-        "terminal": 1, "held": 1, "not-claimable": 1, "cost": 1, "host": 1,
-        "mechanism-refuted": 1, "parent-stagnant": 1}
+        "terminal": 3, "held": 1, "not-claimable": 1, "cost": 1, "host": 1,
+        "mechanism-refuted": 1, "parent-stagnant": 1}, \
+        [c.excluded for c in result.excluded]
 
 
 def test_the_brief_is_compact_json(sandbox):
