@@ -716,11 +716,14 @@ class Store:
             body = path.read_text()
         except OSError as exc:
             raise SchemaError(f"{path}: {exc}") from exc
-        residue = merge_mod.file_problem(path, "resolve the conflict in the file")
-        if residue:
-            raise SchemaError(residue)
         try:
-            entry = Entry.from_dict(yaml.safe_load(body) or {})
+            data = merge_mod.checked_load(path, body, "resolve the conflict in the file")
+        except merge_mod.Residue as exc:
+            raise SchemaError(str(exc)) from None
+        except yaml.YAMLError as exc:
+            raise SchemaError(f"{path}: {exc}") from exc
+        try:
+            entry = Entry.from_dict(data or {})
         except (SchemaError, TypeError, yaml.YAMLError) as exc:
             raise SchemaError(f"{path}: {exc}") from exc
         _ENTRY_CACHE.setdefault(str(self.dir.resolve()), {})[path.name] = \

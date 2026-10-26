@@ -46,7 +46,13 @@ class DuplicateKey(yaml.YAMLError):
     """A mapping key appears twice in one YAML document."""
 
 
-class _StrictLoader(yaml.SafeLoader):
+#: libyaml's parser when PyYAML was built with it: the same documents, roughly
+#: ten times faster than the pure-Python scanner, which dominated every
+#: store-reading verb on a domain of a thousand entries.
+_SafeBase = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+class _StrictLoader(_SafeBase):
     """SafeLoader that refuses a repeated mapping key instead of picking one."""
 
 
@@ -60,7 +66,7 @@ def _no_duplicates(loader, node, deep=False):
             raise DuplicateKey(
                 f"duplicate key {key!r} at line {key_node.start_mark.line + 1}")
         seen.add(key)
-    return yaml.SafeLoader.construct_mapping(loader, node, deep)
+    return yaml.constructor.SafeConstructor.construct_mapping(loader, node, deep)
 
 
 
@@ -98,6 +104,30 @@ def file_problem(path: pathlib.Path, remedy: str,
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    try:
+        checked_load(path, text, remedy, root)
+    except Residue as exc:
+        return str(exc)
+    except yaml.YAMLError:
+        pass
+    return None
+
+
+class Residue(ValueError):
+    """A state file carries merge residue; the message is `file_problem`'s line."""
+
+
+def checked_load(path: pathlib.Path, text: str, remedy: str,
+                 root: pathlib.Path | None = None):
+    """Parse one state file once, refusing merge residue as `file_problem` names it.
+
+    The store's read used to run `file_problem` (one strict parse) and then
+    parse the same text again; on a large corpus the second parse was half of
+    every verb's wall clock. This returns the document the strict parse already
+    built. Raises `Residue` for markers or a duplicated key, and the parser's
+    own `yaml.YAMLError` for a file that is simply broken -- the store's error
+    to name, not this module's.
+    """
     reasons = []
     marks = marker_lines(text)
     if marks:
@@ -105,21 +135,18 @@ def file_problem(path: pathlib.Path, remedy: str,
         reasons.append(
             f"unresolved merge conflict markers at line(s) {where} "
             f"({len(marks)} block(s))")
+    data = None
     if not reasons and path.suffix in (".yaml", ".yml"):
         # Only when the file is at least parseable: a marker-bearing file is
         # not YAML at all, and its problem is the markers, already reported.
-        # A file that is simply broken is the store's own error to name -- this
-        # check is about a merge nobody finished, not about every bad file.
         try:
-            yaml.load(text, Loader=_StrictLoader)
+            data = yaml.load(text, Loader=_StrictLoader)
         except DuplicateKey as exc:
             reasons.append(f"both sides of a resolved conflict left behind: {exc}")
-        except yaml.YAMLError:
-            pass
-    if not reasons:
-        return None
-    rel = path.relative_to(root) if root is not None else path
-    return f"{rel}: {'; '.join(reasons)} -- {remedy}"
+    if reasons:
+        rel = path.relative_to(root) if root is not None else path
+        raise Residue(f"{rel}: {'; '.join(reasons)} -- {remedy}")
+    return data
 
 
 def merge_in_progress(root: pathlib.Path) -> bool:

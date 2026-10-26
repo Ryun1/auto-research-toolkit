@@ -223,3 +223,28 @@ def test_an_open_merge_gets_the_conclude_or_abort_advice(both_sides_kept,
     assert _ar(both_sides_kept, "validate") == 1
     out = capsys.readouterr().out
     assert "git has NO open merge" in out
+
+
+def test_a_store_read_parses_each_entry_once(sandbox, store, monkeypatch):
+    """The residue check and the read shared one parse's worth of work but
+    did two: on a 1,542-entry domain the second parse was half of every
+    store-reading verb's wall clock (`ar board` took 20 s). The strict parse
+    is the read's parse now."""
+    from autoresearch import entries as entries_mod
+    for name in ("Q1", "Q2", "Q3"):
+        make_entry(store, name)
+    monkeypatch.setattr(entries_mod, "_ENTRY_CACHE", {})   # a fresh process
+    calls = []
+    real = yaml.load
+    monkeypatch.setattr(yaml, "load", lambda *a, **k: calls.append(1) or real(*a, **k))
+    monkeypatch.setattr(yaml, "safe_load", lambda *a, **k: calls.append(1) or real(*a, **k))
+    entries = entries_mod.Store(store.dir).all()
+    assert [e.id for e in entries] == ["Q1", "Q2", "Q3"]
+    assert len(calls) == 3
+
+
+def test_the_strict_loader_uses_libyaml_when_pyyaml_has_it():
+    """The pure-Python scanner was ~90% of `ar board` on a large record."""
+    if getattr(yaml, "CSafeLoader", None) is None:
+        pytest.skip("PyYAML built without libyaml")
+    assert issubclass(merge_mod._StrictLoader, yaml.CSafeLoader)
