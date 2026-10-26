@@ -150,6 +150,28 @@ def test_qc_files_harness_debt_against_the_harness_track(sandbox):
     assert any(e.id.startswith("H") for e in store.all())
 
 
+def test_qc_harness_debt_with_no_harness_track_is_dropped_out_loud(sandbox):
+    """Debt is never filed into research, but a domain with no `harness`
+    track must not lose QC's findings without a word on the record."""
+    from autoresearch.entries import Store
+    store = Store(sandbox.paths.entries)
+    make_entry(store, "Q1", impact=1.0)
+    del sandbox.tracks["harness"]
+    brain = ScriptedBrain({
+        Role.GENERATOR: lambda b: [],
+        Role.JUDGE: lambda b: [],
+        Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a",
+                                "verification": dict(VERIFIED)},
+        Role.CURATOR: lambda b: {"reprice": [], "notes": []},
+        Role.QC: lambda b: {"problems": [], "verdict": "problems", "harness_debt": [
+            {"title": "measure command has no timeout"},
+            {"title": "pool never reaps"}]}})
+    it = Coordinator(sandbox, brain).run_iteration(1)
+    qc = next(p for p in it.phases if p.name == "qc")
+    assert "harness debt not filed: no 'harness' track (2 item(s) dropped)" in qc.detail
+    assert [e.id for e in store.all()] == ["Q1"]
+
+
 def test_extract_json_handles_fenced_and_bare_replies():
     assert extract_json('prose\n```json\n[{"a": 1}]\n```\n') == [{"a": 1}]
     assert extract_json('here you go: {"a": 2} thanks') == {"a": 2}
@@ -944,6 +966,24 @@ def test_the_judge_brief_carries_an_excluded_summary_not_the_rows(
     assert "You may not veto an excluded entry" in payload["instruction"]
     for key in BOARD_FIELDS:
         assert key not in payload, "the judge gets no board fields"
+
+
+def test_the_excluded_summary_names_every_rank_filter():
+    """Every hard filter rank.py applies gets its own key: a stagnant-parent
+    exclusion counted as `other` hid the one filter a judge most needs to
+    see the shape of."""
+    from types import SimpleNamespace
+
+    from autoresearch.driver.loop import _excluded_summary
+    reasons = ["terminal (refuted) — H140", "held by s1",
+               "not claimable from 'blocked'", "cost 9 exceeds the remaining budget",
+               "host cannot run 'gpu': no gpu",
+               "mechanism 'm' was refuted by Q1 with closure_kind=mechanism",
+               "parent Q1 stagnant: 3 refuted branch(es), none confirmed"]
+    summary = _excluded_summary([SimpleNamespace(excluded=r) for r in reasons])
+    assert summary["by_filter"] == {
+        "terminal": 1, "held": 1, "not-claimable": 1, "cost": 1, "host": 1,
+        "mechanism-refuted": 1, "parent-stagnant": 1}
 
 
 def test_the_brief_is_compact_json(sandbox):

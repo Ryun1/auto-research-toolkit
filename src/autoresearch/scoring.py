@@ -52,8 +52,11 @@ def seam_ranking(config, ranking, entries, risk: float):
     command = config.commands.get("score")
     if not command:
         return ranking
-    by_entry_id = {s.entry_id for s in ranking.scored}
-    claimable = [e for e in entries if e.id in by_entry_id]
+    # Novelty is rank's call, read off its cards rather than recomputed: a
+    # second definition here drifted once already (it ignored `derived_from`,
+    # so a seam-priced follow-up took a novel slot the formula denies it).
+    novel = {s.entry_id: s.novel for s in ranking.scored}
+    claimable = [e for e in entries if e.id in novel]
     rows = domain_scores(config, claimable, risk)
     by_id = {r["id"]: r for r in rows}
     scored = [
@@ -63,7 +66,7 @@ def seam_ranking(config, ranking, entries, risk: float):
                        # seam that dropped it would silently meter every card
                        # at the 1-run default.
                        terms={"domain": by_id[e.id]["reason"], "cost": e.cost},
-                       novel=e.parent == "", mechanisms=tuple(e.mechanisms))
+                       novel=novel[e.id], mechanisms=tuple(e.mechanisms))
         for e in claimable]
     scored.sort(key=lambda s: -s.score)
     return rank_mod.Ranking(

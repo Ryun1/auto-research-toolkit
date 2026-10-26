@@ -62,8 +62,9 @@ reason nobody should try it again.
 
 - **Cite only terminal entries.** Unsettled work is not evidence.
 - **Never invent a finding.** If the memos do not support it, it does not go in.
-  You have Read, Grep and Glob and no way to run anything: everything you write
-  must already be in the corpus.
+  Read and search the corpus; do not run anything and do not write any file —
+  return the body and the coordinator writes it. Nothing here measures, so
+  everything you write must already be in the corpus.
 - **Retire rather than patch a skill whose premise died.** Say what killed it.
 - **Do not restate the goal, the queue, or the closed-directions map.** Every
   role already gets those in its brief. A skill that repeats the brief costs

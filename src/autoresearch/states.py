@@ -218,7 +218,7 @@ def default_machine(terminal: dict[str, dict] | None = None) -> StateMachine:
         Transition("queued", "in-progress", "ar claim"),
         # H78: releasing a claim must be a supported move, or an agent that
         # claimed the wrong thing has to lie about it.
-        Transition("in-progress", "queued", "ar claim --release", reason_required=True),
+        Transition("in-progress", "queued", "ar release", reason_required=True),
         Transition("in-progress", "blocked", "ar close", reason_required=True),
         # H111: this edge is the one that was missing, and its absence made
         # `blocked` permanent by construction.

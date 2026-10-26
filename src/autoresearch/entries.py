@@ -28,7 +28,7 @@ neighbours.
 
 **History is append-only.** Every transition appends who, when, and why. That is
 the property the original guarded with "never delete a section" -- a refutation
-is a result, and it is the thing agents most reliably lose (151 of 271 verdicts
+is a result, and it is the thing agents most reliably lose (152 of 258 verdicts
 in the source corpus were refutations).
 """
 from __future__ import annotations

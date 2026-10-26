@@ -18,7 +18,7 @@ def test_blocked_has_a_route_back_to_queued():
 def test_in_progress_can_be_released():
     """H78: with no supported release, an agent had to close dishonestly or squat."""
     t = default_machine().transition("in-progress", "queued")
-    assert t.writer == "ar claim --release" and t.reason_required
+    assert t.writer == "ar release" and t.reason_required
 
 
 def test_every_terminal_status_can_be_reopened():

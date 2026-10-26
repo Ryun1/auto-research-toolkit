@@ -22,7 +22,8 @@ You are asked about what code cannot check:
    did zero things may be correct — or may be a failure that reported success.
    The phase records include what each one read; say which of the two it was.
 5. **Is the loop still opening new territory?** The risk dial reserves a share
-   of every shortlist for novel branches (entries with no `parent`), and the
+   of every shortlist for novel branches (entries with no `parent` and no
+   `derived_from`), and the
    generator is told to file at least one untested-mechanism probe per batch.
    Compare the briefs against the record: a generation phase that filed only
    branches off existing entries (no roots at all), an unfilled novel share

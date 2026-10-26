@@ -37,11 +37,16 @@ computed from those numbers, and a stale price is a wasted run.
 ```json
 {
   "reprice": [
-    {"entry_id": "Q14", "confidence": 0.2, "why": "Q11 refuted the shared denominator its estimate assumed"}
+    {"entry_id": "Q14", "confidence": 0.2, "why": "Q11 refuted the shared denominator its estimate assumed"},
+    {"entry_id": "Q17", "impact": 0.03, "cost": 6, "why": "Q12 measured the pass at 3x the run-units Q17 priced and capped its gain"}
   ],
   "notes": ["anything the next iteration should know that is not a re-price"]
 }
 ```
+
+Each re-price sets any of `confidence` (a probability in [0, 1]), `impact` and
+`cost`; a field you leave out keeps its price. One with none of the three, or
+with no `why`, is skipped.
 
 Return `{"reprice": [], "notes": []}` when nothing moved. That is a normal
 iteration.

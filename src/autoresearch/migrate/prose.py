@@ -4,7 +4,7 @@ This is the only place in core that parses prose, and it is deliberately a
 **one-way, one-time** conversion with a fidelity gate rather than a reader the
 system depends on. Everything after it reads records.
 
-The corpus this was written for is 271 hypotheses and 143 harness-debt entries
+The corpus this was written for is 270 hypotheses and 142 harness-debt entries
 across ~9,100 lines of markdown, with three partly-overlapping sources of truth
 per entry:
 

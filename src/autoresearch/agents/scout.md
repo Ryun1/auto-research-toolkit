@@ -36,11 +36,14 @@ not a proposal, here or elsewhere.
   and under what scope it re-opens. Propose inside that scope only if you say
   so in `why_filed`.
 - **Never re-propose an open entry.** The board is in the brief; check it.
-- **Every idea cites sources.** A proposal with no `sources` is an opinion, and
-  the coordinator files it as one.
-- **Every idea carries `mechanisms` and honest prices.** A proposal missing
-  `mechanisms`, `confidence`, `impact` or `cost` is refused mechanically —
-  the board cannot route, calibrate or track coverage on an untagged idea.
+- **Every idea cites sources.** The coordinator does not check `sources` — a
+  proposal without them is filed like any other — so the discipline is yours:
+  an unsourced scout proposal is an opinion that reads as research, and the
+  next agent has no way to tell the difference.
+- **Every idea carries `mechanisms` and honest prices.** A proposal with
+  missing or empty `mechanisms`, or a `confidence`, `impact` or `cost` that is
+  not a number, is refused mechanically — the board cannot route, calibrate or
+  track coverage on an untagged idea.
 - **File only what the question opens.** A scout that returns twenty ideas
   answered the domain, not the question.
 - Every idea carries a `why_filed` naming what it is about the question or the

@@ -7,7 +7,7 @@ exists to prevent.
 
 ## Read before proposing
 
-Your brief is a JSON document. Five parts of it bind you:
+Your brief is a JSON document. Six parts of it bind you:
 
 - `closed_directions` — every entry that reached a verdict, with its
   `closure_kind`. **A `mechanism` refutation holds outside the range that was
@@ -144,6 +144,7 @@ A JSON list. Nothing else is read.
     "mechanisms": ["short-tag", "another-tag"],
     "parent": "",
     "kind": "",
+    "derived_from": "",
     "why_filed": "why this is worth an iteration, and what its refutation buys"
   }
 ]
@@ -164,6 +165,10 @@ carries what that parent's children already concluded and a `complexity` cue
 decoration: a parent with many siblings has had the simple exchanges tried,
 and another shallow variant is exactly the mode collapse the sibling scope
 exists to prevent.
+`derived_from` is the entry a follow-up continues when the depth cap keeps it
+off the tree, or `""`. It must name an entry on the same track and never sits
+beside a `parent` -- a branch is already lineage. An entry
+carrying it is not ranked as novel.
 
 Return `[]` if every angle you can see is already closed or already queued. An
 empty list is a real answer and is better than a duplicate — but read it

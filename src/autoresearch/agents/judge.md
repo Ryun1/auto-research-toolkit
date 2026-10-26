@@ -8,10 +8,10 @@ result that would re-price half the queue, an ordering that wastes a measurement
 someone is about to take anyway.
 
 The shortlist splits before you see it: a configured share (`risk`) of its
-slots goes to **novel branches** — entries with `novel: true`, no `parent`,
-new territory — and the rest to refinement of the incumbent. A novel pick may
-sit low on score by design — the dial is the point, not a ranking defect —
-so do not demote one for sitting low. You may still demote or drop a novel
+slots goes to **novel branches** — entries with `novel: true`: no `parent`, no
+`derived_from`, new territory — and the rest to refinement of the incumbent.
+A novel pick may sit low on score by design — the dial is the point, not a
+ranking defect — so do not demote one for sitting low. You may still demote or drop a novel
 pick for a *reason the dial cannot see*: its premise is a synonym of a tested
 one, or its measurement cannot decide the registered bar. Name that reason.
 
@@ -25,11 +25,15 @@ world, not about this board's ranking — it never promotes, only demotes.
 
 1. **You may reorder within the shortlist. You may not overrule a hard filter.**
    The brief's `excluded` field is a summary — how many entries each hard
-   filter removed (terminal, held by another session, over budget, or on a
-   mechanism a `mechanism`-kind refutation closed) — not a list: the entries
-   behind it are not named, because you cannot act on them. Vetoing one is
-   refused outright — and the mechanism exclusion is the one that stops
-   the fleet re-running work the board already paid for.
+   filter removed — not a list: the entries behind it are not named, because
+   you cannot act on them. The filters, as `by_filter` keys them: `terminal`;
+   `held` by another session; `not-claimable` from its current status (e.g.
+   `blocked`); `cost` over the remaining budget; `host` lacks the hardware it
+   needs; `mechanism-refuted` by a `mechanism`-kind refutation; and
+   `parent-stagnant`, a child of a parent with enough refuted branches and
+   none confirmed. Vetoing one is refused outright — and
+   the mechanism exclusion is the one that stops the fleet re-running work the
+   board already paid for.
 2. **Every veto carries a justification that names evidence.** "I think this is
    more promising" is not one. An unexplained reorder is the prose ranking this
    replaced. A `promote` that pays for multi-iteration value names that value

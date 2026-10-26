@@ -77,6 +77,7 @@ _EXCLUDED_FILTERS = (
     ("cost", "cost"),
     ("host", "host"),
     ("mechanism", "mechanism-refuted"),
+    ("parent", "parent-stagnant"),
 )
 
 
@@ -401,8 +402,8 @@ class Coordinator:
         """Name, description and path for every readable skill, and what could
         not be read.
 
-        By index and not by body, which is the entire point: thirteen skills at
-        the source corpus's median are 2,730 lines, and a brief that inlines
+        By index and not by body, which is the entire point: thirteen skills in
+        the source corpus totalled 2,730 lines, and a brief that inlines
         them has re-created the problem. A role routes on the description and
         reads the one that matches.
 
@@ -688,8 +689,12 @@ class Coordinator:
                              "prediction, bar, confidence (0-1), impact "
                              "(fractional move on the objective), cost (in "
                              "run-units), mechanisms (non-empty list of tags), "
-                             "why_filed -- a proposal missing any of these is "
-                             "refused mechanically. Check `mechanism_coverage` "
+                             "why_filed. A proposal with no title is dropped, "
+                             "and one with empty mechanisms or a non-numeric "
+                             "confidence, impact or cost is refused "
+                             "mechanically; the prose fields are not checked "
+                             "at filing, but an entry without a bar cannot be "
+                             "decided. Check `mechanism_coverage` "
                              "in the brief: at least one entry in your batch "
                              "must probe a mechanism tag with `tested: 0` (or "
                              "absent), naming a NEW tag if no existing one "
@@ -885,10 +890,11 @@ class Coordinator:
         No model runs in this process: the phase reserves a bounded external
         assignment per card (claim, run ceiling, wall clock, workspace,
         output contract) and leaves the work to native agents, which settle
-        through `ar external complete`. The run allocation is charged by
-        `attempts.reserve` against the claim and campaign ceilings at reserve
-        time -- a crash never refunds it -- so the iteration's runs meter is
-        deliberately not charged here a second time.
+        through `ar external complete`. The run allocation is charged twice,
+        to two different meters: here against the iteration's runs meter, on
+        the card's declared cost, as worker dispatch does, so the iteration
+        bounds what it hands out; and by `attempts.reserve` against the claim
+        and campaign ceilings at reserve time -- a crash never refunds it.
 
         The iteration ends at dispatch: nothing it can curate or distil has
         come back yet. `run_iteration` stops the loop on the outstanding
@@ -1065,6 +1071,7 @@ class Coordinator:
                         "reopen_condition (required for slope/cell), runs: int, "
                         "disposition: experiment|superseded|already-shipped (optional, default experiment), "
                         "applicability: {baseline, source_revision, workload, hardware, parameters} (optional), "
+                        "evidence_class: ledger|official|census (optional; official and census skip the ledger-row checks), "
                         "gpu_hours: float, verification: {reread: true, "
                         "claims_checked: [what you re-verified, one item each], "
                         "corrections: [what the re-review changed]}}. A reply "
@@ -1421,8 +1428,12 @@ class Coordinator:
                              "(0-1), impact (fractional move on the "
                              "objective), cost (in run-units), mechanisms "
                              "(non-empty list of tags), sources (list of "
-                             "citations or URLs), why_filed -- a proposal "
-                             "missing any of these is refused mechanically. "
+                             "citations or URLs), why_filed. A proposal with "
+                             "no title is dropped, and one with empty "
+                             "mechanisms or a non-numeric confidence, impact "
+                             "or cost is refused mechanically; the prose "
+                             "fields and sources are not checked at filing, "
+                             "but an unsourced proposal is an unbacked one. "
                              "Favour proposals that open a mechanism tag "
                              "`mechanism_coverage` shows untested. File only "
                              "what the question opens; never re-propose an "
@@ -1646,10 +1657,19 @@ class Coordinator:
             # should never read harness debt as a lead on the score.
             harness_track = next(
                 (t for t in self.config.tracks.values() if t.id == "harness"), None)
-            for debt in data.get("harness_debt", []):
-                if harness_track and isinstance(debt, dict) and debt.get("title"):
-                    entry = self._file({**debt, "track": harness_track.id})
-                    phase.detail.append(f"filed {entry.id} (harness debt)")
+            debts = [d for d in data.get("harness_debt", [])
+                     if isinstance(d, dict) and d.get("title")]
+            if debts and harness_track is None:
+                # Not filed into research instead -- that is the misreading
+                # the separate track exists to prevent -- but not silent
+                # either: QC found defects and the record should say they
+                # went nowhere.
+                phase.detail.append(
+                    f"harness debt not filed: no 'harness' track "
+                    f"({len(debts)} item(s) dropped)")
+            for debt in debts if harness_track else []:
+                entry = self._file({**debt, "track": harness_track.id})
+                phase.detail.append(f"filed {entry.id} (harness debt)")
         except (BudgetExceeded, AutoresearchError, KeyError, TypeError) as exc:
             problems.append(f"qc role skipped: {exc}")
 

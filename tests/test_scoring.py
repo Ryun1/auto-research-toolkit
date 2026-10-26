@@ -106,6 +106,23 @@ def test_the_seam_never_sees_an_excluded_entry(sandbox, store, tmp_path):
     assert [e["id"] for e in payload["entries"]] == ["Q2"]
 
 
+def test_the_seam_keeps_ranks_novelty(sandbox, store):
+    """A `derived_from` follow-up is lineage, not new territory: the seam
+    re-prices it but must not hand it a novel slot rank denied it."""
+    from autoresearch import rank as rank_mod
+    from autoresearch import scoring
+    make_entry(store, "Q1")
+    make_entry(store, "Q2", derived_from="Q1")
+    make_entry(store, "Q3", parent="Q1", kind="improve")
+    echo_scorer(sandbox, [{"id": i, "score": 1.0, "reason": ""}
+                          for i in ("Q1", "Q2", "Q3")])
+    entries = store.all()
+    ranking = rank_mod.rank(entries, sandbox)
+    seamed = scoring.seam_ranking(sandbox, ranking, entries, risk=0.5)
+    novel = {s.entry_id: s.novel for s in seamed.scored}
+    assert novel == {"Q1": True, "Q2": False, "Q3": False}
+
+
 def test_the_loop_dispatches_on_the_domain_prices(sandbox, store):
     """The seam reorders the shortlist: with the formula, Q10 (a cheap certain
     increment) outranks Q90 (an honest long shot); with the toy scorer, Q90's
