@@ -64,6 +64,23 @@ def test_confidence_is_a_probability_not_a_percentage(sandbox, store):
                 changes={"confidence": 85.0}, session="s", why="typo")
 
 
+@pytest.mark.parametrize("changes, match", [
+    ({"cost": 0}, "cost must be positive"),
+    ({"cost": -2}, "cost must be positive"),
+    ({"impact": "large"}, "impact must be a number"),
+    ({"impact": float("nan")}, "impact must be finite"),
+])
+def test_impact_and_cost_are_checked_like_confidence(sandbox, store, changes, match):
+    """The curator may re-price impact and cost too. A zero cost made one entry
+    outrank everything by ~1e9 (rank clamps the divisor), and a non-numeric
+    value raised a bare ValueError the curate phase did not catch."""
+    entry = make_entry(store, "Q1", cost=1.0)
+    with pytest.raises(AutoresearchError, match=match):
+        reprice(store, entry, machine=sandbox.track_for("Q1").machine,
+                changes=changes, session="s", why="it moved")
+    assert store.load("Q1").cost == 1.0
+
+
 def test_the_command_shares_the_writer(sandbox, store, capsys):
     make_entry(store, "Q1", confidence=0.5)
     assert cli.main(["--domain", str(sandbox.paths.root), "--session", "hand",

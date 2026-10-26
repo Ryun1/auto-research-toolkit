@@ -962,7 +962,17 @@ def reprice(store, entry, *, machine, changes, session, why, at=None):
         value = changes.get(name)
         if value is None:
             continue
-        value = float(value)
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            raise AutoresearchError(
+                f"{name} must be a number, got {value!r}") from None
+        if not math.isfinite(value):
+            raise AutoresearchError(f"{name} must be finite, got {value!r}")
+        if name == "cost" and value <= 0:
+            raise AutoresearchError(
+                f"cost must be positive, got {value:g}: a zero cost divides "
+                "the ranking by nothing")
         if name == "confidence" and not 0.0 <= value <= 1.0:
             raise AutoresearchError(
                 f"confidence must be a probability in [0, 1], got {value:g}")

@@ -28,7 +28,7 @@ OUTPUT_CONTRACT = {
     "closure_kind": "mechanism|slope|cell (refutations)",
     "reopen_condition": "required for slope/cell",
     "disposition": "optional experiment|superseded|already-shipped; default experiment",
-    "evidence_class": "optional ledger|official|census; default ledger -- official "
+    "evidence_class": "optional ledger|official|census; omitted reads as unlabelled and faces the full checks, as ledger does -- official "
                       "(evaluator-owned numbers) and census (measurement-free work) "
                       "skip the ledger-row replication and faithfulness checks",
     "run_detail": "optional list of retained evidence legs (run, what, result, "

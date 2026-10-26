@@ -1761,8 +1761,8 @@ def _print_assignments(config, iteration):
     if not rows:
         return
     print("\nassignments for native agents (work happens outside this "
-          "process; settle each with `ar external complete <id> --report "
-          "report.json --session <session>`, then run `ar loop` again):")
+          "process; settle each with `ar --session <session> external complete "
+          "<id> --report report.json`, then run `ar loop` again):")
     for row in rows:
         ceiling = row.get("ceiling") or {}
         print(f"  {row['id']}  entry {row['entry']}  "
@@ -2750,8 +2750,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
         "--accept-drift", action="store_true",
         help="proceed even though domain.toml changed since the session was cut")
     ssn_prune = ssn.add_parser(
-        "prune", help="report sessions past their settle window; "
-                      "destroys only with --destroy")
+        "prune", help="report every session, its age against the settle window "
+                      "and whether it is eligible; destroys only with --destroy")
     ssn_prune.add_argument(
         "--destroy", action="store_true",
         help="destroy the sessions prune reports as eligible (clean, settled, "

@@ -906,6 +906,27 @@ def test_the_generator_and_scout_briefs_carry_the_board(sandbox, store):
     assert scout["open_entries"], "an empty board proves nothing"
 
 
+def test_the_worker_is_offered_its_own_tracks_verdicts(sandbox, store):
+    """worker.md says the verdicts are the track's terminal states; the brief
+    used to list the research verdicts for every entry, so a dispatched
+    harness entry was told `confirmed`, which the loop then refused as an
+    unknown verdict. The retirement is not a worker verdict either."""
+    make_entry(store, "H1", repro="bin/measure", observed="o", core="0")
+    briefs = []
+
+    def worker(brief):
+        briefs.append(json.loads(brief))
+        return IDLE[Role.WORKER](brief)
+
+    handlers = {**IDLE, Role.WORKER: worker}
+    Coordinator(sandbox, ScriptedBrain(handlers)).run_iteration(1)
+    assert briefs, "the harness entry was dispatched"
+    instruction = briefs[0]["instruction"]
+    assert "fixed|refuted|wontfix|blocked|inconclusive" in instruction
+    assert "confirmed|" not in instruction
+    assert "superseded is not a worker verdict" in instruction
+
+
 def test_the_worker_brief_carries_no_board_and_the_curator_only_coverage(
         sandbox, store):
     """The record grows monotonically, so one superset brief made every

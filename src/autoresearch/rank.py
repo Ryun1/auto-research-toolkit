@@ -193,7 +193,7 @@ def _terminal_status(reason: str | None) -> str | None:
 def calibrate(entries, machine_for, candidate=None) -> dict:
     """Observed confirm-rate per mechanism tag, from closed entries.
 
-    This is why migrating the historical corpus matters: 257 reached verdicts is
+    This is why migrating the historical corpus matters: 258 reached verdicts is
     a real prior. Without it, `confidence` is whatever the filing agent guessed,
     and an agent's guess about its own idea is the least reliable number in the
     system.

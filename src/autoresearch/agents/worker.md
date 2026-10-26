@@ -40,7 +40,10 @@ index of the skills this loop has distilled from work that already closed.
    verdict — the claim goes back to the queue. Read `entry.track` before you
    pick. `blocked` and `inconclusive` are sayable on every track and close
    nothing: the claim is released and the entry returns to the queue, with your
-   `summary` as the reason.
+   `summary` as the reason. `superseded` is not yours to return: if another
+   entry already covers this one, return `inconclusive` and name it in
+   `summary` — retiring an entry is `ar close --superseded-by`'s job, which
+   records the replacement.
 5. **Refutations must state how far they reach.** Pick one:
    - `mechanism` — holds outside the range you measured, because of *why* it
      fails, not *where*. Re-opens only on a new mechanism. This is a strong

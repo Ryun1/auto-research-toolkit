@@ -1,11 +1,12 @@
-"""The coordinator: one iteration, eight phases, every phase metered.
+"""The coordinator: one iteration, seven phases, every phase metered.
 
     orient -> generate -> rank -> dispatch -> curate -> distil -> qc -> stop?
 
 Shaped after auditician's coordinator, with three changes the research setting
 forces.
 
-**Generation runs every iteration, concurrently with the work.** The source
+**Generation runs every iteration, ahead of rank and dispatch, whatever the
+queue's length; only a spent wall clock or money ceiling skips it.** The source
 harness generated only when fewer than three entries remained queued, and its
 own debt log records what that cost: the rule *forbade draining a short queue*,
 so an entry filed when the queue was short was skipped by every iteration after
@@ -55,6 +56,7 @@ from .. import hardware as hw
 from .. import rank as rank_mod
 from .. import runs as runs_mod
 from .. import skills as skills_mod
+from .. import states as states_mod
 from ..claims import Claims
 from ..entries import Applicability, Entry, Event, Result, Store
 from ..errors import AutoresearchError, BudgetExceeded
@@ -892,7 +894,8 @@ class Coordinator:
         output contract) and leaves the work to native agents, which settle
         through `ar external complete`. The run allocation is charged twice,
         to two different meters: here against the iteration's runs meter, on
-        the card's declared cost, as worker dispatch does, so the iteration
+        the card's declared cost rounded down to whole runs (at least one)
+        -- worker dispatch charges the raw cost -- so the iteration
         bounds what it hands out; and by `attempts.reserve` against the claim
         and campaign ceilings at reserve time -- a crash never refunds it.
 
@@ -1065,7 +1068,12 @@ class Coordinator:
                         "and verify every claim before returning. Zero-run static "
                         "work must report runs: 0 and make no measured claims. "
                         "Return JSON: {verdict: "
-                        "confirmed|refuted|blocked|inconclusive, memo: "
+                        + "|".join(sorted(
+                            self.config.track_for(entry_id).machine.terminal_names
+                            - set(states_mod.RETIREMENT)))
+                        + "|blocked|inconclusive (superseded is not a "
+                        "worker verdict: name the covering entry in summary "
+                        "and return inconclusive), memo: "
                         "path relative to the domain root, summary, closure_kind: "
                         "mechanism|slope|cell (refutations only), "
                         "reopen_condition (required for slope/cell), runs: int, "
