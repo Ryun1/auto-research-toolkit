@@ -302,3 +302,21 @@ def test_list_table_shows_open_entries_and_counts_the_closed(sandbox, store, cap
     assert _ar(sandbox, "entry", "list", "--json") == 0
     assert [r["id"] for r in json.loads(capsys.readouterr().out)] == ["Q1", "Q2"]
 
+
+def test_a_closed_pipe_is_not_a_traceback(sandbox, store):
+    """`ar entry list | head -1` printed a BrokenPipeError traceback, which
+    reads to an agent as the harness crashing."""
+    import os
+    import subprocess
+    import sys
+    for n in range(1, 4):
+        make_entry(store, f"Q{n}")
+    read, write = os.pipe()
+    os.close(read)   # the reader is gone before the first byte
+    proc = subprocess.run(
+        [sys.executable, "-m", "autoresearch", "--domain",
+         str(sandbox.paths.root), "entry", "list"],
+        stdout=write, stderr=subprocess.PIPE, text=True)
+    os.close(write)
+    assert "Traceback" not in proc.stderr and "BrokenPipe" not in proc.stderr
+    assert proc.returncode == 0

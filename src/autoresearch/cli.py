@@ -2840,12 +2840,23 @@ def main(argv=None) -> int:
         parser = build_parser()
         args = parser.parse_args(argv)
     _VIEWS_STALE.clear()
+    code = None
     try:
         code = args.func(args)
+        # Inside the try: buffered output that only meets the closed pipe at
+        # the interpreter's exit flush would otherwise print its own traceback.
+        sys.stdout.flush()
         return VIEWS_STALE if code == 0 and _VIEWS_STALE else code
     except AutoresearchError as exc:
         print(f"ar: {exc}", file=sys.stderr)
         return 2
+    except BrokenPipeError:
+        # `ar rank | head`: the reader stopped, which is not a defect, and a
+        # traceback reads to an agent as the harness crashing. stdout goes to
+        # devnull so nothing else tries the dead pipe. The verb's own code
+        # stands if it finished; one cut off mid-print exits 1.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 1 if code is None else code
 
 
 if __name__ == "__main__":

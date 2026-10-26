@@ -353,7 +353,10 @@ use `ar entry amend` for deliberate changes to existing records.
 `ar rank`, `ar budget`, `ar validate` and `ar entry list` each take `--json`
 (the whole document, nothing else, on stdout; exit codes unchanged), and
 `ar entry show` defaults to current state — pass `--history` for the full
-append-only record. Every verb that saves an entry record re-renders the
+append-only record. The prose tables are sized for a session's context: `ar
+rank` and `ar entry list` count closed entries instead of listing them, and
+`ar rank` shows only the calibration rows its candidates carry; `--all`
+prints every row. Piping any verb into `head` ends quietly. Every verb that saves an entry record re-renders the
 generated views itself, so `mutate → validate` no longer needs an `ar render`
 in between. `ar skill find <terms>` routes on descriptions the same way a
 brief does, without reading the whole index. The coordinator's own asks moved
