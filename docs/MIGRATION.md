@@ -35,6 +35,13 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   `[name]` in the message or a `Session: name` trailer -- or one that names
   both the session and the claimed entry id. Sessions that want commits to
   count as liveness should mark them; events and run rows are unchanged.
+- **Behavioural: amending a closed entry's mechanisms moves its closure.**
+  `ar entry amend --mechanism/--drop-mechanism` on a closed entry now also
+  rewrites `result.mechanisms`, the snapshot `ar rank` excludes other entries
+  by, and refuses without `--why`; the event records the old snapshot. It used
+  to change only the entry's list, so `ar rank` kept excluding by the old tags.
+  Entries amended that way before this release still exclude by the old
+  snapshot; re-run the amend (drop and re-add a tag) to move it.
 - **Optional: two read-only scripts.** `scripts/calibrate-priors.py` scores
   whether the domain's `confidence`/`impact`/`cost` predicted its verdicts,
   replayed from git; `scripts/audit-fast-closures.py` lists verdicts closed

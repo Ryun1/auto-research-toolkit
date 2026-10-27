@@ -846,6 +846,20 @@ def cmd_entry_amend(args):
             added.setdefault(name, []).append(value)
         if added.get(name) or dropped.get(name):
             setattr(entry, name, current)
+    # A closure snapshots the mechanisms it tested, and `rank` excludes other
+    # entries by that snapshot, so an amend that reached only the entry's list
+    # left the old tags excluding while the record read as corrected (mldsa87
+    # H6). On a closed entry the amend is the correction of what the verdict
+    # covers: it moves the snapshot too, and like a relabel it needs a reason.
+    closure_was = None
+    if entry.result is not None and (added.get("mechanisms")
+                                     or dropped.get("mechanisms")):
+        if not (getattr(args, "why", None) or "").strip():
+            raise AutoresearchError(
+                f"{entry.id} is closed, so its mechanisms are what the verdict "
+                "excludes other entries by; pass --why to say why they change")
+        closure_was = entry.closure_mechanisms()
+        entry.result.mechanisms = list(entry.mechanisms)
     if args.summary is not None or args.reopen_condition is not None:
         # Correcting a closure's own text is a different act from editing an
         # open entry's fields: it is legal on a terminal entry, it leaves the
@@ -888,7 +902,10 @@ def cmd_entry_amend(args):
         [f"{name}={changes[name]!r} (was {previous[name]!r})"
          for name in sorted(changes)]
         + [f"{name} += {added[name]!r}" for name in sorted(added)]
-        + [f"{name} -= {dropped[name]!r}" for name in sorted(dropped)])))
+        + [f"{name} -= {dropped[name]!r}" for name in sorted(dropped)]
+        + ([f"result.mechanisms={entry.result.mechanisms!r} (was {closure_was!r})"]
+           if closure_was is not None else []))
+        + (f": {args.why}" if closure_was is not None else "")))
     entry.updated = _iso()
     store.save(entry)
     _render_views(config)
@@ -2504,7 +2521,9 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                        help="add a source; repeatable, and never drops one "
                             "already recorded (H15)")
     amend.add_argument("--mechanism", dest="mechanism", action="append",
-                       help="add a mechanism tag; repeatable, additive (H15)")
+                       help="add a mechanism tag; repeatable, additive (H15). "
+                            "On a closed entry it also changes what the "
+                            "closure excludes, and needs --why")
     amend.add_argument("--drop-source", dest="drop_source", action="append",
                        help="remove a source that is recorded but wrong "
                             "(repeatable; a value that is not there is "

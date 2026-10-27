@@ -21,7 +21,8 @@ before the record exists, and one status that means "retired, not refuted".
 import pytest
 
 from autoresearch import cli
-from conftest import make_entry, memo
+from autoresearch.rank import rank
+from conftest import close, make_entry, memo
 
 
 def root_of(sandbox):
@@ -73,6 +74,31 @@ def test_amend_adds_sources_and_mechanisms_without_dropping_the_ones_there(
     assert saved.mechanisms == ["m1", "m2"]
     event = saved.history[-1]
     assert "sources +=" in event.detail and "mechanisms +=" in event.detail
+
+
+def test_amending_a_closed_entry_s_mechanisms_moves_what_its_closure_excludes(
+        sandbox, store, capsys):
+    """mldsa87 H6: the closure snapshots the entry's mechanisms, and `rank`
+    excludes by the snapshot. An amend on a closed entry changed only the
+    entry's list, so a coarse tag corrected away kept excluding every entry
+    that shared it, while the record read as corrected."""
+    q40 = make_entry(store, "Q40", mechanisms=["hash", "design"])
+    close(sandbox, store, q40, verdict="refuted", closure_kind="mechanism")
+    make_entry(store, "Q37", impact=1.0, mechanisms=["design"])
+    assert any(s.entry_id == "Q37" and "refuted by Q40" in s.excluded
+               for s in rank(store.all(), sandbox).excluded)
+
+    amend = [*root_of(sandbox), "entry", "amend", "Q40",
+             "--drop-mechanism", "hash", "--drop-mechanism", "design",
+             "--mechanism", "keccak-rotation"]
+    assert cli.main(amend) == 2                     # a verdict's reach: say why
+    assert "--why" in capsys.readouterr().err
+    assert cli.main([*amend, "--why", "only the rotation was tested"]) == 0
+
+    saved = store.load("Q40")
+    assert saved.closure_mechanisms() == ["keccak-rotation"]
+    assert "was ['hash', 'design']" in saved.history[-1].detail
+    assert [s.entry_id for s in rank(store.all(), sandbox).scored] == ["Q37"]
 
 
 def test_amend_refuses_a_source_that_is_already_recorded(sandbox, store, capsys):
