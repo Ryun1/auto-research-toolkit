@@ -375,21 +375,22 @@ class Claims:
         and the claimed entry both."""
         import re
         import subprocess
-        # Words, not substrings: `scout` is not `scouting`, `Q1` is not `Q10`.
+        # Words, not substrings: `scout` is not `scouting`, `Q1` is not `Q10`,
+        # `moon` is not `moon.v2`. A `.` or `-` ends a word unless a name
+        # character follows, so "closes Q1." still names Q1.
         def word(text):
-            return rf"(?<![A-Za-z0-9_.-]){re.escape(text)}(?![A-Za-z0-9_.-])"
+            return (rf"(?<![A-Za-z0-9_])(?<![A-Za-z0-9_][.-]){re.escape(text)}"
+                    rf"(?![A-Za-z0-9_])(?![.-][A-Za-z0-9_])")
         named, entry = re.compile(word(session)), re.compile(word(entry_id))
         bracket = re.compile(rf"\[{re.escape(session)}\]")
         trailer = re.compile(rf"^Session:[ \t]*{re.escape(session)}[ \t]*$",
                              re.M | re.I)
-        grep = re.sub(r"([.\[\]()*+?{}|^$\\])", r"\\\1", session)
         try:
-            # git narrows to commits mentioning the name at all; which kind of
-            # mention it is gets decided here, newest first.
+            # git narrows to commits containing the name at all; whether it is
+            # a word, and which kind of mention, is decided here, newest first.
             proc = subprocess.run(
-                ["git", "log", f"--since={since}", "--extended-regexp",
-                 f"--grep=(^|[^A-Za-z0-9_.-]){grep}([^A-Za-z0-9_.-]|$)",
-                 "--format=%x00%ct %h%n%B"],
+                ["git", "log", f"--since={since}", "--fixed-strings",
+                 f"--grep={session}", "--format=%x00%ct %h%n%B"],
                 cwd=self.config.paths.root, capture_output=True, text=True)
         except OSError:                # no git on PATH: no commits to read
             return None

@@ -80,6 +80,8 @@ def test_a_commit_naming_the_holder_keeps_it_alive(sandbox, store):
 @pytest.mark.parametrize("message, matched", [
     ("B10 audit\n\nSession: moon", "marking Session: moon"),
     ("moon closes in on Q1", "naming Q1 and moon"),
+    ("Q1 closed by moon.", "naming Q1 and moon"),      # a sentence ends in
+    ("moon closes Q1.", "naming Q1 and moon"),         # a full stop
 ])
 def test_a_marked_commit_or_one_naming_holder_and_entry_keeps_it_alive(
         sandbox, store, message, matched):
@@ -93,6 +95,7 @@ def test_a_marked_commit_or_one_naming_holder_and_entry_keeps_it_alive(
     "B10 withstood; moon memo corrected",       # the holder's name as prose
     "Q1 closed superseded",                     # the entry, not the holder
     "moon notes on Q10",                        # Q10 is not Q1
+    "moon.v2 notes on Q1",                      # moon.v2 is not moon
 ])
 def test_a_commit_that_only_mentions_the_name_is_not_a_sign_of_life(
         sandbox, store, message):
