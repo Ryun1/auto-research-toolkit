@@ -48,6 +48,10 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   filed confidence stands and the calibration row says "too few to move a
   prior". Two closures used to move a 0.05 prior to 0.43. Rankings in young
   domains will follow filed confidence more closely.
+- **Optional: kits.** `[evaluator] kits = ["cairo"]` plus `ar kit sync`
+  vendors shared measurement code into `bin/<name>kit.py` and adds it to the
+  evaluator. Nothing changes for a domain that declares none. See "Kits" in
+  the README.
 - **Optional: two read-only scripts.** `scripts/calibrate-priors.py` scores
   whether the domain's `confidence`/`impact`/`cost` predicted its verdicts,
   replayed from git; `scripts/audit-fast-closures.py` lists verdicts closed

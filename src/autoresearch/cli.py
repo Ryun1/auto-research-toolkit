@@ -139,6 +139,40 @@ def cmd_init(args):
     return validation
 
 
+def cmd_kit_list(args):
+    """The kits this core ships, and which this domain declares."""
+    from . import kits
+    config = _load(args)
+    for name in sorted(kits.KITS):
+        declared = name in config.evaluator_kits
+        copy = config.paths.root / kits.vendored(name)
+        state = ("not declared" if not declared
+                 else "missing" if not copy.is_file()
+                 else "current" if copy.read_bytes() == kits.source(name).read_bytes()
+                 else "differs from this core")
+        print(f"{name:10} {kits.vendored(name):22} {state}")
+    return 0
+
+
+def cmd_kit_sync(args):
+    """Vendor every declared kit into the domain, as this core ships it."""
+    from . import kits
+    config = _load(args)
+    if not config.evaluator_kits:
+        raise AutoresearchError(
+            "this domain declares no kits; add `kits = [\"<name>\"]` under "
+            f"[evaluator] in domain.toml (shipped: {sorted(kits.KITS)})")
+    written = kits.sync(config)
+    for path in written:
+        print(f"wrote {path}")
+    if not written:
+        print("every declared kit is current")
+    else:
+        print("a kit is part of the evaluator: commit it, and re-measure "
+              "before comparing runs across the change")
+    return 0
+
+
 def cmd_doctor(args):
     """Diagnose the environment this domain's records are produced in.
 
@@ -1913,6 +1947,8 @@ def cmd_validate(args):
     entries, read_problems = store.read_all()
     problems += read_problems
     problems += [f"duplicate entry id: {d}" for d in store.duplicates()]
+    from . import kits as kits_mod
+    problems += kits_mod.problems(config)
     # A stale generated view fails validate (invariant 1) unless the domain
     # has said its tree is multi-session and takes it as a warning (#24).
     stale_views = render.check_views(config, entries)
@@ -1978,6 +2014,7 @@ def cmd_validate(args):
                 + validate_mod.duplicate_warnings(config)
                 + validate_mod.holdout_warnings(config)
                 + validate_mod.evaluator_warnings(config)
+                + validate_mod.kit_warnings(config)
                 + validate_mod.record_floor_warnings(config)
                 + validate_mod.lineage_warnings(config)
                 + validate_mod.citation_warnings(config))
@@ -2726,6 +2763,15 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     sub.add_parser("doctor", help="diagnose the installed core against this "
                    "domain's declarations").set_defaults(func=cmd_doctor)
+
+    kit = sub.add_parser(
+        "kit", help="shared measurement code vendored into the domain "
+                    "([evaluator] kits)")
+    ksub = kit.add_subparsers(dest="kit_cmd", required=True)
+    ksub.add_parser("list", help="shipped kits and this domain's copies"
+                    ).set_defaults(func=cmd_kit_list)
+    ksub.add_parser("sync", help="write each declared kit as this core ships it"
+                    ).set_defaults(func=cmd_kit_sync)
 
     harness = sub.add_parser(
         "harness", help="this project's defects on the core, packaged for upstream")

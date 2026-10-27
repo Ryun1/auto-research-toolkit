@@ -1155,6 +1155,37 @@ refuses a plugin that does not declare the contract, but cannot prove one never
 bypasses the record — a plugin that does is forking by other means. The
 contract is in [docs/native-driver.md](docs/native-driver.md#extending-the-cli-plugins).
 
+## Kits: measurement code shared across domains
+
+Domains that score the same toolchain end up rewriting the same parser, and
+the copies drift: three Cairo domains measured one upstream with three snforge
+parsers, and each fix (a patch that silently did not apply, an undeployable
+account recorded as a result) stayed in the domain that found it. A kit is
+that code written once, in `src/autoresearch/kits/`, and **vendored**:
+
+```toml
+[evaluator]
+kits = ["cairo"]
+```
+
+`ar kit sync` writes `bin/cairokit.py`; `bin/measure` imports it from beside
+itself. The copy is part of the evaluator, so `evaluator_sha` covers it and a
+candidate's edited copy is drift, exactly as for the script. Vendored rather
+than imported because `bin/measure` runs under the system `python3` and the
+evaluator hash only covers files in the domain: a kit imported from the
+installed core could change a score without changing the hash. A kit is
+standard library only. `ar validate` refuses a declared kit with no copy and
+warns when the copy differs from what the installed core ships; `ar kit list`
+shows each one's state. Syncing a new kit is a new evaluator: re-measure
+before comparing runs across it.
+
+`cairo` (Scarb + Starknet Foundry) parses snforge output and refuses a parse
+that does not add up to snforge's own `Tests:` summary; reads L2 or Sierra gas,
+whichever the challenge scores; checks a patch against an edit surface;
+applies it in a clean `git archive` export and proves it landed; measures the
+declared account's class bytes and CASM felts against Starknet's declare caps;
+and runs untrusted patches in Docker with no network.
+
 ## Bounded execution and external coordination
 
 Two verbs make an execution budget real rather than declarative:

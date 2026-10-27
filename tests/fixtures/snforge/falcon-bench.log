@@ -1,0 +1,123 @@
+   Compiling test(pqbench_falcon_1024_unittest) pqbench_falcon_1024 v0.1.0 (/work/crates/falcon_1024/Scarb.toml)
+   Compiling test(pqbench_falcon_1024_integrationtest) pqbench_falcon_1024_integrationtest v0.1.0 (/work/crates/falcon_1024/Scarb.toml)
+warn: external contracts not found for selectors: `pqbench_falcon_1024::*`
+warn[E2100]: Unused import: `pqbench_falcon_1024_integrationtest::bench::PqSignatureVerifier`
+ --> /work/crates/falcon_1024/tests/bench.cairo:7:24
+use pqbench_interface::PqSignatureVerifier;
+                       ^^^^^^^^^^^^^^^^^^^
+
+warn[E2100]: Unused import: `pqbench_falcon_1024_integrationtest::vectors::PqSignatureVerifier`
+ --> /work/crates/falcon_1024/tests/vectors.cairo:5:24
+use pqbench_interface::PqSignatureVerifier;
+                       ^^^^^^^^^^^^^^^^^^^
+
+    Finished `dev` profile target(s) in 3 seconds
+
+
+Collected 17 test(s) from pqbench_falcon_1024 package
+Running 0 test(s) from src/
+Running 17 test(s) from tests/
+[PASS] pqbench_falcon_1024_integrationtest::bench::bench_baseline_falcon_1024 (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~51440)
+        sierra gas: 51440
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::hint_tampered (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~125558302)
+        sierra gas: 125558302
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::s1_tampered (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~125558302)
+        sierra gas: 125558302
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::key_short (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~15940)
+        sierra gas: 15940
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::valid_message_p_minus_1 (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~144897124)
+        sierra gas: 144897124
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::bench::bench_verify_falcon_1024 (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~144897504)
+        sierra gas: 144897504
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::wrong_message (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~144917144)
+        sierra gas: 144917144
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::key_non_canonical (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~3810130)
+        sierra gas: 3810130
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::s1_non_canonical (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~3848090)
+        sierra gas: 3848090
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::valid_message_random (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~144931094)
+        sierra gas: 144931094
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::signature_short (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~15940)
+        sierra gas: 15940
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::salt_tampered (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~144918264)
+        sierra gas: 144918264
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::valid_message_zero (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~144927974)
+        sierra gas: 144927974
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::salt_oversized (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~11337930)
+        sierra gas: 11337930
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::norm_over_bound (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~144933464)
+        sierra gas: 144933464
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::key_tampered (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~126353902)
+        sierra gas: 126353902
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pqbench_falcon_1024_integrationtest::vectors::valid_message_one (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~140160582)
+        sierra gas: 140160582
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+Tests: 17 passed, 0 failed, 0 ignored, 0 filtered out
+

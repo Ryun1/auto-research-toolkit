@@ -1,0 +1,58 @@
+   Compiling test(pq_accounts_unittest) pq_accounts v0.1.0 (/work/pq-accounts/contracts/Scarb.toml)
+   Compiling test(pq_accounts_integrationtest) pq_accounts_integrationtest v0.1.0 (/work/pq-accounts/contracts/Scarb.toml)
+    Finished `dev` profile target(s) in 7 seconds
+
+
+Collected 8 test(s) from pq_accounts package
+Running 8 test(s) from tests/
+[PASS] pq_accounts_integrationtest::ml_dsa_87::constructor_takes_84_felts (l1_gas: ~0, l1_data_gas: ~96, l2_gas: ~895900)
+        sierra gas: 895900
+        syscalls: (Deploy: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pq_accounts_integrationtest::ml_dsa_87::validate_needs_every_part (l1_gas: ~0, l1_data_gas: ~151680, l2_gas: ~2128654776)
+        sierra gas: 1493896776
+        syscalls: (StorageWrite: 1669, StorageRead: 1445, CallContract: 9, GetExecutionInfo: 1, Deploy: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pq_accounts_integrationtest::ml_dsa_87::bench_baseline_ml_dsa_87 (l1_gas: ~0, l1_data_gas: ~169248, l2_gas: ~2384221448)
+        sierra gas: 1675897448
+        syscalls: (StorageWrite: 1853, StorageRead: 1614, CallContract: 9, Deploy: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pq_accounts_integrationtest::ml_dsa_87::setup_stops_at_the_last_part (l1_gas: ~0, l1_data_gas: ~169248, l2_gas: ~2384131791)
+        sierra gas: 1675807791
+        syscalls: (StorageWrite: 1853, StorageRead: 1615, CallContract: 10, Deploy: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pq_accounts_integrationtest::ml_dsa_87::bench_setup_ml_dsa_87 (l1_gas: ~0, l1_data_gas: ~169248, l2_gas: ~2383918128)
+        sierra gas: 1675594128
+        syscalls: (StorageWrite: 1853, StorageRead: 1615, CallContract: 10, Deploy: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pq_accounts_integrationtest::ml_dsa_87::bench_validate_ml_dsa_87 (l1_gas: ~0, l1_data_gas: ~169248, l2_gas: ~2785489633)
+        sierra gas: 2077165633
+        syscalls: (StorageRead: 3291, StorageWrite: 1853, CallContract: 10, Deploy: 1, GetExecutionInfo: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pq_accounts_integrationtest::ml_dsa_87::validate_rejects_a_wrong_message (l1_gas: ~0, l1_data_gas: ~169248, l2_gas: ~2785433503)
+        sierra gas: 2077109503
+        syscalls: (StorageRead: 3291, StorageWrite: 1853, CallContract: 10, Deploy: 1, GetExecutionInfo: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[PASS] pq_accounts_integrationtest::ml_dsa_87::checks_signatures (l1_gas: ~0, l1_data_gas: ~169248, l2_gas: ~3634183523)
+        sierra gas: 2925859523
+        syscalls: (StorageRead: 8491, StorageWrite: 1853, CallContract: 14, Deploy: 1)
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+Running 0 test(s) from src/
+Tests: 8 passed, 0 failed, 0 ignored, 0 filtered out
+

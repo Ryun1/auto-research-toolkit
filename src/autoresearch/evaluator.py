@@ -36,11 +36,18 @@ def files(config) -> list[str]:
     measure command's script: its first token when that names a file in the
     domain root (`bin/measure ...`), else its second (`python bin/m.py ...`).
     Later tokens are arguments -- often the candidate's own files -- and
-    are never taken for the evaluator (review of #36)."""
+    are never taken for the evaluator (review of #36).
+
+    Each declared kit's vendored copy is added either way: the measure script
+    imports it, so it scores runs as much as the script does."""
+    from .kits import vendored
+    kits = [vendored(name) for name in config.evaluator_kits]
     if config.evaluator_files is not None:
-        return list(config.evaluator_files)
-    return [script] if (script := script_token(config.paths.root,
-                                               config.commands.get("measure", ""))) else []
+        named = list(config.evaluator_files)
+    else:
+        script = script_token(config.paths.root, config.commands.get("measure", ""))
+        named = [script] if script else []
+    return named + [k for k in kits if k not in named]
 
 
 def script_token(root, command: str) -> str | None:

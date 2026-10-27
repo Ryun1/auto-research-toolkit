@@ -305,12 +305,20 @@ def evaluator_warnings(config) -> list[str]:
     bench`, `uv run bench` -- has no evaluator for #36 to protect: a worker's
     edited copy in its slot is what runs. Said once, with the remedy."""
     from . import evaluator
-    if "measure" not in config.commands or evaluator.files(config):
+    from .kits import vendored
+    kits = {vendored(name) for name in config.evaluator_kits}
+    if ("measure" not in config.commands
+            or [f for f in evaluator.files(config) if f not in kits]):
         return []
     return [f"the measure command ({config.commands['measure']!r}) names no "
             f"script in the domain, so nothing protects the evaluator from a "
             f"worker's slot; declare `[evaluator] files` (and, for a module "
             f"or entry point, run it by path)"]
+
+
+def kit_warnings(config) -> list[str]:
+    from . import kits
+    return kits.warnings(config)
 
 
 def holdout_warnings(config) -> list[str]:

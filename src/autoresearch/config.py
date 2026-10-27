@@ -349,6 +349,9 @@ class DomainConfig:
     #: `[evaluator] files`: what a run is scored by (#36). None means the
     #: measure command's own script -- see `evaluator.files`.
     evaluator_files: tuple[str, ...] | None = None
+    #: `[evaluator] kits`: shared measurement code vendored into the domain by
+    #: `ar kit sync`; each one's copy is part of the evaluator (see kits/).
+    evaluator_kits: tuple[str, ...] = ()
     #: `[holdout]`: the held-out check a win must pass (#38); see holdout.py.
     holdout: object = None
     #: `[render] stale_views`: whether a generated view behind its records
@@ -554,6 +557,7 @@ class DomainConfig:
             upstream=Upstream.from_dict(dict(data.get("upstream") or {})),
             challenge=Challenge.from_dict(dict(data.get("challenge") or {})),
             evaluator_files=_evaluator_files(data.get("evaluator") or {}),
+            evaluator_kits=_evaluator_kits(data.get("evaluator") or {}),
             holdout=_holdout(data.get("holdout") or {}),
             stale_views=_stale_views(data.get("render") or {}))
 
@@ -578,10 +582,10 @@ def _holdout(spec):
 def _evaluator_files(spec) -> tuple[str, ...] | None:
     """`[evaluator] files`: the files a run is scored by (#36). Absent means
     the measure command's own script. Paths are relative to the domain root."""
-    unknown = set(spec) - {"files"}
+    unknown = set(spec) - {"files", "kits"}
     if unknown:
         raise ConfigError(f"[evaluator] has unknown key(s) {sorted(unknown)}; "
-                          "known: ['files']")
+                          "known: ['files', 'kits']")
     if "files" not in spec:
         return None
     names = spec["files"]
@@ -594,6 +598,23 @@ def _evaluator_files(spec) -> tuple[str, ...] | None:
         if path.is_absolute() or ".." in path.parts:
             raise ConfigError(f"[evaluator] file {name!r} must be relative to "
                               "the domain root and stay inside it")
+    return tuple(names)
+
+
+def _evaluator_kits(spec) -> tuple[str, ...]:
+    """`[evaluator] kits`: names from `autoresearch.kits.KITS`. An unknown name
+    is refused at load: a kit nothing can sync is an evaluator file that
+    silently never arrives."""
+    from .kits import KITS
+    names = spec.get("kits", [])
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise ConfigError("[evaluator] kits must be a list of kit names")
+    unknown = [n for n in names if n not in KITS]
+    if unknown:
+        raise ConfigError(f"[evaluator] kits {unknown} unknown; this core "
+                          f"ships {sorted(KITS)}")
+    if len(set(names)) != len(names):
+        raise ConfigError("[evaluator] kits names a kit twice")
     return tuple(names)
 
 

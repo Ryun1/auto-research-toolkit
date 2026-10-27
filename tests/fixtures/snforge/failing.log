@@ -1,0 +1,34 @@
+   Compiling test(pqbench_falcon_1024_unittest) pqbench_falcon_1024 v0.1.0 (/work/crates/falcon_1024/Scarb.toml)
+   Compiling test(pqbench_falcon_1024_integrationtest) pqbench_falcon_1024_integrationtest v0.1.0 (/work/crates/falcon_1024/Scarb.toml)
+warn: external contracts not found for selectors: `pqbench_falcon_1024::*`
+warn[E2100]: Unused import: `pqbench_falcon_1024_integrationtest::bench::PqSignatureVerifier`
+ --> /work/crates/falcon_1024/tests/bench.cairo:7:24
+use pqbench_interface::PqSignatureVerifier;
+                       ^^^^^^^^^^^^^^^^^^^
+
+warn[E2100]: Unused import: `pqbench_falcon_1024_integrationtest::vectors::PqSignatureVerifier`
+ --> /work/crates/falcon_1024/tests/vectors.cairo:5:24
+use pqbench_interface::PqSignatureVerifier;
+                       ^^^^^^^^^^^^^^^^^^^
+
+    Finished `dev` profile target(s) in 1 second
+
+
+Collected 2 test(s) from pqbench_falcon_1024 package
+Running 2 test(s) from tests/
+[PASS] pqbench_falcon_1024_integrationtest::zz_fail::zz_passes (l1_gas: ~0, l1_data_gas: ~0, l2_gas: ~13840)
+        sierra gas: 13840
+        syscalls: ()
+        events: (count: 0, keys: 0, data size: 0)
+        messages: (l2 to l1: 0, l1 handler: 0)
+
+[FAIL] pqbench_falcon_1024_integrationtest::zz_fail::zz_asserts
+
+Failure data:
+    "MISMATCH"
+
+Running 0 test(s) from src/
+Tests: 1 passed, 1 failed, 0 ignored, 17 filtered out
+
+Failures:
+    pqbench_falcon_1024_integrationtest::zz_fail::zz_asserts
