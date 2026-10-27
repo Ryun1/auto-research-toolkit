@@ -89,6 +89,12 @@ class Score:
                 f"{self.title[:60]}{lane}")
 
 
+#: Closures a mechanism's row needs before its rate moves a prior. Below it the
+#: filer's confidence stands: two confirmed `hash` closures lifted an entry
+#: filed at 0.05 to 0.43 and to the top of the shortlist (mldsa87 H5).
+MIN_CALIBRATION_N = 5
+
+
 @dataclass
 class Ranking:
     scored: list[Score]
@@ -174,7 +180,9 @@ class Ranking:
             rows = sorted(self.calibration.items())
             shown = rows if full else [(m, v) for m, v in rows if m in relevant]
             out += ["", "calibration (confirm rate by mechanism, from history):"]
-            out += [f"  {m:28} {v['rate']:.2f}  (n={v['n']})" for m, v in shown]
+            out += [f"  {m:28} {v['rate']:.2f}  (n={v['n']}"
+                    + (", too few to move a prior)" if v["n"] < MIN_CALIBRATION_N
+                       else ")") for m, v in shown]
             if len(shown) < len(rows):
                 out += [f"  (+{len(rows) - len(shown)} mechanism(s) no candidate "
                         "carries -- `ar rank --all` shows every row)"]
@@ -339,13 +347,15 @@ def rank(entries, config, *, prior_weight: float = 3.0,
 
         # -- the formula ---------------------------------------------------
         # Confidence is the filing agent's number, pulled toward the observed
-        # rate for its mechanisms. With no history it is unchanged; with a lot
-        # of history the prior dominates. Bayesian in spirit, deliberately
+        # rate for its mechanisms. With no history, or under MIN_CALIBRATION_N
+        # closures on a tag, it is unchanged; with a lot of history the
+        # prior dominates. Bayesian in spirit, deliberately
         # simple, and auditable by hand -- which a fitted model would not be.
         confidence = entry.confidence
         applicable_calibration = calibrate(entries, machine_for, candidate=entry)
         observed = [applicable_calibration[m] for m in entry.mechanisms
-                    if m in applicable_calibration]
+                    if m in applicable_calibration
+                    and applicable_calibration[m]["n"] >= MIN_CALIBRATION_N]
         if observed:
             n = sum(o["n"] for o in observed)
             rate = sum(o["rate"] * o["n"] for o in observed) / n

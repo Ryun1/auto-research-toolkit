@@ -42,6 +42,12 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   to change only the entry's list, so `ar rank` kept excluding by the old tags.
   Entries amended that way before this release still exclude by the old
   snapshot; re-run the amend (drop and re-add a tag) to move it.
+- **Behavioural: calibration needs five closures on a tag.** `ar rank` pulls
+  an entry's confidence toward a mechanism's observed rate only when that tag
+  has at least five applicable closures (`MIN_CALIBRATION_N`); below that the
+  filed confidence stands and the calibration row says "too few to move a
+  prior". Two closures used to move a 0.05 prior to 0.43. Rankings in young
+  domains will follow filed confidence more closely.
 - **Optional: two read-only scripts.** `scripts/calibrate-priors.py` scores
   whether the domain's `confidence`/`impact`/`cost` predicted its verdicts,
   replayed from git; `scripts/audit-fast-closures.py` lists verdicts closed

@@ -2456,7 +2456,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                           "(sig.golf H4)")
     new.add_argument("--confidence", type=float, default=0.5,
                      help="prior that it confirms, 0-1 (default 0.5); "
-                          "calibration pulls it toward the observed rate")
+                          "calibration pulls it toward the observed rate "
+                          "once a tag has 5 closures")
     new.add_argument("--impact", type=float, default=0.0,
                      help="expected gain on the objective if it confirms "
                           "(default 0)")

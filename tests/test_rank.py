@@ -71,6 +71,24 @@ def test_calibration_pulls_confidence_toward_observed_rate(sandbox, store):
     assert r.calibration["m"]["rate"] == 0.0 and r.calibration["m"]["n"] == 6
 
 
+def test_too_few_closures_do_not_move_a_prior(sandbox, store):
+    """mldsa87 H5: two confirmed `hash` closures pulled an entry filed at 0.05
+    to 0.43 and to the top of the shortlist. A rate from n=2 is an anecdote;
+    under five closures the filer's number stands, and the table says why."""
+    for i in range(2):
+        close(store, f"Q{i + 1}", "confirmed", mechanisms=["hash"])
+    make_entry(store, "Q46", confidence=0.05, impact=1.0, mechanisms=["hash"])
+    r = rank(store.all(), sandbox)
+    assert r.scored[0].terms["confidence"] == pytest.approx(0.05)
+    assert "(n=2, too few to move a prior)" in r.explain()
+
+    for i in range(2, 5):                   # five is enough to be evidence
+        close(store, f"Q{i + 1}", "confirmed", mechanisms=["hash"])
+    r = rank(store.all(), sandbox)
+    assert r.scored[0].terms["confidence"] > 0.5
+    assert "too few" not in r.explain()
+
+
 def test_calibration_is_absent_with_no_history(sandbox, store):
     make_entry(store, "Q1", confidence=0.7, impact=1.0, mechanisms=["fresh"])
     r = rank(store.all(), sandbox)
