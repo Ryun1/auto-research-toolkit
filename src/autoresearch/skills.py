@@ -227,10 +227,19 @@ def _terminal(config, entry) -> bool:
 def _cite_re(config) -> re.Pattern:
     """Inline citations, built from the track prefixes this domain actually
     declares. Guessing the prefix is how a regex over prose starts being
-    approximately right."""
+    approximately right.
+
+    A bracket may hold a comma list, `[B4, B5, B6]`; group 1 is its contents,
+    which `_inline_cites` splits. Reading only the first id reported the rest
+    as never cited (SLH-DSA-128 H5)."""
     prefixes = sorted((t.prefix for t in config.tracks.values()), key=len, reverse=True)
-    alt = "|".join(re.escape(p) for p in prefixes)
-    return re.compile(rf"\[({alt})(\d+)\]")
+    one = "(?:" + "|".join(re.escape(p) for p in prefixes) + r")\d+"
+    return re.compile(rf"\[\s*({one}(?:\s*,\s*{one})*)\s*\]")
+
+
+def _inline_cites(cite_re, body) -> set[str]:
+    return {cid.strip() for m in cite_re.finditer(body)
+            for cid in m.group(1).split(",")}
 
 
 def _distilled_at(skill) -> str:
@@ -423,7 +432,7 @@ def check(config, skills, entries, measurements=None) -> list[str]:
                     "skill was distilled. Re-distil it or retire it -- a skill "
                     "outliving its evidence is the failure it exists to prevent.")
 
-        inline = {f"{m.group(1)}{m.group(2)}" for m in cite_re.finditer(skill.body)}
+        inline = _inline_cites(cite_re, skill.body)
         for cid in sorted(inline - seen):
             problems.append(
                 f"skills: {where} cites {cid} in its body but not in "

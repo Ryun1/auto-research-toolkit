@@ -152,6 +152,22 @@ def test_a_cite_never_used_in_the_body_is_refused(sandbox, store):
     assert any("never cites it in the body" in p for p in _check(sandbox, store))
 
 
+def test_a_comma_list_citation_cites_every_id_in_it(sandbox, store):
+    """`[Q1, Q2]` read as citing Q1 alone, so Q2 was reported as listed in
+    `cites` but never used (SLH-DSA-128 H5). Both directions still bite: an id
+    inside the list that `cites` omits is refused."""
+    _entries(sandbox, store, "Q1", "Q2", "Q3")
+    make_skill(sandbox, "listed", cites=["Q1", "Q2"],
+               body="# A claim\n\nBacked by [Q1, Q2].\n")
+    assert _check(sandbox, store) == []
+
+    make_skill(sandbox, "listed", cites=["Q1", "Q2"],
+               body="# A claim\n\nBacked by [Q1,Q2 ,  Q3].\n")
+    problems = _check(sandbox, store)
+    assert any("cites Q3 in its body but not in" in p for p in problems)
+    assert not any("never cites it in the body" in p for p in problems)
+
+
 def test_a_duplicate_cite_is_refused(sandbox, store):
     _entries(sandbox, store, "Q1")
     make_skill(sandbox, "twice", cites=["Q1", "Q1"],
