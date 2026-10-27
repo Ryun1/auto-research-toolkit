@@ -29,6 +29,12 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   at the value the entry already holds is skipped, and a re-price where every
   price is unchanged is refused ("nothing to reprice") instead of recorded and
   moving `updated`; the loop's curator phase already skips refused re-prices.
+- **Behavioural: a commit keeps a claim alive only if it is the holder's.**
+  `ar reap` used to count any commit whose message contained the holder's
+  session name as a word. It now counts a commit that marks the session --
+  `[name]` in the message or a `Session: name` trailer -- or one that names
+  both the session and the claimed entry id. Sessions that want commits to
+  count as liveness should mark them; events and run rows are unchanged.
 - **Optional: two read-only scripts.** `scripts/calibrate-priors.py` scores
   whether the domain's `confidence`/`impact`/`cost` predicted its verdicts,
   replayed from git; `scripts/audit-fast-closures.py` lists verdicts closed

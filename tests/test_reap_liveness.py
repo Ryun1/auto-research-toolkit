@@ -63,15 +63,46 @@ def test_a_run_row_the_holder_recorded_keeps_it_alive(sandbox, store):
         Claims(store, sandbox, "reaper").reap("Q1")
 
 
-def test_a_commit_naming_the_holder_keeps_it_alive(sandbox, store):
-    root = sandbox.paths.root
-    _stale_claim(sandbox, store, session="scout-3")
+def _commit(root, message):
     for args in (("init", "-q"), ("add", "-A"),
                  ("-c", "user.name=T", "-c", "user.email=t@example.invalid",
-                  "commit", "-qm", "Q1 memo [scout-3]")):
+                  "commit", "-q", "--allow-empty", "-m", message)):
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
-    with pytest.raises(ClaimError, match="commit"):
+
+
+def test_a_commit_naming_the_holder_keeps_it_alive(sandbox, store):
+    _stale_claim(sandbox, store, session="scout-3")
+    _commit(sandbox.paths.root, "Q1 memo [scout-3]")
+    with pytest.raises(ClaimError, match=r"commit \w+ marking \[scout-3\]"):
         Claims(store, sandbox, "reaper").reap("Q1")
+
+
+@pytest.mark.parametrize("message, matched", [
+    ("B10 audit\n\nSession: moon", "marking Session: moon"),
+    ("moon closes in on Q1", "naming Q1 and moon"),
+])
+def test_a_marked_commit_or_one_naming_holder_and_entry_keeps_it_alive(
+        sandbox, store, message, matched):
+    _stale_claim(sandbox, store, session="moon")
+    _commit(sandbox.paths.root, message)
+    with pytest.raises(ClaimError, match=matched):
+        Claims(store, sandbox, "reaper").reap("Q1")
+
+
+@pytest.mark.parametrize("message", [
+    "B10 withstood; moon memo corrected",       # the holder's name as prose
+    "Q1 closed superseded",                     # the entry, not the holder
+    "moon notes on Q10",                        # Q10 is not Q1
+])
+def test_a_commit_that_only_mentions_the_name_is_not_a_sign_of_life(
+        sandbox, store, message):
+    """SLH-DSA-128 H6: a session named `moon` was kept alive by "moon memo
+    corrected", a commit that never touched its claim, and the message said
+    the commit named the entry."""
+    _stale_claim(sandbox, store, session="moon")
+    _commit(sandbox.paths.root, message)
+    _, former, _ = Claims(store, sandbox, "reaper").reap("Q1")
+    assert former == "moon"
 
 
 def test_an_old_sign_of_life_does_not_count(sandbox, store):

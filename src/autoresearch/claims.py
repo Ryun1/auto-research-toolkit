@@ -326,7 +326,8 @@ class Claims:
         so it reaped a session that had committed a memo two hours earlier
         ("its claim was silent but the session was not"). Any of these, after
         the claim was taken, is the holder working: an event it wrote on any
-        entry, a run row it recorded, a commit whose message names it."""
+        entry, a run row it recorded, a commit that marks it as the author
+        or names it beside the claimed entry."""
         claim = entry.claim
         if claim.session in self.ANONYMOUS:
             return _age_hours(claim.at), "the claim itself (a shared default name)"
@@ -340,9 +341,9 @@ class Claims:
         row = index["runs"].get(claim.session)
         if row:
             best = min(best, ((time.time() - row[0]) / 3600.0, row[1]))
-        key = ("git", claim.session, claim.at)
+        key = ("git", claim.session, claim.at, entry.id)
         if key not in cache:
-            cache[key] = self._commit_naming(claim.session, claim.at)
+            cache[key] = self._commit_naming(claim.session, claim.at, entry.id)
         if cache[key]:
             best = min(best, cache[key])
         return best
@@ -364,24 +365,49 @@ class Claims:
                 runs_seen[row.session] = (stamp, f"run row {row.id}")
         return {"events": events, "runs": runs_seen}
 
-    def _commit_naming(self, session, since) -> tuple[float, str] | None:
-        """The latest commit since `since` naming `session` as a word."""
+    def _commit_naming(self, session, since, entry_id) -> tuple[float, str] | None:
+        """The latest commit since `since` that is the holder's own work.
+
+        The session's name as a bare word is not enough: a session called
+        `moon` was kept alive by "moon memo corrected", a commit that never
+        touched its claim (SLH-DSA-128 H6). A commit counts when it marks the
+        session -- `[moon]` or a `Session: moon` trailer -- or names the session
+        and the claimed entry both."""
         import re
         import subprocess
-        # The name as a word, not a substring: `scout` is not `scouting`.
-        word = re.sub(r"([.\[\]()*+?{}|^$\\])", r"\\\1", session)
+        # Words, not substrings: `scout` is not `scouting`, `Q1` is not `Q10`.
+        def word(text):
+            return rf"(?<![A-Za-z0-9_.-]){re.escape(text)}(?![A-Za-z0-9_.-])"
+        named, entry = re.compile(word(session)), re.compile(word(entry_id))
+        bracket = re.compile(rf"\[{re.escape(session)}\]")
+        trailer = re.compile(rf"^Session:[ \t]*{re.escape(session)}[ \t]*$",
+                             re.M | re.I)
+        grep = re.sub(r"([.\[\]()*+?{}|^$\\])", r"\\\1", session)
         try:
+            # git narrows to commits mentioning the name at all; which kind of
+            # mention it is gets decided here, newest first.
             proc = subprocess.run(
                 ["git", "log", f"--since={since}", "--extended-regexp",
-                 f"--grep=(^|[^A-Za-z0-9_.-]){word}([^A-Za-z0-9_.-]|$)",
-                 "-1", "--format=%ct %h"],
+                 f"--grep=(^|[^A-Za-z0-9_.-]){grep}([^A-Za-z0-9_.-]|$)",
+                 "--format=%x00%ct %h%n%B"],
                 cwd=self.config.paths.root, capture_output=True, text=True)
         except OSError:                # no git on PATH: no commits to read
             return None
-        if proc.returncode != 0 or not proc.stdout.strip():
+        if proc.returncode != 0:
             return None
-        stamp, sha = proc.stdout.split()
-        return ((time.time() - int(stamp)) / 3600.0, f"commit {sha} naming it")
+        for record in proc.stdout.split("\0")[1:]:
+            head, _, message = record.partition("\n")
+            stamp, sha = head.split()
+            if bracket.search(message):
+                how = f"marking [{session}]"
+            elif trailer.search(message):
+                how = f"marking Session: {session}"
+            elif named.search(message) and entry.search(message):
+                how = f"naming {entry_id} and {session}"
+            else:
+                continue
+            return ((time.time() - int(stamp)) / 3600.0, f"commit {sha} {how}")
+        return None
 
     def reapable(self, ttl_hours=None) -> list:
         """Orphaned active records, plus claims whose holder exceeded TTL.
