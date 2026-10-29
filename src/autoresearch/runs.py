@@ -604,7 +604,7 @@ def read_with_skipped(directory, strict: bool = False) -> tuple[list, int]:
     # Prune deleted files so a same-signature recreation cannot resurrect
     # ghost rows: the signature describes bytes, not existence.
     for stale in [k for k in list(_RUNS_CACHE) if k not in live]:
-        del _RUNS_CACHE[stale]
+        _RUNS_CACHE.pop(stale, None)      # `ar ui` reads from several threads
     for path in sorted(directory.glob("*.jsonl")):
         key = (str(path.resolve()), strict)
         sig = _file_signature(path)

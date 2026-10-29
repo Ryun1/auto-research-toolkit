@@ -4,7 +4,9 @@ Nothing here decides a verdict. The board is `board.snapshot`, `ar board
 --json`'s own document; an entry row is `ar entry list --json`'s. Results are
 cached until the watcher says a resource they read has changed, so a page
 refetching on every event costs one recomputation per change, not one per
-tab.
+tab. Some facts move with the clock and no file -- a claim passing its
+ceiling, a probed target -- so those documents also read `clock`, which the
+watcher ticks every minute.
 """
 from __future__ import annotations
 
@@ -18,12 +20,14 @@ from ..errors import AutoresearchError
 #: cached document; `state` covers holdout verdicts, promotions and
 #: everything else under it.
 READS = {
-    "board": {"entries", "claims", "iterations", "runs", "inbox", "skills", "state"},
-    "summary": {"entries", "claims", "iterations", "runs", "inbox", "skills", "state"},
+    "board": {"entries", "claims", "iterations", "runs", "inbox", "skills", "state",
+              "holdout", "clock"},
+    "summary": {"entries", "claims", "iterations", "runs", "inbox", "skills", "state",
+                "holdout", "clock"},
     "entries": {"entries", "claims", "state"},
-    "graph": {"entries", "claims", "state", "runs"},
+    "graph": {"entries", "claims", "state", "runs", "clock"},
     "standing": {"entries", "runs", "state"},
-    "entry": {"entries", "claims", "state", "runs", "inbox", "guides", "skills"},
+    "entry": {"entries", "claims", "state", "runs", "inbox", "guides", "skills", "clock"},
 }
 
 
@@ -32,9 +36,13 @@ class Api:
         self.config = config
         self._cache: dict[str, object] = {}
         self._lock = threading.Lock()
+        #: bumped by every invalidation: a document built across one is
+        #: already stale and is returned but never cached.
+        self._generation = 0
 
     def invalidate(self, changed) -> None:
         with self._lock:
+            self._generation += 1
             for key in list(self._cache):
                 if READS[key.split("/", 1)[0]] & set(changed):
                     del self._cache[key]
@@ -46,10 +54,13 @@ class Api:
         with self._lock:
             if key in self._cache:
                 return self._cache[key]
+            started = self._generation
         build = getattr(self, "_" + name)
         doc = board_mod.finite(build() if arg is None else build(arg))
-        if doc is not None:              # an unknown id is not worth remembering
-            with self._lock:
+        with self._lock:
+            # An unknown id is not worth remembering, and a build the record
+            # moved under would pin the old document until the next change.
+            if doc is not None and self._generation == started:
                 self._cache[key] = doc
         return doc
 

@@ -29,7 +29,13 @@ def resources(config) -> dict[str, pathlib.Path]:
         "skills": root / config.skills.dir,
         "guides": root / "guides",
         "state": root / "state",
+        # `ar holdout check` writes here; only mtimes are read, never a value.
+        "holdout": config.paths.holdout,
     }
+
+#: Seconds between `clock` ticks: how stale an age-based fact (a claim past
+#: its ceiling) or a probed target may get while no file moves.
+CLOCK = 60.0
 
 
 def signature(directory: pathlib.Path, skip=()) -> frozenset:
@@ -113,16 +119,21 @@ class Watcher:
                 if gen > seen:
                     names |= changed
             if self._log and self._log[0][0] > seen + 1:
-                names = set(self.dirs)    # fell out of the log: say everything
+                names = set(self.dirs) | {"clock"}   # fell out of the log: everything
             return self.generation, names
 
     def start(self) -> None:
         def run():
+            import time
+            tick = time.monotonic()
             while not self._stop.wait(self.interval):
                 try:
                     self.poll()
-                except OSError:
-                    pass                  # a directory mid-rename; next poll
+                except Exception:         # a directory mid-rename; next poll
+                    pass
+                if time.monotonic() - tick >= CLOCK:
+                    tick = time.monotonic()
+                    self.publish({"clock"})
         self._thread = threading.Thread(target=run, name="ar-ui-watch", daemon=True)
         self._thread.start()
 

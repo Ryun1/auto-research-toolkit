@@ -91,3 +91,16 @@ def test_a_long_memo_is_listed_not_inlined(sandbox, store):
     memo(sandbox, "inbox/Q1.md", "x" * (graph.MEMO_MAX + 1))
     doc = graph.entry(sandbox, "Q1", {})
     assert doc["memo"]["text"] is None and doc["memo"]["size"] == graph.MEMO_MAX + 1
+
+
+def test_only_a_number_reaches_the_page_as_an_objective(sandbox, store):
+    """Rows are agent-written and metric types are not checked on read: a
+    string objective would land in the panel's HTML."""
+    make_entry(store, "Q1")
+    sandbox.goal.objective = "ops"
+    sandbox.goal.derived = {}          # a bare metric hands its value straight back
+    append(sandbox.paths.runs / "s.jsonl", RunRecord(
+        id="x", metrics={"ops": "<img src=x onerror=alert(1)>", "peak": 1.0},
+        session="s", entry="Q1", status="failed", provenance={"host": "local"}))
+    [row] = graph.standing(sandbox).values()
+    assert row["objective"] is None and row["session"] == "s"

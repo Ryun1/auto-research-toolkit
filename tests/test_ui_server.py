@@ -70,11 +70,24 @@ def test_the_board_endpoint_is_ar_boards_own_document(served, capsys):
     assert json.loads(_get(server, "/api/board")[2]) == json.loads(capsys.readouterr().out)
 
 
-def test_no_endpoint_writes_anything(served):
+def test_no_endpoint_writes_anything(served, store):
+    """With runs, a closed entry's memo and a live claim, so the standing,
+    memo and claim paths all run."""
+    from autoresearch.claims import Claims
+    from autoresearch.runs import RunRecord, append
+    from conftest import close
     sandbox, server = served
+    make_entry(store, "Q2", sources=["Q1", "bin/probe-target"])
+    close(sandbox, store, store.load("Q1"))
+    Claims(store, sandbox, "alice").claim("Q2", why="t")
+    append(sandbox.paths.runs / "s.jsonl", RunRecord(
+        id="r1", metrics={"ops": 5.0, "peak": 1.0}, session="s", entry="Q1",
+        provenance={"host": "local"}))
+    time.sleep(0.4)                       # let the watcher settle the setup
     before = _tree(sandbox.paths.root)
-    for path in ["/", "/app.js", "/style.css", *_api_paths(server)]:
-        _get(server, path)
+    for path in ["/", "/app.js", "/style.css", *_api_paths(server), "/api/entry/Q2"]:
+        assert _get(server, path)[0] == 200, path
+    assert json.loads(_get(server, "/api/entry/Q1")[2])["runs"][0]["standing"] == "ok"
     assert _tree(sandbox.paths.root) == before
 
 
@@ -92,6 +105,54 @@ def test_writes_traversal_and_foreign_hosts_are_refused(served):
     status, _, body = _get(server, "/api/board", host="evil.example:8484")
     assert status == 403 and b"localhost" in body
     assert _get(server, "/api/board", host="localhost:8484")[0] == 200
+
+
+def test_a_refused_head_has_no_body_and_a_refused_write_closes(served):
+    _, server = served
+    port = server.server_address[1]
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("HEAD", "/nope")
+    response = conn.getresponse()
+    assert response.status == 404 and response.read() == b""
+    conn.request("GET", "/api/summary")             # the same connection still works
+    assert conn.getresponse().status == 200
+    conn.close()
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("POST", "/api/board", body=b"GET /api/board HTTP/1.1\r\n\r\n")
+    response = conn.getresponse()
+    assert response.status == 405 and response.getheader("Connection") == "close"
+    conn.close()
+
+
+def test_a_build_the_record_moved_under_is_not_cached(sandbox, store):
+    """A document built across an invalidation is already stale: caching it
+    would serve it until the next change."""
+    from autoresearch.ui.api import Api
+    make_entry(store, "Q1")
+    api = Api(sandbox)
+    real = api._entries
+
+    def slow():
+        doc = real()
+        make_entry(store, "Q2")
+        api.invalidate({"entries"})        # the watcher, mid-build
+        return doc
+    api._entries = slow
+    assert [r["id"] for r in api.get("entries")] == ["Q1"]
+    api._entries = real
+    assert [r["id"] for r in api.get("entries")] == ["Q1", "Q2"]
+
+
+def test_the_clock_ticks_so_age_based_facts_refresh(sandbox, monkeypatch):
+    from autoresearch.ui import watch
+    monkeypatch.setattr(watch, "CLOCK", 0.05)
+    watcher = Watcher(sandbox, interval=0.05)
+    watcher.start()
+    try:
+        gen, names = watcher.wait(0, timeout=3)
+    finally:
+        watcher.stop()
+    assert gen >= 1 and "clock" in names
 
 
 def test_the_server_binds_to_localhost_by_default(sandbox):
@@ -124,6 +185,8 @@ def test_an_entry_edit_reaches_the_event_stream(served, store):
                 events.append((time.monotonic(), json.loads(line[6:])))
                 return
 
+    # Cache the document first, so the assertion below shows it was dropped.
+    assert [r["id"] for r in json.loads(_get(server, "/api/entries")[2])] == ["Q1"]
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
     time.sleep(0.3)

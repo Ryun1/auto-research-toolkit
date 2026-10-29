@@ -2,7 +2,7 @@
 // text is escaped before any markup is added: no HTML in a memo ever reaches
 // the page as HTML, and only http(s) links become anchors.
 
-const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;");
 
 function inline(text) {
@@ -20,7 +20,10 @@ function inline(text) {
 
 function table(rows) {
   const cells = (row) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
-  const body = rows.filter((r) => !/^\s*\|?\s*:?-{2,}/.test(r));
+  // Only the second line can be the separator, and only when it is nothing
+  // but pipes, dashes and colons: a row like `| --epoch | ... |` is content.
+  const body = rows.length > 1 && /^\s*\|?(\s*:?-+:?\s*\|)*\s*:?-+:?\s*\|?\s*$/.test(rows[1])
+    ? [rows[0], ...rows.slice(2)] : rows;
   const [head, ...rest] = body;
   let out = "<table><thead><tr>" + cells(head).map((c) => `<th>${inline(c)}</th>`).join("") + "</tr></thead><tbody>";
   for (const r of rest) out += "<tr>" + cells(r).map((c) => `<td>${inline(c)}</td>`).join("") + "</tr>";

@@ -2,7 +2,7 @@
 // panel per entry. Links come from the server (links.links in core); this
 // file only lays them out and filters what is shown.
 
-import { fetchJSON, fmt, watch } from "./app.js";
+import { fetchJSON, fmt, onChange, watch } from "./app.js";
 import { esc, markdown } from "./md.js";
 
 cytoscape.use(cytoscapeDagre);
@@ -16,8 +16,10 @@ const state = {
   shape: "",          // node ids and links of the drawn graph, to tell a restyle from a re-layout
   selected: null,     // entry id or bucket id in the panel
   focus: null,        // entry id whose lineage alone is shown
-  tracks: new Set(),  // shown tracks (empty until the first document)
+  tracks: new Set(),  // shown tracks
   statuses: new Set(),
+  filtersSet: false,  // the filters start with everything shown, once
+  laidOutHidden: false, // a layout run while the tab was hidden has no size to fit
 };
 
 const BUCKET = "bucket:";
@@ -159,6 +161,7 @@ function draw(doc) {
   const cy = state.cy;
   cy.batch(() => { cy.elements().remove(); cy.add(els); });
   cy.layout(LAYOUT).run();
+  state.laidOutHidden = $("view-graph").hidden;
   state.shape = shape;
   if (state.selected && cy.getElementById(state.selected).nonempty()) {
     cy.getElementById(state.selected).select();
@@ -184,9 +187,10 @@ function lightLinks(id) {
 // -- filters, search, focus ----------------------------------------------------
 
 function buildFilters(doc) {
-  if (!state.tracks.size) {
+  if (!state.filtersSet) {
     doc.tracks.forEach((t) => state.tracks.add(t.id));
     Object.keys(doc.statuses).forEach((s) => state.statuses.add(s));
+    state.filtersSet = true;
   }
   const tracks = $("filter-tracks");
   tracks.replaceChildren(...doc.tracks.map((t) => chip(t.title, state.tracks, t.id,
@@ -244,7 +248,8 @@ function setFocus(id) {
 
 // -- side panel ----------------------------------------------------------------
 
-async function select(id) {
+// `refresh` re-reads the open entry after a change and keeps the reader's place.
+async function select(id, refresh = false) {
   state.selected = id;
   if (state.cy) {
     state.cy.nodes().unselect();
@@ -254,15 +259,18 @@ async function select(id) {
   const panel = $("panel");
   if (!id) { panel.hidden = true; return; }
   panel.hidden = false;
-  panel.scrollTop = 0;
   if (id.startsWith(BUCKET)) return showBucket(id);
-  $("panel-body").innerHTML = `<p class="muted">Reading ${esc(id)}</p>`;
+  if (!refresh) {
+    panel.scrollTop = 0;
+    $("panel-body").innerHTML = `<p class="muted">Reading ${esc(id)}</p>`;
+  }
+  const ticket = (state.panelTicket = (state.panelTicket || 0) + 1);
   try {
     const doc = await fetchJSON(`entry/${encodeURIComponent(id)}`);
-    if (state.selected !== id) return;
+    if (state.selected !== id || state.panelTicket !== ticket) return;
     const top = panel.scrollTop;
     $("panel-body").innerHTML = panelHTML(doc);
-    panel.scrollTop = top;   // a live refresh keeps the reader's place
+    panel.scrollTop = refresh ? top : 0;
   } catch (err) {
     $("panel-body").innerHTML = `<p class="bad">${esc(err.message)}</p>`;
   }
@@ -344,7 +352,7 @@ function fill(status) {
 function setUp() {
   $("graph-search").addEventListener("input", search);
   $("graph-search").addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
+    if (event.key !== "Enter" || !state.cy) return;
     // An exact id beats a prefix, which beats a mention in a title or hypothesis.
     const q = $("graph-search").value.trim().toLowerCase();
     const hits = state.cy.nodes(".hit");
@@ -371,7 +379,18 @@ function setUp() {
     state.doc = doc;
     buildFilters(doc);
     draw(doc);
-    if (state.selected && !state.selected.startsWith(BUCKET)) select(state.selected);
+  });
+  // The panel reads more than the graph does (memos, guides, run rows), so it
+  // is re-read on any change to those, keeping the reader's place.
+  const PANEL_READS = ["entries", "claims", "state", "runs", "inbox", "guides", "skills", "clock"];
+  onChange((changed) => {
+    if (!state.selected || state.selected.startsWith(BUCKET)) return;
+    if (changed === null || PANEL_READS.some((r) => changed.includes(r))) select(state.selected, true);
+  });
+  document.addEventListener("tabshown", (event) => {
+    if (event.detail !== "graph" || !state.cy) return;
+    state.cy.resize();
+    if (state.laidOutHidden) { state.cy.fit(undefined, 24); state.laidOutHidden = false; }
   });
 }
 

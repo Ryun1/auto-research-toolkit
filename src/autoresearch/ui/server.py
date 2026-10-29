@@ -77,8 +77,8 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, status, doc, head=False):
         self._send(status, json.dumps(doc).encode(), "application/json", head)
 
-    def _refuse(self, status, why):
-        self._json(status, {"error": why})
+    def _refuse(self, status, why, head=False):
+        self._json(status, {"error": why}, head)
 
     # -- verbs ------------------------------------------------------------
 
@@ -88,33 +88,44 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self, head=False):
         if not self._host_ok():
             return self._refuse(HTTPStatus.FORBIDDEN,
-                                "ar ui answers only to localhost (Host header refused)")
+                                "ar ui answers only to localhost (Host header refused)",
+                                head)
         path = self.path.split("?", 1)[0]
         if path == "/api/events":
             return self._events()
         if path.startswith("/api/"):
             name, _, arg = path[len("/api/"):].partition("/")
             if name not in self.server.endpoints or bool(arg) != (name in ARG_ENDPOINTS):
-                return self._refuse(HTTPStatus.NOT_FOUND, f"no endpoint {path!r}")
+                return self._refuse(HTTPStatus.NOT_FOUND, f"no endpoint {path!r}", head)
             try:
                 doc = self.server.api.get(name, unquote(arg) if arg else None)
             except Exception as exc:    # a record that will not load is the page's to show
                 return self._json(HTTPStatus.INTERNAL_SERVER_ERROR,
                                   {"error": f"{type(exc).__name__}: {exc}"}, head)
             if doc is None:
-                return self._refuse(HTTPStatus.NOT_FOUND, f"no {name} {unquote(arg)!r}")
+                return self._refuse(HTTPStatus.NOT_FOUND, f"no {name} {unquote(arg)!r}",
+                                    head)
             return self._json(HTTPStatus.OK, doc, head)
         name = "index.html" if path == "/" else path.lstrip("/")
         body = _static(name)
         if body is None:
-            return self._refuse(HTTPStatus.NOT_FOUND, f"no file {path!r}")
+            return self._refuse(HTTPStatus.NOT_FOUND, f"no file {path!r}", head)
         kind = mimetypes.guess_type(name)[0] or "application/octet-stream"
         if kind.startswith("text/") or kind.endswith("javascript"):
             kind += "; charset=utf-8"
         return self._send(HTTPStatus.OK, body, kind, head)
 
     def _refuse_write(self):
-        self._refuse(HTTPStatus.METHOD_NOT_ALLOWED, "ar ui is read-only")
+        # The body is never read, so the connection cannot be reused: its
+        # bytes would be parsed as the next request.
+        self.close_connection = True
+        self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
+        body = json.dumps({"error": "ar ui is read-only"}).encode()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
 
     do_POST = do_PUT = do_PATCH = do_DELETE = _refuse_write
 

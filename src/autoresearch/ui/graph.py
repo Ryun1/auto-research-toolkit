@@ -57,15 +57,20 @@ def standing(config) -> dict[str, dict]:
         kinds = runs_mod.standing(store, epoch.rows, config.goal)
         for record in epoch.rows:
             kind, reason = kinds[record.id]
+            # Rows are agent-written and metric types are not checked on
+            # read: only a number goes to the page as an objective.
             try:
                 objective = config.goal.objective_value(record.metrics)
             except Exception:
+                objective = None
+            if isinstance(objective, bool) or not isinstance(objective, (int, float)):
                 objective = None
             out[record.id] = {
                 "id": record.id, "entry": record.entry, "standing": kind,
                 "reason": reason, "epoch": epoch.label, "current": epoch.current,
                 "objective": objective, "metrics": record.metrics,
-                "session": record.session, "started": runs_mod.started_at(record),
+                "session": str(record.session or ""),
+                "started": runs_mod.started_at(record),
                 "config": record.config}
     return out
 

@@ -6,13 +6,16 @@ const $ = (id) => document.getElementById(id);
 
 // Which endpoints each resource change makes stale (mirrors api.READS).
 const READS = {
-  summary: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state"],
-  board: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state"],
+  summary: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state", "holdout", "clock"],
+  board: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state", "holdout", "clock"],
   entries: ["entries", "claims", "state"],
-  graph: ["entries", "claims", "state", "runs"],
+  graph: ["entries", "claims", "state", "runs", "clock"],
 };
 
 const listeners = new Map(); // endpoint -> [fn]
+const changeHooks = [];      // fn(changed names), for documents fetched by hand
+const latest = new Map();    // endpoint -> number of its newest request
+const errors = new Map();    // endpoint -> message of its last failure
 
 export async function fetchJSON(name) {
   const response = await fetch(`/api/${name}`, { cache: "no-store" });
@@ -28,25 +31,37 @@ export function watch(name, fn) {
   refresh(name);
 }
 
+// Call fn(changedNames) on every change event and after a reconnect (with
+// null): for documents a view fetches itself, such as the open entry panel.
+export function onChange(fn) {
+  changeHooks.push(fn);
+}
+
 async function refresh(name) {
+  // Responses can arrive out of order; only the newest request is drawn.
+  const ticket = (latest.get(name) || 0) + 1;
+  latest.set(name, ticket);
   try {
     const doc = await fetchJSON(name);
-    showError(null);
+    if (latest.get(name) !== ticket) return;
+    showError(name, null);
     for (const fn of listeners.get(name) || []) fn(doc);
   } catch (err) {
-    showError(err.message);
+    if (latest.get(name) === ticket) showError(name, err.message);
   }
 }
 
-function showError(message) {
+function showError(name, message) {
+  if (message) errors.set(name, message); else errors.delete(name);
   const box = $("error");
-  box.hidden = !message;
-  box.textContent = message ? `Could not read the record: ${message}` : "";
+  box.hidden = !errors.size;
+  box.textContent = errors.size ? `Could not read the record: ${[...errors.values()].join("; ")}` : "";
 }
 
+// Always safe to put into HTML: anything that is not a finite number reads
+// "none", so a string in an agent-written row never reaches the page.
 export function fmt(value) {
-  if (value === null || value === undefined) return "none";
-  if (typeof value !== "number") return String(value);
+  if (typeof value !== "number" || !Number.isFinite(value)) return "none";
   if (Math.abs(value) >= 1) return value.toLocaleString("en", { maximumFractionDigits: Math.abs(value) >= 1000 ? 0 : 2 });
   return value.toPrecision(4);
 }
@@ -76,6 +91,7 @@ function renderSummary(doc) {
 
   const distance = $("distance");
   distance.className = "";
+  distance.title = "";
   if (doc.best && doc.best.distance !== null && doc.best.distance !== undefined) {
     const pct = (doc.best.distance * 100).toFixed(2);
     distance.textContent = `${doc.best.distance > 0 ? "+" : ""}${pct}%`;
@@ -108,6 +124,7 @@ function selectTab(button) {
     tab.tabIndex = on ? 0 : -1;
     $(tab.getAttribute("aria-controls")).hidden = !on;
   }
+  document.dispatchEvent(new CustomEvent("tabshown", { detail: button.id.slice(4) }));
   history.replaceState(null, "", `#${button.id.slice(4)}`);
 }
 
@@ -140,7 +157,10 @@ function connect() {
   events.addEventListener("hello", () => {
     setLink("live", "Live");
     // A reconnect may have missed changes: refetch everything once.
-    if (!first) for (const name of listeners.keys()) refresh(name);
+    if (!first) {
+      for (const name of listeners.keys()) refresh(name);
+      for (const fn of changeHooks) fn(null);
+    }
     first = false;
   });
   events.addEventListener("change", (event) => {
@@ -148,6 +168,7 @@ function connect() {
     for (const name of listeners.keys()) {
       if ((READS[name] || changed).some((r) => changed.includes(r))) refresh(name);
     }
+    for (const fn of changeHooks) fn(changed);
   });
   events.onerror = () => setLink("down", "Disconnected, retrying");
 }

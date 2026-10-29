@@ -221,7 +221,7 @@ def _iterations(config) -> dict:
         number, it, out_of_band = recorded
         last = {"n": it.get("n", number), "out_of_band": out_of_band,
                 "stop": it.get("stop"), "stop_detail": it.get("stop_detail"),
-                "phases": [{"name": ph["name"], "did": ph.get("did", 0),
+                "phases": [{"name": ph.get("name"), "did": ph.get("did", 0),
                             "error": ph.get("error")}
                            for ph in (it.get("phases") or [])]}
     return {"total": total, "last": last}
