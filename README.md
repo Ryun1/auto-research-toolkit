@@ -360,8 +360,9 @@ performs the same collision checks. Resolve collisions in the source corpus;
 use `ar entry amend` for deliberate changes to existing records.
 
 **A hand-driven agent should not parse prose it only needs to route on.**
-`ar rank`, `ar budget`, `ar validate` and `ar entry list` each take `--json`
-(the whole document, nothing else, on stdout; exit codes unchanged), and
+`ar board`, `ar rank`, `ar budget`, `ar validate` and `ar entry list` each
+take `--json` (the whole document, nothing else, on stdout; exit codes
+unchanged), and
 `ar entry show` defaults to current state — pass `--history` for the full
 append-only record. The prose tables are sized for a session's context: `ar
 rank` and `ar entry list` count closed entries instead of listing them, and

@@ -433,71 +433,20 @@ def cmd_escalate(args):
 
 def cmd_board(args):
     config = _load(args)
-    store = _store(config)
-    entries = store.all()
-    all_runs, skipped = runs_mod.read_with_skipped(config.paths.runs)
+    target_error = None
     try:
         target = _probe_target(config)
     except AutoresearchError as exc:
         print(f"(target unavailable: {exc})", file=sys.stderr)
-        target = None
-    # The frontier compares one instrument's rows (#40): the current epoch,
-    # or the one `--epoch` names. Every other epoch keeps its best row on the
-    # board under its own heading, never on the frontier.
-    from . import epochs as epochs_mod
-    listed = epochs_mod.segment(config, all_runs)
-    label = getattr(args, "epoch", None)
-    picked = [e for e in listed if (e.current if label is None else e.label == str(label))]
-    if label is not None and not picked:
-        raise AutoresearchError(
-            f"no epoch {label!r}; this ledger has "
-            f"{', '.join(e.label for e in listed) or 'none'} (see `ar epochs`)")
-    chosen = picked[0].rows if picked else []
-    best, excluded = runs_mod.frontier(store, chosen, config.goal)
-    print(render.board(config, entries, all_runs, target,
-                       (best[0], best[1].entry or best[1].id) if best else None,
-                       skipped, best_metrics=best[1].metrics if best else None,
-                       unmet_required_gates=budget_mod.unmet_required_gates(
-                           config.goal, store, best),
-                       excluded_best=excluded, overruns=_overruns(config, store, entries)))
-    from . import holdout as holdout_mod
-    if holdout_mod.declared(config):
-        print(_holdout_line(holdout_mod.summary(config, best, target)) + "\n")
-    others = [e for e in listed if e.rows and not (picked and e is picked[0])]
-    if others:
-        print("## Previous epochs" if getattr(args, "epoch", None) is None
-              else "## Other epochs")
-        for epoch in others:
-            top, _ = runs_mod.frontier(store, epoch.rows, config.goal)
-            print("  " + _epoch_line(epoch)
-                  + (f"  best {render._fmt(top[0])} ({top[1].entry or top[1].id})"
-                     if top else "  no valid row"))
-        print("  (`ar board --epoch N` reads one; `ar epochs` lists what a move "
-              "may have invalidated)")
+        target, target_error = None, str(exc)
+    from . import board as board_mod
+    doc = board_mod.snapshot(config, target=target, target_error=target_error,
+                             epoch=getattr(args, "epoch", None))
+    if getattr(args, "json", False):
+        print(json.dumps(board_mod.finite(doc), indent=2))
+        return 0
+    sys.stdout.write(render.board_document(doc))
     return 0
-
-
-def _overruns(config, store, entries) -> dict:
-    """Live claims past a ceiling they registered, by entry id (#22) -- the
-    same test `ar budget` prints per claim."""
-    claims = Claims(store, config, "board")
-    out = {}
-    for entry in entries:
-        if not entry.claim or config.track_for(entry.id).machine.status(
-                entry.status).terminal:
-            continue
-        over = claims.overrun(entry.id, runs_spent=budget_mod.claim_runs(config, entry))
-        if over:
-            out[entry.id] = over
-    return out
-
-
-def _holdout_line(summary) -> str:
-    """Pass/fail and the count: everything the search may know (#38)."""
-    verdict = summary["last"] or "not consulted on the best config"
-    cap = f" of {summary['max']}" if summary["max"] else ""
-    return (f"holdout    {verdict}  ({summary['consults']}{cap} "
-            f"consultation(s) this epoch)")
 
 
 def cmd_holdout_check(args):
@@ -523,7 +472,7 @@ def cmd_holdout_check(args):
     if verdict.passed is None:
         raise AutoresearchError(f"{best[1].id}: {verdict.reason}")
     print(f"{best[1].id}: {'pass' if verdict.passed else 'fail'} -- {verdict.reason}")
-    print(_holdout_line(holdout_mod.summary(config, best, target)))
+    print(render.holdout_line(holdout_mod.summary(config, best, target)))
     return 0
 
 
@@ -606,13 +555,8 @@ def cmd_epochs(args):
 
 
 def _epoch_line(epoch) -> str:
-    if epoch.key is None:
-        what = "rows from before the stamp"
-    else:
-        sha, benchmark = epoch.key
-        what = f"evaluator {sha}" + (f", benchmark {benchmark}" if benchmark else "")
-    return (f"epoch {epoch.label}{' (current)' if epoch.current else ''}: "
-            f"{what}; {len(epoch.rows)} row(s)")
+    from . import board as board_mod
+    return render.epoch_line(board_mod.describe_epoch(epoch))
 
 
 def cmd_render(args):
@@ -1778,7 +1722,7 @@ def cmd_budget(args):
             print(f"    OVERRUN: {row['overrun']}")
 
     if holdout_mod.declared(config):
-        print("\n" + _holdout_line(holdout_mod.summary(config, best, target)))
+        print("\n" + render.holdout_line(holdout_mod.summary(config, best, target)))
     print(f"\nstop decision: {decision}")
     # The last line repeats the decision above it in the numbers a reader is
     # looking for, so it is derived from that decision rather than from a
@@ -2415,6 +2359,8 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     boardp.add_argument("--epoch", help="read the frontier of this epoch (a number "
                                         "from `ar epochs`, or `unpinned`) "
                                         "instead of the current one")
+    boardp.add_argument("--json", action="store_true",
+                        help="print the board's facts as one JSON document")
     boardp.set_defaults(func=cmd_board)
     holdoutp = sub.add_parser("holdout", help="the held-out check a win must pass")
     hsub = holdoutp.add_subparsers(dest="holdout_cmd", required=True)
