@@ -2,19 +2,16 @@
 // functions, and refetches what the event stream says changed. Nothing here
 // decides a verdict; it only lays out what the server sent.
 
-const $ = (id) => document.getElementById(id);
+import { fmt } from "./format.js";
+import { READS, stale, Tickets } from "./live.js";
 
-// Which endpoints each resource change makes stale (mirrors api.READS).
-const READS = {
-  summary: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state", "holdout", "clock"],
-  board: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state", "holdout", "clock"],
-  entries: ["entries", "claims", "state"],
-  graph: ["entries", "claims", "state", "runs", "clock"],
-};
+export { fmt };
+
+const $ = (id) => document.getElementById(id);
 
 const listeners = new Map(); // endpoint -> [fn]
 const changeHooks = [];      // fn(changed names), for documents fetched by hand
-const latest = new Map();    // endpoint -> number of its newest request
+const tickets = new Tickets();
 const errors = new Map();    // endpoint -> message of its last failure
 
 export async function fetchJSON(name) {
@@ -39,15 +36,14 @@ export function onChange(fn) {
 
 async function refresh(name) {
   // Responses can arrive out of order; only the newest request is drawn.
-  const ticket = (latest.get(name) || 0) + 1;
-  latest.set(name, ticket);
+  const ticket = tickets.issue(name);
   try {
     const doc = await fetchJSON(name);
-    if (latest.get(name) !== ticket) return;
+    if (!tickets.current(name, ticket)) return;
     showError(name, null);
     for (const fn of listeners.get(name) || []) fn(doc);
   } catch (err) {
-    if (latest.get(name) === ticket) showError(name, err.message);
+    if (tickets.current(name, ticket)) showError(name, err.message);
   }
 }
 
@@ -56,14 +52,6 @@ function showError(name, message) {
   const box = $("error");
   box.hidden = !errors.size;
   box.textContent = errors.size ? `Could not read the record: ${[...errors.values()].join("; ")}` : "";
-}
-
-// Always safe to put into HTML: anything that is not a finite number reads
-// "none", so a string in an agent-written row never reaches the page.
-export function fmt(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "none";
-  if (Math.abs(value) >= 1) return value.toLocaleString("en", { maximumFractionDigits: Math.abs(value) >= 1000 ? 0 : 2 });
-  return value.toPrecision(4);
 }
 
 // -- header -----------------------------------------------------------------
@@ -166,7 +154,7 @@ function connect() {
   events.addEventListener("change", (event) => {
     const changed = JSON.parse(event.data);
     for (const name of listeners.keys()) {
-      if ((READS[name] || changed).some((r) => changed.includes(r))) refresh(name);
+      if (stale(READS[name], changed)) refresh(name);
     }
     for (const fn of changeHooks) fn(changed);
   });

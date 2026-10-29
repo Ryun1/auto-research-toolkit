@@ -2,8 +2,11 @@
 // panel per entry. Links come from the server (links.links in core); this
 // file only lays them out and filters what is shown.
 
-import { fetchJSON, fmt, onChange, watch } from "./app.js";
-import { esc, markdown } from "./md.js";
+import { fetchJSON, onChange, watch } from "./app.js";
+import { BUCKET, elements as buildElements, fillOf, pickHit, searchHits } from "./graphdata.js";
+import { PANEL_READS, stale } from "./live.js";
+import { esc } from "./md.js";
+import { bucketHTML, panelHTML } from "./panel.js";
 
 cytoscape.use(cytoscapeDagre);
 
@@ -22,85 +25,8 @@ const state = {
   laidOutHidden: false, // a layout run while the tab was hidden has no size to fit
 };
 
-const BUCKET = "bucket:";
-// Fewer unlinked entries than this with one track and status stay loose:
-// a group of one or two hides more than it tidies.
-const BUCKET_MIN = 3;
-
-// -- elements -----------------------------------------------------------------
-
-function visibleNodes(doc) {
-  let nodes = doc.nodes.filter((n) => state.tracks.has(n.track) && state.statuses.has(n.status));
-  if (state.focus) {
-    const keep = lineage(doc, state.focus);
-    nodes = nodes.filter((n) => keep.has(n.id));
-  }
-  return nodes;
-}
-
-// Every entry upstream or downstream of `id` along the stored links.
-function lineage(doc, id) {
-  const up = new Map(), down = new Map();
-  for (const l of doc.links) {
-    (down.get(l.src) || down.set(l.src, []).get(l.src)).push(l.dst);
-    (up.get(l.dst) || up.set(l.dst, []).get(l.dst)).push(l.src);
-  }
-  const seen = new Set([id]);
-  for (const graph of [up, down]) {
-    const stack = [id];
-    while (stack.length) {
-      for (const next of graph.get(stack.pop()) || []) {
-        if (!seen.has(next)) { seen.add(next); stack.push(next); }
-      }
-    }
-  }
-  return seen;
-}
-
 function elements(doc) {
-  const nodes = visibleNodes(doc);
-  const shown = new Set(nodes.map((n) => n.id));
-  const links = doc.links.filter((l) => shown.has(l.src) && shown.has(l.dst));
-  const linked = new Set(links.flatMap((l) => [l.src, l.dst]));
-  const out = [];
-  const buckets = new Map();
-  // A claimed entry is never grouped away: who holds what is the point.
-  for (const n of nodes) {
-    if (!linked.has(n.id) && !state.focus && !n.claim) {
-      const key = `${BUCKET}${n.track}:${n.status}`;
-      if (!buckets.has(key)) buckets.set(key, { track: n.track, status: n.status, members: [] });
-      buckets.get(key).members.push(n);
-    }
-  }
-  for (const [key, b] of buckets) {
-    if (b.members.length < BUCKET_MIN) buckets.delete(key);
-  }
-  const grouped = new Set([...buckets.values()].flatMap((b) => b.members.map((m) => m.id)));
-  for (const n of nodes) {
-    if (!grouped.has(n.id)) out.push({ group: "nodes", data: nodeData(doc, n) });
-  }
-  for (const [key, b] of buckets) {
-    const track = doc.tracks.find((t) => t.id === b.track);
-    out.push({ group: "nodes", data: {
-      id: key, bucket: true, claimed: "", status: b.status, members: b.members.map((m) => m.id),
-      label: `${b.members.length} ${b.status}, unlinked\n${track ? track.title : b.track}`,
-      fill: (doc.statuses[b.status] || {}).fill || "#eeeeee",
-    } });
-  }
-  for (const l of links) {
-    out.push({ group: "edges", data: { id: `${l.kind}:${l.src}>${l.dst}`, source: l.src, target: l.dst, kind: l.kind } });
-  }
-  return out;
-}
-
-function nodeData(doc, n) {
-  const claim = n.claim;
-  return {
-    id: n.id, status: n.status, title: n.title,
-    fill: (doc.statuses[n.status] || {}).fill || "#eeeeee",
-    claimed: claim ? (claim.overrun ? "overrun" : "live") : "",
-    label: claim ? `${n.id}\n${claim.session}${claim.overrun ? ", overrun" : ""}` : n.id,
-  };
+  return buildElements(doc, state);
 }
 
 function style() {
@@ -221,16 +147,12 @@ function chip(text, set, value, count) {
 }
 
 function search() {
-  const q = $("graph-search").value.trim().toLowerCase();
+  const query = $("graph-search").value;
   const cy = state.cy;
   if (!cy) return;
   cy.elements().removeClass("dim hit");
-  if (!q) { $("search-count").textContent = ""; return; }
-  const hits = new Set(state.doc.nodes.filter((n) =>
-    // A record may hold a list where a string belongs; search what it says.
-    n.id.toLowerCase() === q || String(n.title ?? "").toLowerCase().includes(q)
-    || String(n.hypothesis ?? "").toLowerCase().includes(q)
-    || n.id.toLowerCase().startsWith(q)).map((n) => n.id));
+  if (!query.trim()) { $("search-count").textContent = ""; return; }
+  const hits = searchHits(state.doc.nodes, query);
   cy.nodes().forEach((node) => {
     const d = node.data();
     const match = d.bucket ? d.members.some((m) => hits.has(m)) : hits.has(d.id);
@@ -271,7 +193,7 @@ async function select(id, refresh = false) {
   try {
     const doc = await fetchJSON(`entry/${encodeURIComponent(id)}`);
     if (state.selected !== id || state.panelTicket !== ticket) return;
-    const html = panelHTML(doc);
+    const html = panelHTML(doc, (status) => fillOf(state.doc, status));
     // A refresh that changes nothing leaves the panel alone: an open History,
     // a selection or focus inside it survive the clock and unrelated rows.
     if (refresh && html === state.panelHTML) return;
@@ -290,73 +212,8 @@ async function select(id, refresh = false) {
 
 function showBucket(id) {
   const node = state.cy.getElementById(id);
-  const members = node.data("members");
-  const byId = new Map(state.doc.nodes.map((n) => [n.id, n]));
-  $("panel-body").innerHTML = `<h2>${esc(node.data("label").split("\n")[0])}</h2>
-    <p class="muted">No stored link joins these entries to any other shown entry.</p>
-    <ul class="links">${members.map((m) => `<li><a href="#graph" data-entry="${esc(m)}">${esc(m)}</a> ${esc(byId.get(m).title)}</li>`).join("")}</ul>`;
-}
-
-const KIND_UP = { parent: "parent", derived: "derived from", supersedes: "supersedes", related: "related", cites: "cites" };
-const KIND_DOWN = { parent: "child", derived: "derived by", supersedes: "superseded by", related: "related", cites: "cited by" };
-
-function panelHTML(doc) {
-  const e = doc.entry;
-  const field = (label, value) => value ? `<h3>${label}</h3><p>${esc(String(value))}</p>` : "";
-  const r = e.result;
-  let html = `<p class="panel-id"><span class="pill" style="background:${esc(fill(e.status))}">${esc(e.status)}</span> ${esc(e.id)}, ${esc(e.track)}</p>
-    <h2>${esc(e.title)}</h2>`;
-  if (e.claim) {
-    const over = e.claim.overrun;
-    html += `<p class="claim${over ? " over" : ""}">Claimed by <strong>${esc(e.claim.session)}</strong> since ${esc(e.claim.at.slice(0, 16).replace("T", " "))}` +
-      (over ? `, past its ${esc(over.meter)} ceiling (${fmt(over.spent)} of ${fmt(over.cap)})` : "") +
-      (e.claim.why ? `<br><span class="muted">${esc(e.claim.why)}</span>` : "") + "</p>";
-  }
-  html += field("Hypothesis", e.hypothesis) + field("Prediction", e.prediction);
-  if (r) {
-    html += `<h3>Verdict</h3><p><strong>${esc(r.verdict)}</strong>` +
-      (r.closure_kind ? ` (${esc(r.closure_kind)})` : "") +
-      ` by ${esc(r.session)}, ${esc((r.at || "").slice(0, 10))}</p>` +
-      (r.summary ? `<p>${esc(r.summary)}</p>` : "") +
-      (r.reopen_condition ? `<p class="muted">Reopens if: ${esc(r.reopen_condition)}</p>` : "");
-  }
-  if (e.gates && e.gates.length) {
-    html += `<h3>Gates</h3><ul>${e.gates.map((g) => `<li>${esc(g.name)}: ${esc(g.state || "")}${g.required ? " (required)" : ""}</li>`).join("")}</ul>`;
-  }
-  if (doc.upstream.length || doc.downstream.length) {
-    const item = (l, kinds) => `<li>${esc(kinds[l.kind])} <a href="#graph" data-entry="${esc(l.id)}">${esc(l.id)}</a> ${esc(l.title)}</li>`;
-    html += `<h3>Links</h3><ul class="links">${doc.upstream.map((l) => item(l, KIND_UP)).join("")}${doc.downstream.map((l) => item(l, KIND_DOWN)).join("")}</ul>
-      <p><button type="button" data-focus="${esc(e.id)}">Show only this lineage</button></p>`;
-  }
-  html += runsHTML(doc.runs);
-  if (doc.memo) {
-    const m = doc.memo;
-    html += `<h3>Memo <span class="muted">${esc(m.path)}</span></h3>`;
-    if (!m.exists) html += `<p class="bad">The memo file is missing.</p>`;
-    else if (m.text === null) html += `<p class="muted">Too large to show here (${fmt(m.size)} bytes).</p>`;
-    else if (/\.(md|markdown|txt)$/i.test(m.path)) html += `<div class="memo">${markdown(m.text)}</div>`;
-    else html += `<pre class="memo">${esc(m.text)}</pre>`;
-  }
-  if (doc.paths.length) {
-    html += `<h3>Other sources</h3><ul>${doc.paths.map((p) => `<li><code>${esc(p.path)}</code>${p.exists ? "" : ' <span class="bad">missing</span>'}</li>`).join("")}</ul>`;
-  }
-  if (doc.history.length) {
-    html += `<details><summary>History, ${doc.history.length} events</summary><ol class="history">${doc.history.map((h) =>
-      `<li><span class="muted">${esc((h.at || "").slice(0, 16).replace("T", " "))}</span> ${esc(h.kind)} by ${esc(h.who)}${h.detail ? `: ${esc(h.detail)}` : ""}</li>`).join("")}</ol></details>`;
-  }
-  return html;
-}
-
-function runsHTML(runs) {
-  if (!runs.length) return "";
-  const rows = runs.map((r) => `<tr class="st-${esc(r.standing)}" title="${esc(r.reason || "")}">
-    <td>${esc(r.id)}</td><td>${esc(r.standing)}</td><td class="num">${fmt(r.objective)}</td>
-    <td>${esc(r.epoch)}${r.current ? "" : " (old)"}</td><td>${esc(r.session)}</td></tr>`).join("");
-  return `<h3>Runs, ${runs.length}</h3><table class="runs"><thead><tr><th>Row</th><th>Standing</th><th class="num">Objective</th><th>Epoch</th><th>Session</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
-
-function fill(status) {
-  return ((state.doc && state.doc.statuses[status]) || {}).fill || "#eeeeee";
+  const titles = new Map(state.doc.nodes.map((n) => [n.id, n.title]));
+  $("panel-body").innerHTML = bucketHTML(node.data("label"), node.data("members"), titles);
 }
 
 // -- wiring --------------------------------------------------------------------
@@ -365,11 +222,8 @@ function setUp() {
   $("graph-search").addEventListener("input", search);
   $("graph-search").addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || !state.cy) return;
-    // An exact id beats a prefix, which beats a mention in a title or hypothesis.
-    const q = $("graph-search").value.trim().toLowerCase();
-    const hits = state.cy.nodes(".hit");
-    const hit = hits.filter((n) => n.id().toLowerCase() === q)[0]
-      || hits.filter((n) => n.id().toLowerCase().startsWith(q))[0] || hits[0];
+    const id = pickHit(state.cy.nodes(".hit").map((n) => n.id()), $("graph-search").value);
+    const hit = id && state.cy.getElementById(id);
     if (hit) { select(hit.id()); state.cy.animate({ center: { eles: hit }, zoom: Math.max(state.cy.zoom(), 1) }, { duration: 200 }); }
   });
   $("graph-fit").addEventListener("click", () => state.cy && state.cy.fit(undefined, 24));
@@ -394,10 +248,9 @@ function setUp() {
   });
   // The panel reads more than the graph does (memos, guides, run rows), so it
   // is re-read on any change to those, keeping the reader's place.
-  const PANEL_READS = ["entries", "claims", "state", "runs", "inbox", "guides", "skills", "clock"];
   onChange((changed) => {
     if (!state.selected || state.selected.startsWith(BUCKET)) return;
-    if (changed === null || PANEL_READS.some((r) => changed.includes(r))) select(state.selected, true);
+    if (stale(PANEL_READS, changed)) select(state.selected, true);
   });
   document.addEventListener("tabshown", (event) => {
     if (event.detail !== "graph" || !state.cy) return;

@@ -51,7 +51,8 @@ def _tree(root: pathlib.Path) -> dict:
 
 def test_every_endpoint_and_file_answers(served):
     _, server = served
-    for path in ("/", "/app.js", "/style.css", "/graph.js", "/md.js",
+    for path in ("/", "/app.js", "/style.css", "/graph.js", "/md.js", "/format.js",
+                 "/live.js", "/graphdata.js", "/panel.js",
                  "/vendor/cytoscape.min.js", "/vendor/dagre.min.js",
                  "/vendor/cytoscape-dagre.js"):
         status, kind, body = _get(server, path)
