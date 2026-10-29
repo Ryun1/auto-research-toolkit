@@ -42,8 +42,11 @@ def _api_paths(server):
 
 
 def _tree(root: pathlib.Path) -> dict:
-    return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(root.rglob("*")) if p.is_file()}
+    """Every file by content and every directory, so a new empty directory
+    counts as a write too."""
+    return {str(p.relative_to(root)): (hashlib.sha256(p.read_bytes()).hexdigest()
+                                       if p.is_file() else "dir")
+            for p in sorted(root.rglob("*"))}
 
 
 def test_every_endpoint_and_file_answers(served):
@@ -121,7 +124,50 @@ def test_a_refused_head_has_no_body_and_a_refused_write_closes(served):
     conn.request("POST", "/api/board", body=b"GET /api/board HTTP/1.1\r\n\r\n")
     response = conn.getresponse()
     assert response.status == 405 and response.getheader("Connection") == "close"
+    assert response.getheader("Allow") == "GET, HEAD"
     conn.close()
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    conn.request("HEAD", "/api/events")
+    response = conn.getresponse()
+    assert response.status == 200 and response.read() == b""
+    conn.close()
+
+
+def test_a_wildcard_address_is_refused(sandbox, capsys):
+    """Every request to 0.0.0.0 carries a remote Host the rebinding guard
+    refuses, so the server would answer only 403s."""
+    with pytest.raises(ValueError, match="every address"):
+        make_server(sandbox, host="0.0.0.0", port=0)
+    assert cli.main(["--domain", str(sandbox.paths.root), "ui", "--host", "0.0.0.0"]) == 2
+    assert "name one address" in capsys.readouterr().err
+
+
+def test_only_the_cores_revision_cache_is_written(sandbox, store):
+    """A domain with a benchmark_revision command: reading epochs refreshes
+    the core's last-known value in .ar/, exactly as `ar board` does, and
+    nothing else on disk moves."""
+    script = sandbox.paths.root / "bin/revs"
+    script.write_text("#!/bin/sh\necho bench-rev\n")
+    script.chmod(0o755)
+    toml = sandbox.paths.root / "domain.toml"
+    toml.write_text(toml.read_text().replace(
+        "[commands]\n", '[commands]\nbenchmark_revision = "bin/revs"\n'))
+    from autoresearch import epochs
+    from autoresearch.config import DomainConfig
+    config = DomainConfig.load(sandbox.paths.root)
+    make_entry(store, "Q1")
+    epochs._REVISIONS.clear()
+    before = _tree(config.paths.root)
+    server = make_server(config, port=0, interval=0.1)
+    server.start()
+    try:
+        for path in ["/", *_api_paths(server)]:
+            assert _get(server, path)[0] == 200, path
+    finally:
+        server.stop()
+    after = _tree(config.paths.root)
+    moved = {k for k in set(before) | set(after) if before.get(k) != after.get(k)}
+    assert moved <= {".ar", ".ar/benchmark-revision.json"}
 
 
 def test_a_build_the_record_moved_under_is_not_cached(sandbox, store):
@@ -197,8 +243,25 @@ def test_an_entry_edit_reaches_the_event_stream(served, store):
     assert events, "no change event"
     at, names = events[0]
     assert "entries" in names and at - edited < 2.0
-    # the cached document was dropped before the event went out
+    # the cached document was dropped, so the refetch sees the new entry
     assert {r["id"] for r in json.loads(_get(server, "/api/entries")[2])} == {"Q1", "Q2"}
+
+
+def test_the_cache_is_dropped_before_readers_are_woken(served):
+    """A page refetching the moment its event arrives must not get the old
+    document: the publish that wakes readers invalidates first."""
+    _, server = served
+    _get(server, "/api/entries")
+    assert "entries" in server.api._cache
+    seen = []
+    real = server.watcher._cond.notify_all
+
+    def notify_all():
+        seen.append("entries" in server.api._cache)
+        real()
+    server.watcher._cond.notify_all = notify_all
+    server.watcher.publish({"entries"})
+    assert seen == [False]
 
 
 def test_a_file_is_named_by_its_most_specific_resource(sandbox):

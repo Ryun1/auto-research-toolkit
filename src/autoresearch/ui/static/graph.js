@@ -227,7 +227,9 @@ function search() {
   cy.elements().removeClass("dim hit");
   if (!q) { $("search-count").textContent = ""; return; }
   const hits = new Set(state.doc.nodes.filter((n) =>
-    n.id.toLowerCase() === q || n.title.toLowerCase().includes(q) || (n.hypothesis || "").toLowerCase().includes(q)
+    // A record may hold a list where a string belongs; search what it says.
+    n.id.toLowerCase() === q || String(n.title ?? "").toLowerCase().includes(q)
+    || String(n.hypothesis ?? "").toLowerCase().includes(q)
     || n.id.toLowerCase().startsWith(q)).map((n) => n.id));
   cy.nodes().forEach((node) => {
     const d = node.data();
@@ -259,8 +261,9 @@ async function select(id, refresh = false) {
   const panel = $("panel");
   if (!id) { panel.hidden = true; return; }
   panel.hidden = false;
-  if (id.startsWith(BUCKET)) return showBucket(id);
+  if (id.startsWith(BUCKET)) { state.panelHTML = null; return showBucket(id); }
   if (!refresh) {
+    state.panelHTML = null;
     panel.scrollTop = 0;
     $("panel-body").innerHTML = `<p class="muted">Reading ${esc(id)}</p>`;
   }
@@ -268,10 +271,19 @@ async function select(id, refresh = false) {
   try {
     const doc = await fetchJSON(`entry/${encodeURIComponent(id)}`);
     if (state.selected !== id || state.panelTicket !== ticket) return;
+    const html = panelHTML(doc);
+    // A refresh that changes nothing leaves the panel alone: an open History,
+    // a selection or focus inside it survive the clock and unrelated rows.
+    if (refresh && html === state.panelHTML) return;
     const top = panel.scrollTop;
-    $("panel-body").innerHTML = panelHTML(doc);
+    const open = refresh && !!panel.querySelector("details[open]");
+    $("panel-body").innerHTML = html;
+    state.panelHTML = html;
+    if (open) panel.querySelectorAll("details").forEach((d) => { d.open = true; });
     panel.scrollTop = refresh ? top : 0;
   } catch (err) {
+    if (state.selected !== id || state.panelTicket !== ticket) return;
+    state.panelHTML = null;
     $("panel-body").innerHTML = `<p class="bad">${esc(err.message)}</p>`;
   }
 }

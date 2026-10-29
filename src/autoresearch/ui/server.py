@@ -1,7 +1,8 @@
 """The HTTP side of `ar ui`: static files, JSON endpoints and one event stream.
 
 Read-only by construction: the handler answers GET and HEAD and nothing else,
-and no endpoint calls a function that writes.
+and no endpoint writes to the record (see the package docstring for the one
+core cache the board's epoch reading refreshes, as `ar board` does).
 
 Binding to localhost is not enough on its own. A web page on any site can
 point a hostname it controls at 127.0.0.1 (DNS rebinding) and then read
@@ -92,6 +93,12 @@ class Handler(BaseHTTPRequestHandler):
                                 head)
         path = self.path.split("?", 1)[0]
         if path == "/api/events":
+            if head:
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
             return self._events()
         if path.startswith("/api/"):
             name, _, arg = path[len("/api/"):].partition("/")
@@ -123,6 +130,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps({"error": "ar ui is read-only"}).encode()
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Allow", "GET, HEAD")
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
@@ -164,7 +172,14 @@ class Server(ThreadingHTTPServer):
 
 def make_server(config, host="127.0.0.1", port=8484, interval=1.0, verbose=False):
     """A configured, not yet running server. `port=0` takes an ephemeral port
-    (`server.server_address[1]` names it). The watcher is started by `start`."""
+    (`server.server_address[1]` names it). The watcher is started by `start`.
+
+    A wildcard address is refused: requests are answered only for a Host of
+    localhost or the bound address (the rebinding guard), so a server on
+    0.0.0.0 would answer every remote browser with 403."""
+    if host in ("0.0.0.0", "::", ""):
+        raise ValueError(f"--host {host!r} binds every address, and ar ui answers only "
+                         "requests addressed to the host it binds; name one address")
     cls = Server
     if ":" in host:
         cls = type("Server6", (Server,), {"address_family": socket.AF_INET6})
@@ -205,7 +220,7 @@ def serve(config, host="127.0.0.1", port=8484, open_browser=False) -> int:
     print(f"ar ui: serving {config.name} on {url}  (read-only; Ctrl-C stops)", flush=True)
     if host not in LOOPBACK:
         print(f"ar ui: warning: bound to {host}, not localhost; anyone who can "
-              f"reach it can read this campaign's record", file=sys.stderr)
+              f"reach {host} can read this campaign's record", file=sys.stderr)
     server.watcher.start()
     if open_browser:
         webbrowser.open(url)

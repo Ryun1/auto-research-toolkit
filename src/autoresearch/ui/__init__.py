@@ -5,7 +5,11 @@ files shipped as package data, and one Server-Sent Events stream that names
 the resources that changed so the page refetches them. It never writes to
 the record -- every action stays in the CLI -- and every number comes from
 the core functions the CLI uses (`board.snapshot` is `ar board`'s own
-document), so the page cannot disagree with `ar board`.
+document), so the page cannot disagree with `ar board`. Like `ar board`, it
+runs the domain's target probe and `benchmark_revision` command (refreshed
+each `watch.CLOCK`), and the core keeps its last-known benchmark revision in
+`.ar/benchmark-revision.json`; nothing under `state/`, the run ledger, the
+inbox or `docs/` is ever written.
 
 The toolkit depends only on PyYAML, and so does this: a domain that never
 runs `ar ui` pays nothing for it.

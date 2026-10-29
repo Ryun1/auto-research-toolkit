@@ -455,6 +455,8 @@ def cmd_ui(args):
     from . import ui
     try:
         return ui.serve(config, host=args.host, port=args.port, open_browser=args.open)
+    except ValueError as exc:
+        raise AutoresearchError(str(exc)) from exc
     except OSError as exc:
         raise AutoresearchError(
             f"cannot serve on {args.host}:{args.port}: {exc.strerror or exc} "

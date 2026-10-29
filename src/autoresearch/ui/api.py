@@ -26,7 +26,9 @@ READS = {
                 "holdout", "clock"},
     "entries": {"entries", "claims", "state"},
     "graph": {"entries", "claims", "state", "runs", "clock"},
-    "standing": {"entries", "runs", "state"},
+    # The current epoch moves with the evaluator's files and the benchmark
+    # revision, which no watched directory holds: the clock re-reads it.
+    "standing": {"entries", "runs", "state", "clock"},
     "entry": {"entries", "claims", "state", "runs", "inbox", "guides", "skills", "clock"},
 }
 

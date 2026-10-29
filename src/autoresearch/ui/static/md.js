@@ -22,7 +22,8 @@ function table(rows) {
   const cells = (row) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
   // Only the second line can be the separator, and only when it is nothing
   // but pipes, dashes and colons: a row like `| --epoch | ... |` is content.
-  const body = rows.length > 1 && /^\s*\|?(\s*:?-+:?\s*\|)*\s*:?-+:?\s*\|?\s*$/.test(rows[1])
+  // Whitespace is dropped first so the test stays linear on any input.
+  const body = rows.length > 1 && /^\|?(:?-+:?\|)*:?-+:?\|?$/.test(rows[1].replace(/\s+/g, ""))
     ? [rows[0], ...rows.slice(2)] : rows;
   const [head, ...rest] = body;
   let out = "<table><thead><tr>" + cells(head).map((c) => `<th>${inline(c)}</th>`).join("") + "</tr></thead><tbody>";
