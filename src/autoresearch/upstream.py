@@ -512,8 +512,10 @@ def _verify(config) -> list[str]:
     def run(*args: str) -> subprocess.CompletedProcess:
         try:
             return subprocess.run(
-                [sys.executable, "-m", "autoresearch.cli", *args,
-                 "--domain", str(config.paths.root)],
+                # --domain is a global option: after the verb, argparse
+                # refuses it, and every upgrade read as broken (starks H2).
+                [sys.executable, "-m", "autoresearch.cli",
+                 "--domain", str(config.paths.root), *args],
                 capture_output=True, text=True, timeout=TIMEOUT_SECONDS * 5)
         except subprocess.TimeoutExpired:
             # A wedged verify must not escape as a traceback: the caller needs

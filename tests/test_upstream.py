@@ -528,3 +528,12 @@ def test_doctor_refuses_a_dirty_or_untagged_editable_core(tmp_path):
     assert [p for p in up.editable_problems(inst) if "uncommitted" in p]
     # a copied install is not this check's business
     assert up.editable_problems(Install(version="1.2.0")) == []
+
+
+def test_verify_runs_the_real_cli_against_the_domain(sandbox):
+    """Every other upgrade test fakes `_verify`; this one runs it. With
+    `--domain` after the verb argparse refused the call, so every upgrade
+    rolled itself back on a clean domain (starks H2)."""
+    problems = up._verify(sandbox)
+    assert not [p for p in problems if "unrecognized arguments" in p], problems
+    assert not [p for p in problems if p.startswith("render failed")], problems
