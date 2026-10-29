@@ -449,6 +449,18 @@ def cmd_board(args):
     return 0
 
 
+def cmd_ui(args):
+    """Serve a read-only local view of this campaign until interrupted (#50)."""
+    config = _load(args)
+    from . import ui
+    try:
+        return ui.serve(config, host=args.host, port=args.port, open_browser=args.open)
+    except OSError as exc:
+        raise AutoresearchError(
+            f"cannot serve on {args.host}:{args.port}: {exc.strerror or exc} "
+            "(another `ar ui`? pass --port)") from exc
+
+
 def cmd_holdout_check(args):
     """Consult the holdout on the current best config, explicitly (#38).
 
@@ -2826,6 +2838,16 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     relocate_mod.register_parser(sub)
     attempts_mod.register_parser(sub)
     external_mod.register_parser(sub)
+    uip = sub.add_parser("ui", help="a read-only local web view of this campaign, "
+                                    "updated live")
+    uip.add_argument("--port", type=int, default=8484, help="default 8484; 0 picks a free one")
+    uip.add_argument("--host", default="127.0.0.1",
+                     help="the address to bind (default 127.0.0.1, this machine only)")
+    uip.add_argument("--open", action="store_true", help="open the page in a browser")
+    uip.add_argument("--no-branches", action="store_true",
+                     help="leave out uncommitted work on session/* branches and "
+                          "worktrees (no overlay is drawn yet)")
+    uip.set_defaults(func=cmd_ui)
     usage = sub.add_parser("usage", help="out-of-band spend, metered like any other")
     usub = usage.add_subparsers(dest="usage_cmd", required=True)
     urec = usub.add_parser("record", help="append one spend row")

@@ -30,7 +30,7 @@ ignore = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-autoresearch = ["agents/*.md"]
+autoresearch = ["agents/*.md", "ui/static/*", "ui/static/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

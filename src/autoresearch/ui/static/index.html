@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ar ui</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="statement">
+    <h1 id="domain">Loading the campaign</h1>
+    <p id="objective" class="objective"></p>
+  </div>
+  <dl class="readout" aria-live="polite">
+    <div><dt>Best</dt><dd id="best">none yet</dd></div>
+    <div><dt>To target</dt><dd id="distance">no distance</dd></div>
+    <div><dt>Target</dt><dd id="target">not probed</dd></div>
+  </dl>
+  <p class="link" id="link" data-state="connecting" title="Live updates">
+    <span class="dot" aria-hidden="true"></span><span id="link-text">Connecting</span>
+  </p>
+</header>
+
+<nav class="tabs" role="tablist" aria-label="Views">
+  <button role="tab" id="tab-graph" aria-controls="view-graph" aria-selected="true">Graph</button>
+  <button role="tab" id="tab-agents" aria-controls="view-agents" aria-selected="false">Agents</button>
+  <button role="tab" id="tab-board" aria-controls="view-board" aria-selected="false">Board</button>
+  <button role="tab" id="tab-frontier" aria-controls="view-frontier" aria-selected="false">Frontier</button>
+</nav>
+
+<main>
+  <section role="tabpanel" id="view-graph" aria-labelledby="tab-graph">
+    <p class="empty">The knowledge graph is not built yet.</p>
+  </section>
+  <section role="tabpanel" id="view-agents" aria-labelledby="tab-agents" hidden>
+    <p class="empty">The agents view is not built yet.</p>
+  </section>
+  <section role="tabpanel" id="view-board" aria-labelledby="tab-board" hidden>
+    <p class="empty">The board view is not built yet. <code>ar board</code> shows the same facts.</p>
+  </section>
+  <section role="tabpanel" id="view-frontier" aria-labelledby="tab-frontier" hidden>
+    <p class="empty">The frontier plot is not built yet.</p>
+  </section>
+</main>
+<p id="error" class="error" role="alert" hidden></p>
+<script type="module" src="app.js"></script>
+</body>
+</html>

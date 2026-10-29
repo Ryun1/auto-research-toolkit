@@ -333,6 +333,7 @@ ar external     hand one claimed entry to an external agent: assign, complete,
                 (free an expired assignment another session holds)
 ar challenge    the public challenge's shared intel: pull, show, check, target
 ar usage        record, list and price out-of-band spend
+ar ui           a read-only local web view of the campaign, updated live
 ar gates        per-entry acceptance gates: configure, update, show
 ar evidence     portable integrity-only evidence bundles: pack, verify, import
 ar relocate     move oversized inbox evidence into the findings lane, rewriting every recorded pointer
