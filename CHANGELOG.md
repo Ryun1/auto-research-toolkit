@@ -5,6 +5,36 @@ v0.2.0 and v0.8.0 onward are git tags (`git tag`); v0.3.0 to v0.7.1 exist
 only as their `Release:` commits, named beside each heading. What a domain
 must change to take a release is in [docs/MIGRATION.md](docs/MIGRATION.md).
 
+## v0.13.0 — 2026-10-29
+
+Field fixes from mldsa87, SLH-DSA-128 and starks-research, measurement kits,
+and two scripts that check whether a domain's priors and verdicts hold up.
+
+- Kits: shared measurement code a domain declares in `[evaluator] kits`,
+  vendored by `ar kit sync` into `bin/` and covered by `evaluator_sha`; a
+  cairo kit (checked snforge parsing, audited-libfunc builds, declare caps,
+  proven patch apply, a no-network sandbox).
+- `ar close` on another session's live claim needs that claim's token; a
+  piped `ar claim` copies its token to stderr; every verb takes
+  `--claim-token`.
+- `ar close --reopen` on a verdict needs `--reopen-reason
+  weak|overclaim|context|clerical`.
+- `ar rank` calibration moves a prior only once a tag has five closures.
+- Amending a closed entry's mechanisms moves what its closure excludes.
+- `ar reap` counts a commit as liveness only when it marks the holder or
+  names the holder and the entry; a name ending a sentence still names it.
+- A re-price event keeps each moved price's old and new value; a restated
+  price is not a move.
+- `ar skill check` reads `[B4, B5, B6]` as three citations.
+- `ar skill link`, made by `ar init`, exposes `docs/skills` to a harness at
+  the domain root.
+- `ar harness update` no longer rolls back a clean upgrade.
+- `scripts/calibrate-priors.py` and `scripts/audit-fast-closures.py`.
+- `bin/ar` finds an enclosing project's venv, stopping at the repository root
+  and running only files the user owns and others cannot write.
+- Docs, scaffold and role prompts agree with the code; this changelog; a
+  design for `ar ui`.
+
 ## v0.12.0 — 2026-10-26
 
 Agent-speed pass: the verbs a session runs at boot are fast and sized for a

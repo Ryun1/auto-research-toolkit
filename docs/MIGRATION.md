@@ -16,8 +16,15 @@ breaks without it), **behavioural** (it loads, but acts differently), or
 
 ---
 
-## Unreleased
+## 0.13.0
 
+- **Required (orchestrators that close their subagents' claims): pass the
+  claim's token.** `ar close` on an entry another session holds a live claim
+  on now refuses without `--claim-token TOKEN` (or `AR_CLAIM_TOKEN`). The
+  holder's own session still closes without one. Have subagents report their
+  token back; `ar claim` also copies it to stderr, so `ar claim ... | head -1`
+  no longer loses it. `[coordinator] claim_tokens = false` restores name
+  ownership.
 - **Required (scripts that reopen verdicts): pass `--reopen-reason`.**
   `ar close ID --reopen` on a closed entry now refuses without
   `--reopen-reason weak|overclaim|context|clerical`, and the refusal lists
@@ -57,6 +64,13 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   replayed from git; `scripts/audit-fast-closures.py` lists verdicts closed
   within an hour of filing for audit. See "Are the priors any good?" and
   "Which verdicts to audit" in the README.
+- **Optional: `ar skill link`.** `ar init` now links `.claude/skills` to
+  `docs/skills/`, so a coding harness opened at the domain root sees the
+  domain's skills. A domain scaffolded earlier runs `ar skill link` once; it
+  refuses if `.claude/skills` already holds something else.
+- **Fixed, no action:** `ar harness update` no longer rolls itself back on a
+  clean domain (its verify run passed `--domain` after the verb), and every
+  verb accepts `--claim-token` after the verb as well as before it.
 
 ## 0.12.0
 
