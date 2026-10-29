@@ -9,6 +9,7 @@ const READS = {
   summary: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state"],
   board: ["entries", "claims", "iterations", "runs", "inbox", "skills", "state"],
   entries: ["entries", "claims", "state"],
+  graph: ["entries", "claims", "state", "runs"],
 };
 
 const listeners = new Map(); // endpoint -> [fn]

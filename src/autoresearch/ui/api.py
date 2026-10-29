@@ -21,6 +21,9 @@ READS = {
     "board": {"entries", "claims", "iterations", "runs", "inbox", "skills", "state"},
     "summary": {"entries", "claims", "iterations", "runs", "inbox", "skills", "state"},
     "entries": {"entries", "claims", "state"},
+    "graph": {"entries", "claims", "state", "runs"},
+    "standing": {"entries", "runs", "state"},
+    "entry": {"entries", "claims", "state", "runs", "inbox", "guides", "skills"},
 }
 
 
@@ -32,17 +35,22 @@ class Api:
 
     def invalidate(self, changed) -> None:
         with self._lock:
-            for name in list(self._cache):
-                if READS.get(name, set()) & set(changed):
-                    del self._cache[name]
+            for key in list(self._cache):
+                if READS[key.split("/", 1)[0]] & set(changed):
+                    del self._cache[key]
 
-    def get(self, name: str):
+    def get(self, name: str, arg: str | None = None):
+        """The document `name` (with `arg`, e.g. `entry/Q12`), from cache
+        until a resource it reads changes."""
+        key = name if arg is None else f"{name}/{arg}"
         with self._lock:
-            if name in self._cache:
-                return self._cache[name]
-        doc = board_mod.finite(getattr(self, "_" + name)())
-        with self._lock:
-            self._cache[name] = doc
+            if key in self._cache:
+                return self._cache[key]
+        build = getattr(self, "_" + name)
+        doc = board_mod.finite(build() if arg is None else build(arg))
+        if doc is not None:              # an unknown id is not worth remembering
+            with self._lock:
+                self._cache[key] = doc
         return doc
 
     # -- endpoints --------------------------------------------------------
@@ -65,3 +73,15 @@ class Api:
     def _entries(self) -> list[dict]:
         from ..cli import _entry_row
         return [_entry_row(e) for e in Store(self.config.paths.entries).all()]
+
+    def _graph(self) -> dict:
+        from . import graph
+        return graph.graph(self.config)
+
+    def _standing(self) -> dict:
+        from . import graph
+        return graph.standing(self.config)
+
+    def _entry(self, entry_id: str) -> dict | None:
+        from . import graph
+        return graph.entry(self.config, entry_id, self.get("standing"))

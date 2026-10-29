@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ar ui</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -30,8 +31,25 @@
 </nav>
 
 <main>
-  <section role="tabpanel" id="view-graph" aria-labelledby="tab-graph">
-    <p class="empty">The knowledge graph is not built yet.</p>
+  <section role="tabpanel" id="view-graph" aria-labelledby="tab-graph" class="graph-view">
+    <div class="toolbar">
+      <input type="search" id="graph-search" placeholder="Find an entry by id, title or hypothesis"
+             aria-label="Find an entry" autocomplete="off">
+      <span id="search-count" class="muted" aria-live="polite"></span>
+      <div id="filter-tracks" class="chips" role="group" aria-label="Tracks"></div>
+      <div id="filter-statuses" class="chips" role="group" aria-label="Statuses"></div>
+      <button type="button" id="graph-fit">Fit to screen</button>
+    </div>
+    <p id="focus-bar" class="focus-bar" hidden>Showing only the lineage of <strong id="focus-id"></strong>.
+      <button type="button" id="focus-clear">Show everything</button></p>
+    <div class="graph-body">
+      <div id="graph-canvas" class="canvas" aria-label="Knowledge graph"></div>
+      <aside id="panel" class="panel" hidden>
+        <button type="button" id="panel-close" class="close" aria-label="Close the panel">Close</button>
+        <div id="panel-body"></div>
+      </aside>
+    </div>
+    <p id="graph-count" class="graph-count muted"></p>
   </section>
   <section role="tabpanel" id="view-agents" aria-labelledby="tab-agents" hidden>
     <p class="empty">The agents view is not built yet.</p>
@@ -44,6 +62,10 @@
   </section>
 </main>
 <p id="error" class="error" role="alert" hidden></p>
+<script src="vendor/cytoscape.min.js"></script>
+<script src="vendor/dagre.min.js"></script>
+<script src="vendor/cytoscape-dagre.js"></script>
 <script type="module" src="app.js"></script>
+<script type="module" src="graph.js"></script>
 </body>
 </html>

@@ -20,6 +20,7 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources as pkg_resources
+from urllib.parse import unquote
 
 from .api import Api
 from .watch import Watcher
@@ -28,6 +29,8 @@ from .watch import Watcher
 #: closed tab's handler thread notices and exits.
 KEEPALIVE = 15.0
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+#: Endpoints that take one path segment: `/api/entry/Q12`.
+ARG_ENDPOINTS = {"entry"}
 
 
 def _static(name: str) -> bytes | None:
@@ -90,14 +93,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/events":
             return self._events()
         if path.startswith("/api/"):
-            name = path[len("/api/"):]
-            if name not in self.server.endpoints:
-                return self._refuse(HTTPStatus.NOT_FOUND, f"no endpoint {name!r}")
+            name, _, arg = path[len("/api/"):].partition("/")
+            if name not in self.server.endpoints or bool(arg) != (name in ARG_ENDPOINTS):
+                return self._refuse(HTTPStatus.NOT_FOUND, f"no endpoint {path!r}")
             try:
-                doc = self.server.api.get(name)
+                doc = self.server.api.get(name, unquote(arg) if arg else None)
             except Exception as exc:    # a record that will not load is the page's to show
                 return self._json(HTTPStatus.INTERNAL_SERVER_ERROR,
                                   {"error": f"{type(exc).__name__}: {exc}"}, head)
+            if doc is None:
+                return self._refuse(HTTPStatus.NOT_FOUND, f"no {name} {unquote(arg)!r}")
             return self._json(HTTPStatus.OK, doc, head)
         name = "index.html" if path == "/" else path.lstrip("/")
         body = _static(name)
@@ -156,7 +161,7 @@ def make_server(config, host="127.0.0.1", port=8484, interval=1.0, verbose=False
     server.bound_host = host
     server.verbose = verbose
     server.api = Api(config)
-    server.endpoints = {"summary", "board", "entries"}
+    server.endpoints = {"summary", "board", "entries", "graph", "entry"}
     server.watcher = Watcher(config, interval=interval)
     server.stopping = threading.Event()
     real_publish = server.watcher.publish

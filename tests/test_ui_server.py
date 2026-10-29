@@ -12,6 +12,7 @@ import pytest
 
 from autoresearch import cli
 from autoresearch.ui import make_server
+from autoresearch.ui.server import ARG_ENDPOINTS
 from autoresearch.ui.watch import Watcher
 from conftest import make_entry
 
@@ -35,6 +36,11 @@ def _get(server, path, host=None, method="GET"):
     return response.status, response.getheader("Content-Type"), body
 
 
+def _api_paths(server):
+    return [f"/api/{name}/Q1" if name in ARG_ENDPOINTS else f"/api/{name}"
+            for name in sorted(server.endpoints)]
+
+
 def _tree(root: pathlib.Path) -> dict:
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(root.rglob("*")) if p.is_file()}
@@ -42,13 +48,15 @@ def _tree(root: pathlib.Path) -> dict:
 
 def test_every_endpoint_and_file_answers(served):
     _, server = served
-    for path in ("/", "/app.js", "/style.css"):
+    for path in ("/", "/app.js", "/style.css", "/graph.js", "/md.js",
+                 "/vendor/cytoscape.min.js", "/vendor/dagre.min.js",
+                 "/vendor/cytoscape-dagre.js"):
         status, kind, body = _get(server, path)
         assert status == 200 and body, path
     assert "text/html" in _get(server, "/")[1]
-    for name in server.endpoints:
-        status, kind, body = _get(server, f"/api/{name}")
-        assert status == 200 and kind == "application/json", name
+    for path in _api_paths(server):
+        status, kind, body = _get(server, path)
+        assert status == 200 and kind == "application/json", path
         json.loads(body)
     summary = json.loads(_get(server, "/api/summary")[2])
     assert summary["domain"] == "toy" and summary["goal"]["id"]
@@ -65,8 +73,7 @@ def test_the_board_endpoint_is_ar_boards_own_document(served, capsys):
 def test_no_endpoint_writes_anything(served):
     sandbox, server = served
     before = _tree(sandbox.paths.root)
-    for path in ["/", "/app.js", "/style.css",
-                 *(f"/api/{name}" for name in server.endpoints)]:
+    for path in ["/", "/app.js", "/style.css", *_api_paths(server)]:
         _get(server, path)
     assert _tree(sandbox.paths.root) == before
 
@@ -78,6 +85,9 @@ def test_writes_traversal_and_foreign_hosts_are_refused(served):
     assert _get(server, "/../pyproject.toml")[0] == 404
     assert _get(server, "/.hidden")[0] == 404
     assert _get(server, "/api/nope")[0] == 404
+    assert _get(server, "/api/entry")[0] == 404
+    assert _get(server, "/api/entry/Q404")[0] == 404
+    assert _get(server, "/api/board/extra")[0] == 404
     # DNS rebinding: a page on another site resolves its own name to 127.0.0.1
     status, _, body = _get(server, "/api/board", host="evil.example:8484")
     assert status == 403 and b"localhost" in body

@@ -26,6 +26,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -106,7 +107,75 @@ code { font-size: 0.9em; }
   border: 1px solid var(--bad); border-radius: 4px;
 }
 
+.muted { color: var(--ink-soft); }
+.bad { color: var(--bad); }
+button {
+  font: inherit; font-size: 0.85rem; color: var(--ink);
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 3px;
+  padding: 0.25rem 0.6rem; cursor: pointer;
+}
+button:hover { border-color: var(--ink-soft); }
+
+/* -- graph ----------------------------------------------------------------- */
+.graph-view { display: flex; flex-direction: column; }
+.toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem;
+  padding: 0.6rem 1.5rem;
+  border-bottom: 1px solid var(--rule);
+  font-size: 0.85rem;
+}
+.toolbar input[type="search"] {
+  font: inherit; width: min(22rem, 100%);
+  padding: 0.3rem 0.5rem; color: var(--ink);
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 3px;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 0.25rem 0.6rem; }
+.chip { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; white-space: nowrap; }
+.chip input { margin: 0; accent-color: var(--live); }
+.swatch { width: 0.7rem; height: 0.7rem; border-radius: 2px; border: 1px solid #6b7785; display: none; }
+#filter-statuses .swatch { display: inline-block; }
+#filter-tracks { padding-right: 1rem; border-right: 1px solid var(--rule); }
+.focus-bar { margin: 0; padding: 0.4rem 1.5rem; background: var(--sheet); border-bottom: 1px solid var(--rule); font-size: 0.85rem; }
+.graph-body { flex: 1; min-height: 0; display: flex; }
+.canvas { flex: 1; min-width: 0; }
+.graph-count { margin: 0; padding: 0.3rem 1.5rem; font-size: 0.8rem; border-top: 1px solid var(--rule); }
+
+.panel {
+  width: min(30rem, 45vw); overflow-y: auto;
+  padding: 1rem 1.25rem 2rem;
+  background: var(--sheet); border-left: 1px solid var(--rule);
+  font-size: 0.9rem;
+}
+.panel .close { float: right; }
+.panel h2 { font: 1.25rem/1.25 var(--serif); margin: 0.2rem 0 0.8rem; }
+.panel h3 { font-size: 0.85rem; font-weight: 600; color: var(--ink-soft); margin: 1.2rem 0 0.3rem; }
+.panel p { margin: 0.3rem 0; max-width: 70ch; }
+.panel ul, .panel ol { padding-left: 1.2rem; margin: 0.3rem 0; }
+.panel a { color: var(--live); }
+.panel-id { font-size: 0.85rem; color: var(--ink-soft); }
+.pill { display: inline-block; padding: 0.05rem 0.45rem; border-radius: 3px; color: #1c2b3a; border: 1px solid #6b7785; }
+.claim { padding: 0.4rem 0.6rem; border-left: 3px solid var(--live); }
+.claim.over { border-left-color: var(--warn); }
+.links li { margin: 0.15rem 0; }
+.runs { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+.runs th, .runs td { text-align: left; padding: 0.15rem 0.4rem; border-bottom: 1px solid var(--rule); }
+.runs .num { text-align: right; }
+.runs .st-ok td:nth-child(2) { color: var(--live); }
+.runs .st-failed td:nth-child(2), .runs .st-invalid td:nth-child(2) { color: var(--bad); }
+.runs .st-suspect td:nth-child(2), .runs .st-excluded td:nth-child(2) { color: var(--warn); }
+.memo { font-size: 0.85rem; overflow-wrap: anywhere; }
+.memo table { border-collapse: collapse; font-size: 0.8rem; display: block; overflow-x: auto; }
+.memo th, .memo td { border: 1px solid var(--rule); padding: 0.15rem 0.35rem; }
+.memo pre, pre.memo { background: var(--paper); padding: 0.5rem; overflow-x: auto; font-size: 0.8rem; white-space: pre-wrap; }
+.memo blockquote { margin: 0.4rem 0; padding-left: 0.7rem; border-left: 3px solid var(--rule); color: var(--ink-soft); }
+.history { font-size: 0.8rem; }
+details summary { cursor: pointer; margin-top: 1.2rem; color: var(--ink-soft); }
+
 @media (max-width: 760px) {
+  .graph-body { flex-direction: column; }
+  .panel { width: auto; max-height: 55vh; border-left: 0; border-top: 1px solid var(--rule); }
+  .toolbar { padding: 0.5rem 1rem; }
+  #filter-tracks { border-right: 0; }
   .masthead { grid-template-columns: 1fr; padding: 1rem; }
   .readout { flex-wrap: wrap; gap: 0.75rem 1.5rem; }
   .tabs { padding: 0 0.5rem; overflow-x: auto; }

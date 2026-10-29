@@ -377,7 +377,39 @@ def frontier(store, records, goal):
     caller can *name* what it dropped: a row that vanishes without a word reads
     as a frontier that did not move.
     """
-    findings, left_out, why = [], [], {}
+    best, left_out, why, _suspect = _admit(store, records, goal)
+    excluded = best_run(left_out, goal)
+    if excluded is not None:
+        excluded = (*excluded, why[id(excluded[1])])
+    return best, excluded
+
+
+def standing(store, records, goal) -> dict[str, tuple[str, str]]:
+    """Per row id, `(kind, reason)`: how the frontier treats each row of
+    `records` (one epoch's). `kind` is the row's own status when it is not
+    `ok`; for an `ok` row it is `excluded` (left out by a constraint, or a
+    gain inside the noise floor), `suspect` (held for a second session,
+    #39) or `ok`. The reasons are `frontier`'s own, so a view that lists
+    rows cannot disagree with the board about which one it dropped."""
+    _best, _left_out, why, suspect = _admit(store, records, goal)
+    out = {}
+    for record in records:
+        if record.status != OK:
+            out[record.id] = (record.status, record.notes or "")
+        elif id(record) in suspect:
+            out[record.id] = ("suspect", why[id(record)])
+        elif id(record) in why:
+            out[record.id] = ("excluded", why[id(record)])
+        else:
+            out[record.id] = (OK, "")
+    return out
+
+
+def _admit(store, records, goal):
+    """`(best, left_out, why, suspect)`: the frontier's one classification.
+    `why` maps `id(record)` to the reason it was left out; `suspect` holds
+    the ids of rows waiting on a second session."""
+    findings, left_out, why, suspect = [], [], {}, set()
     entries = entry_index(store)
     for record in records:
         reason = exclusion_reason(store, record, goal, entries)
@@ -401,10 +433,8 @@ def frontier(store, records, goal):
             for _, record in group.scored:
                 why[id(record)] = reason
                 left_out.append(record)
-    excluded = best_run(left_out, goal)
-    if excluded is not None:
-        excluded = (*excluded, why[id(excluded[1])])
-    return best, excluded
+        suspect = {id(r) for group, _ in suspects for _, r in group.scored}
+    return best, left_out, why, suspect
 
 
 def source_of(record) -> str | None:
