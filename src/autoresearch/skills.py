@@ -30,6 +30,7 @@ number is a gap, a falsely flagged one teaches everyone to pass `--no-verify`.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import pathlib
 import re
 from dataclasses import dataclass, field
@@ -39,6 +40,10 @@ import yaml
 from .errors import AutoresearchError, SchemaError
 
 SKILL_FILE = "SKILL.md"
+#: where a coding harness opened at the domain root looks for project skills.
+#: Without a link there, `docs/skills/` was invisible to the agents driving the
+#: domain: they saw only their user-global skills (starks H5).
+HARNESS_SKILL_DIRS = (".claude/skills",)
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 MAX_DESCRIPTION = 1024
 #: what a description must open with. Borrowed verbatim from the skill-authoring
@@ -480,6 +485,33 @@ def write(config, name, description, cites, body, *, iteration=None,
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(render(skill))
     return target
+
+
+def link(config) -> list[tuple[pathlib.Path, str]]:
+    """Point each harness skill path at the skills directory, by a relative
+    symlink a clone carries. Idempotent; refuses, before linking anything, a
+    path that already holds something else -- a hand-made skills directory is
+    the domain's to merge, not this verb's to replace."""
+    root = config.paths.root
+    source = root / config.skills.dir
+    plan = []
+    for rel in HARNESS_SKILL_DIRS:
+        path = root / rel
+        want = os.path.relpath(source, path.parent)
+        if path.is_symlink() and os.readlink(path) == want:
+            plan.append((path, want, "already linked"))
+        elif path.is_symlink() or path.exists():
+            raise SchemaError(
+                f"{rel} already exists and is not a link to {config.skills.dir}"
+                f" -- move its skills into {config.skills.dir}/ and remove it,"
+                f" then re-run `ar skill link`")
+        else:
+            plan.append((path, want, "linked"))
+    for path, want, state in plan:
+        if state == "linked":
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to(want, target_is_directory=True)
+    return [(path, state) for path, _, state in plan]
 
 
 def retire(config, name: str) -> pathlib.Path:

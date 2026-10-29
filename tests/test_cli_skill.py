@@ -225,3 +225,33 @@ def test_skill_list_answers_the_question_as_json(sandbox, store, capsys):
     assert [e["id"] for e in doc["undistilled"]] == ["H1"]
     assert doc["undistilled"][0]["track"] == "harness"
     assert doc["skills"][0]["cites"] == ["Q1"]
+
+
+def test_link_exposes_the_skills_to_a_harness_at_the_domain_root(
+        sandbox, capsys):
+    """starks H5: nothing wired docs/skills into the harness's skill path, so
+    the session saw only user-global skills. The outcome under test is that a
+    skill written to the record is readable through the harness path."""
+    make_skill(sandbox, "a-lesson", cites=[], body="# A claim\n")
+    assert _ar(sandbox, "skill", "link") == 0
+    seen = sandbox.paths.root / ".claude" / "skills" / "a-lesson" / "SKILL.md"
+    assert seen.read_text() == (sandbox.paths.root / "docs" / "skills"
+                                / "a-lesson" / "SKILL.md").read_text()
+    assert not (sandbox.paths.root / ".claude" / "skills").readlink().is_absolute()
+    assert _ar(sandbox, "skill", "link") == 0          # idempotent
+    assert "already linked" in capsys.readouterr().out
+
+
+def test_link_refuses_to_replace_a_hand_made_skills_directory(sandbox, capsys):
+    hand = sandbox.paths.root / ".claude" / "skills" / "mine"
+    hand.mkdir(parents=True)
+    assert _ar(sandbox, "skill", "link") == 2
+    assert "not a link" in capsys.readouterr().err
+    assert hand.is_dir()
+
+
+def test_a_new_domain_is_born_linked(tmp_path):
+    from autoresearch.scaffold import init
+    init(tmp_path / "d", "d")
+    assert (tmp_path / "d" / ".claude" / "skills").resolve() == \
+        (tmp_path / "d" / "docs" / "skills").resolve()

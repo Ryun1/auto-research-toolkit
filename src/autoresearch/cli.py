@@ -2163,6 +2163,14 @@ def cmd_skill_check(args):
     return 0
 
 
+def cmd_skill_link(args):
+    config = _load(args)
+    for path, state in skills_mod.link(config):
+        print(f"{path.relative_to(config.paths.root)} -> "
+              f"{config.skills.dir}: {state}")
+    return 0
+
+
 def cmd_skill_retire(args):
     config = _load(args)
     path = skills_mod.retire(config, args.name)
@@ -2658,6 +2666,9 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                          help="authorize the built-in TypeSafe brain to spend API money "
                               "for this run (otherwise domain.toml must set [brain] authorize_spend)")
     sdistil.set_defaults(func=cmd_skill_distil)
+    ssub.add_parser("link", help="expose the skills to a coding harness "
+                    "opened at the domain root (.claude/skills)"
+                    ).set_defaults(func=cmd_skill_link)
     sretire = ssub.add_parser("retire", help="delete one skill, with a reason")
     sretire.add_argument("name")
     sretire.add_argument("--why", required=True,

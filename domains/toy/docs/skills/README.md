@@ -42,6 +42,9 @@ Three rules, each enforced by `ar skill check` and by `ar validate`:
 Write one with `ar skill distil`, or by hand. `ar skill list` shows what exists,
 what is stale, and how many closed entries no skill cites yet.
 
+A coding harness opened at the domain root reads them through `.claude/skills`,
+a link `ar init` makes; a domain scaffolded before that runs `ar skill link`.
+
 ## Start a harness-debt map early
 
 The first real domain lost an afternoon to a defect that had already been
