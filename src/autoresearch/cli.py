@@ -1172,6 +1172,11 @@ def cmd_claim(args):
     print(f"token {token}  (pass --claim-token, or add it to AR_CLAIM_TOKEN to "
           f"release or update this claim; several tokens are comma-separated)")
     print(f'  export AR_CLAIM_TOKEN="${{AR_CLAIM_TOKEN:+$AR_CLAIM_TOKEN,}}{token}"')
+    if not sys.stdout.isatty():
+        # The token is unrecoverable once lost, and `ar claim ... | head -1`
+        # lost it, stranding the claim until its TTL (starks H8). Piped or
+        # captured stdout may be cut short; stderr carries a copy.
+        print(f"{entry.id} claim token {token}", file=sys.stderr)
     return 0
 
 

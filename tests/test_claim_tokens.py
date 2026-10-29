@@ -178,3 +178,17 @@ def test_a_verb_without_the_token_keeps_the_global_one(sandbox, store, capsys):
     token = _token(capsys)
     assert _ar(sandbox, "--session", "a", "--claim-token", token,
                "release", "Q1", "--why", "done") == 0
+
+
+def test_a_piped_claim_also_puts_its_token_on_stderr(sandbox, store, capsys):
+    """starks H8: `ar claim Q58 ... | head -1` dropped the token line, and a
+    lost token strands the claim until its TTL. Off a terminal, stderr carries
+    a copy that a cut-short stdout cannot take with it."""
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0
+    captured = capsys.readouterr()
+    token = next(line.split()[1] for line in captured.out.splitlines()
+                 if line.startswith("token "))
+    assert f"Q1 claim token {token}" in captured.err
+    assert _ar(sandbox, "--session", "a", "--claim-token",
+               captured.err.split()[-1], "release", "Q1", "--why", "x") == 0
