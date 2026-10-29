@@ -1244,6 +1244,17 @@ def cmd_close(args):
         print(f"{entry.id} reopened to {entry.status}")
         return 0
 
+    # A verdict on an entry another session holds is the race the claim lock
+    # exists to prevent: Q49 was closed by one session while a second held a
+    # live claim on it (starks H4). Another holder's claim needs its token, or
+    # `ar reap` once its TTL has run out; a closer under the holder's own
+    # session name keeps the close it always had.
+    claim_token = getattr(args, "claim_token", None)
+    if (entry.claim and not track.machine.status(entry.status).terminal
+            and (entry.claim.session != args.session or claim_token)):
+        Claims(store, config, args.session,
+               token=claim_token).require_owner(entry)
+
     # After the relabel/reopen returns: `--reopen` and `--relabel` carry no
     # destination, so a `superseded` closure rule must not fire on them.
     replacement = None

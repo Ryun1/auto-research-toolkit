@@ -36,8 +36,9 @@ token. The token, not the session name, proves the claim is yours: pass it
 as `--claim-token` (or `AR_CLAIM_TOKEN`; comma-separate several when one
 session holds several claims) to release, update or reopen the
 claim, or to `ar exec` / `ar external assign` under it, under whatever
-session name you act as. `ar close` is deliberately not gated: an
-orchestrator closes the entries its subagents claimed. A domain that wants name ownership
+session name you act as. `ar close` on another session's live claim needs
+that claim's token too: an orchestrator closes the entries its subagents
+claimed with the tokens they report back. A domain that wants name ownership
 back sets `[coordinator] claim_tokens = false`. A verdict applied without a
 claim is exactly the race the claim lock exists to prevent.
 
@@ -75,7 +76,9 @@ the same shape works one level down, inside your harness:
 - **The orchestrating agent keeps the judgement-heavy verbs**: `board`,
   `rank`, `entry new`, `close` (a closure's memo and gates are a verdict --
   one writer, not a fan-out), `budget`. Subagents claim, measure and report
-  back; the orchestrator closes.
+  back -- **with their claim token** -- and the orchestrator closes with
+  `--claim-token TOKEN`: `close` refuses a verdict on another session's live
+  claim without it.
 - **The orchestrator also carries the persistence.** Most harnesses have a
   goal feature (`/goal <text>`); set it from `goal.yaml` -- metrics,
   objective, moving target, `stop_when` -- as a goal the harness will

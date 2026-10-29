@@ -158,3 +158,54 @@ def test_a_mechanism_closure_names_the_entries_it_hides_from_rank(
     out = capsys.readouterr().out
     assert "now excluded from `ar rank` by this mechanism closure: Q2 " in out, out
     assert "Q3" not in out
+
+
+def _token(capsys):
+    out = capsys.readouterr().out
+    return next(line.split()[1] for line in out.splitlines()
+                if line.startswith("token "))
+
+
+def _close_as(sandbox, session, entry_id, *extra):
+    memo(sandbox, f"inbox/{entry_id}.md")
+    return cli.main(["--domain", str(sandbox.paths.root), "--session", session,
+                     "close", entry_id, "refuted", "--memo",
+                     f"inbox/{entry_id}.md", "--closure", "cell",
+                     "--reopen-condition", "r", "--summary", "s", *extra])
+
+
+def test_another_sessions_live_claim_refuses_a_tokenless_close(
+        sandbox, store, capsys):
+    """starks H4: Q49 was closed refuted by a curator while another session
+    held a live claim on it -- the race the claim lock exists to prevent."""
+    make_entry(store, "Q1")
+    root = ["--domain", str(sandbox.paths.root)]
+    assert cli.main([*root, "--session", "holder", "claim", "Q1",
+                     "--why", "mine"]) == 0
+    capsys.readouterr()
+    assert _close_as(sandbox, "curator", "Q1") == 2
+    err = capsys.readouterr().err
+    assert "held by 'holder'" in err and "--claim-token" in err
+    assert store.load("Q1").status == "in-progress"
+
+
+def test_the_holders_token_lets_another_session_close(sandbox, store, capsys):
+    """The orchestrator closes what its subagent claimed, given the token."""
+    make_entry(store, "Q1")
+    root = ["--domain", str(sandbox.paths.root)]
+    assert cli.main([*root, "--session", "holder", "claim", "Q1",
+                     "--why", "mine"]) == 0
+    token = _token(capsys)
+    assert _close_as(sandbox, "curator", "Q1", "--claim-token", token) == 0
+    assert store.load("Q1").status == "refuted"
+
+
+def test_a_wrong_token_refuses_even_under_the_holders_name(
+        sandbox, store, capsys):
+    make_entry(store, "Q1")
+    root = ["--domain", str(sandbox.paths.root)]
+    assert cli.main([*root, "--session", "holder", "claim", "Q1",
+                     "--why", "mine"]) == 0
+    capsys.readouterr()
+    assert _close_as(sandbox, "holder", "Q1", "--claim-token", "0" * 32) == 2
+    assert store.load("Q1").status == "in-progress"

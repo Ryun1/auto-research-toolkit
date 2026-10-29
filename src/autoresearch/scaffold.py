@@ -625,7 +625,9 @@ subagents, use that instead of working entries one at a time:
 - **The orchestrating agent keeps the judgement-heavy verbs**: `board`,
   `rank`, `entry new`, `close` (a closure's memo and gates are a verdict --
   one writer, not a fan-out), `budget`. Subagents claim, measure and report
-  back; the orchestrator closes.
+  back -- **with their claim token** -- and the orchestrator closes with
+  `--claim-token TOKEN`: `close` refuses a verdict on another session's live
+  claim without it.
 - **Subagent model spend is still out-of-band spend** -- record it under the
   subagent's session name (see below), or the ceiling refuses metered spend.
 
