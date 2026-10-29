@@ -2874,7 +2874,25 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     urec_.set_defaults(func=cmd_usage, usage_cmd="reconcile")
 
     plugins_mod.register(sub, plugins_spec, root, config)
+    _accept_token_after_verb(ap)
     return ap
+
+
+def _accept_token_after_verb(parser) -> None:
+    """Every refusal says "pass `--claim-token TOKEN`", and an agent reads that
+    as a flag of the verb it just ran: `ar release Q1 --claim-token T` was an
+    unrecognized argument (starks H6). Each leaf verb accepts it too. SUPPRESS
+    keeps a leaf that was not given it from overwriting the global value."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for child in set(action.choices.values()):
+                _accept_token_after_verb(child)
+            return
+    if "--claim-token" not in parser._option_string_actions:
+        parser.add_argument("--claim-token", dest="claim_token",
+                            default=argparse.SUPPRESS,
+                            help="the token `ar claim` printed (also accepted "
+                                 "before the verb, or as $AR_CLAIM_TOKEN)")
 
 
 def _plugins_config(argv) -> DomainConfig | None:
@@ -2919,9 +2937,9 @@ def _measure_passthrough(argv):
         return argv
     j = i + 1
     while j < len(argv):
-        if argv[j] in ("--entry", "--candidate"):
+        if argv[j] in ("--entry", "--candidate", "--claim-token"):
             j += 2
-        elif argv[j].startswith(("--entry=", "--candidate=")):
+        elif argv[j].startswith(("--entry=", "--candidate=", "--claim-token=")):
             j += 1
         else:
             break

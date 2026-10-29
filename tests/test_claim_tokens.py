@@ -158,3 +158,23 @@ def test_no_matching_token_names_the_entry_and_the_count(sandbox, store, capsys)
                "release", "Q1", "--why", "x") == 2
     err = capsys.readouterr().err
     assert "none of the 2 claim tokens presented" in err and "Q1" in err
+
+
+def test_the_token_is_accepted_after_the_verb_as_the_refusal_says(
+        sandbox, store, capsys):
+    """starks H6: the refusal says `--claim-token TOKEN`, and an agent puts it
+    after the verb it just ran -- which argparse refused as unrecognized."""
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0
+    token = _token(capsys)
+    assert _ar(sandbox, "--session", "a", "release", "Q1",
+               "--claim-token", token, "--why", "done") == 0
+    assert store.load("Q1").claim is None
+
+
+def test_a_verb_without_the_token_keeps_the_global_one(sandbox, store, capsys):
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0
+    token = _token(capsys)
+    assert _ar(sandbox, "--session", "a", "--claim-token", token,
+               "release", "Q1", "--why", "done") == 0
