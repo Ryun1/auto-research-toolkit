@@ -4,7 +4,6 @@ import json
 import pytest
 
 from autoresearch import cli
-from autoresearch.errors import ConfigError
 
 
 def _ar(capsys, *argv):
@@ -96,7 +95,7 @@ def test_init_member_refuses_a_path_outside_the_umbrella(umbrella, capsys, rel):
     assert "umbrella" in err
 
 
-@pytest.mark.parametrize("prefix", ["a", "C1", "", "A-B"])
+@pytest.mark.parametrize("prefix", ["a", "C1", "", "A-B", "A\n"])
 def test_init_member_refuses_a_bad_prefix(umbrella, capsys, prefix):
     code, _, err = _ar(capsys, "--domain", str(umbrella), "init",
                        "--member", "domains/c", "--prefix", prefix)
@@ -136,3 +135,12 @@ def test_init_without_member_is_unchanged(tmp_path, capsys):
     code, out, err = _ar(capsys, "init", str(tmp_path / "solo"))
     assert code == 0, err
     assert "scaffolded domain 'solo'" in out
+
+
+@pytest.mark.parametrize("name", ['a"b', "a\\b", "a\nb"])
+def test_init_member_refuses_a_name_that_would_break_the_toml(umbrella, capsys, name):
+    code, _, err = _ar(capsys, "--domain", str(umbrella), "init",
+                       "--member", "domains/c", "--prefix", "Z", "--name", name)
+    assert code == 2
+    assert "--name" in err
+    assert not (umbrella / "domains" / "c").exists()

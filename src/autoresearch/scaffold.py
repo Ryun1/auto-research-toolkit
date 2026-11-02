@@ -827,10 +827,15 @@ def init_member(umbrella: DomainConfig, rel: str, prefix: str,
     written, and a failed umbrella edit takes the member's files back out."""
     from . import members as members_mod
 
-    if not _PREFIX_RE.match(prefix or ""):
+    if not _PREFIX_RE.fullmatch(prefix or ""):
         raise ConfigError(
             f"--prefix {prefix!r} must be capital letters only (^[A-Z]+$), "
             f"like the umbrella's {', '.join(t.prefix for t in umbrella.tracks.values())}")
+    if name is not None and (not name or re.search(r'["\\\n\r]', name)):
+        raise ConfigError(
+            f"--name {name!r} must be non-empty and contain no quote, "
+            f"backslash or newline: it is written into domain.toml as a "
+            f"string; pick a plain name")
     root = umbrella.paths.root
     if pathlib.PurePath(rel).is_absolute():
         raise ConfigError(
