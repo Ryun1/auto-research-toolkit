@@ -363,6 +363,12 @@ class DomainConfig:
     #: that is not an umbrella; see members.py.
     members: tuple[str, ...] = ()
     description: str = ""
+    #: where each inherited key came from, `"umbrella"` or `"member"`, keyed
+    #: `<table>.<key>` (see inherit.py). Empty outside a workspace and for
+    #: the umbrella itself.
+    sources: dict[str, str] = field(default_factory=dict)
+    #: the umbrella this domain inherited from, if it is a member (#64)
+    umbrella_root: pathlib.Path | None = None
 
     # -- lookup -----------------------------------------------------------
 
@@ -472,6 +478,17 @@ class DomainConfig:
                 f"{CONFIG_NAME} has unknown top-level table(s) {sorted(unknown)}; "
                 f"known: {sorted(_TOP_LEVEL)}")
 
+        # A member inherits its umbrella's shared tables (#64), merged before
+        # any table is parsed so every check below sees the effective config.
+        # Lazy: members imports this module.
+        from . import inherit, members
+        sources: dict[str, str] = {}
+        umbrella_root = None
+        found = members.umbrella_raw(root)
+        if found is not None:
+            umbrella_root, umbrella_data = found
+            data, sources = inherit.merge(umbrella_data, data)
+
         domain = data.get("domain") or {}
         name = domain.get("name")
         if not name:
@@ -573,7 +590,9 @@ class DomainConfig:
             evaluator_kits=_evaluator_kits(data.get("evaluator") or {}),
             members=_members(data.get("domains")),
             holdout=_holdout(data.get("holdout") or {}),
-            stale_views=_stale_views(data.get("render") or {}))
+            stale_views=_stale_views(data.get("render") or {}),
+            sources=sources,
+            umbrella_root=umbrella_root)
 
 
 def _stale_views(spec) -> str:

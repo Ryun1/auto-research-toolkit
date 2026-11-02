@@ -108,19 +108,51 @@ def _load_domain(root: pathlib.Path, label: str = "") -> DomainConfig:
         raise ConfigError(f"{label}: {exc}") from None
 
 
-def _declared_globs(config_path: pathlib.Path) -> tuple[str, ...]:
-    """`[domains] members` read straight from a file, without loading the
-    domain: walking up must not fail on an unrelated directory's config."""
+def _read_raw(config_path: pathlib.Path) -> dict | None:
+    """A `domain.toml` as raw TOML, or None when it cannot be read: walking
+    up must not fail on an unrelated directory's config."""
     try:
         with config_path.open("rb") as fh:
-            data = tomllib.load(fh)
+            return tomllib.load(fh)
     except (OSError, tomllib.TOMLDecodeError):
-        return ()
-    members = (data.get("domains") or {}).get("members") if isinstance(
-        data.get("domains"), dict) else None
+        return None
+
+
+def _globs_in(data: dict | None) -> tuple[str, ...]:
+    domains = (data or {}).get("domains")
+    members = domains.get("members") if isinstance(domains, dict) else None
     if not isinstance(members, list):
         return ()
     return tuple(g for g in members if isinstance(g, str) and g.strip())
+
+
+def _declared_globs(config_path: pathlib.Path) -> tuple[str, ...]:
+    """`[domains] members` read straight from a file, without loading the
+    domain."""
+    return _globs_in(_read_raw(config_path))
+
+
+def umbrella_raw(root) -> tuple[pathlib.Path, dict] | None:
+    """The root and raw TOML of the umbrella whose member globs match `root`,
+    found by the same walk as `Workspace.for_domain`; None outside one.
+
+    Raw, never a `DomainConfig`: `DomainConfig.load` calls this to merge the
+    inherited tables, so loading the umbrella here would recurse, and would
+    make a member's load fail on the umbrella's own problems -- which
+    `check()` reports through `Workspace.for_domain` instead. An umbrella
+    that does not parse is not one: nothing is inherited from it."""
+    root = pathlib.Path(root).resolve()
+    for candidate in root.parents:
+        config_path = candidate / CONFIG_NAME
+        if not config_path.exists():
+            continue
+        data = _read_raw(config_path)
+        globs = _globs_in(data)
+        if not globs:
+            continue
+        if root in _expand(candidate, globs, strict=False).values():
+            return candidate, data
+    return None
 
 
 @dataclass
