@@ -499,3 +499,67 @@ def render_effective(rows_: list[dict]) -> str:
     return "".join(
         f"[{r['table']}] {r['key']} = {json.dumps(r['value'], default=str)}"
         f"    {r['source']}\n" for r in rows_)
+
+
+# -- `ar domains relink` (#65 migration) --------------------------------------
+
+#: what `ar close --superseded-by <url>` writes; relink reads it back
+EXTERNAL_SUPERSEDE = "retired as superseded by external record "
+
+
+@dataclass
+class Relink:
+    old: DomainConfig
+    old_id: str
+    url: str
+    new: DomainConfig
+    new_id: str
+
+
+def _url_target(workspace: Workspace, url: str) -> tuple[DomainConfig, str] | None:
+    """The workspace entry `url` points at: its path must end with
+    `<domain path>/<entries dir>/<ID>.yaml` for the domain owning ID, and
+    that entry must exist. Ids are unique across the workspace, so the owner
+    decides which domain's path is expected -- an umbrella's bare
+    `<entries dir>/<ID>.yaml` cannot swallow a member's URL."""
+    from urllib.parse import urlparse
+    from .entries import Store
+    path = urlparse(url).path if "://" in url else url
+    name = path.rsplit("/", 1)[-1]
+    if not name.endswith(".yaml"):
+        return None
+    new_id = name[:-len(".yaml")]
+    owner = workspace.owner_of(new_id)
+    if owner is None:
+        return None
+    domain_path, config = owner
+    rel = config.paths.entries.relative_to(config.paths.root).as_posix()
+    tail = f"{rel}/{new_id}.yaml"
+    if domain_path != UMBRELLA_PATH:
+        tail = f"{domain_path}/{tail}"
+    if path != tail and not path.endswith("/" + tail):
+        return None
+    if not Store(config.paths.entries).path(new_id).exists():
+        return None
+    return config, new_id
+
+
+def relinks(workspace: Workspace) -> list[Relink]:
+    """Entries retired as superseded by an external URL that now names an
+    entry in this workspace. Once relinked, the latest `superseded` event no
+    longer carries the URL form, so a second pass finds nothing."""
+    from .entries import Store
+    found = []
+    for _, config in workspace.domains():
+        for entry in Store(config.paths.entries).all():
+            if entry.status != "superseded":
+                continue
+            events = [e for e in entry.history if e.kind == "superseded"]
+            if not events or not events[-1].detail.startswith(EXTERNAL_SUPERSEDE):
+                continue
+            url = events[-1].detail[len(EXTERNAL_SUPERSEDE):].strip()
+            target = _url_target(workspace, url)
+            if target is None or target[1] == entry.id:
+                continue
+            found.append(Relink(config, entry.id, url, target[0], target[1]))
+    return found

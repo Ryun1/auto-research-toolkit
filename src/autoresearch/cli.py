@@ -213,6 +213,48 @@ def cmd_domains_show(args):
     return 0
 
 
+def cmd_domains_relink(args):
+    """Turn `superseded-by <url>` into ids (#65 migration). Lists by default;
+    `--write` records the relink on both entries. History is append-only, so
+    the URL event stays and the new event says where it came from."""
+    from . import members
+    from .entries import Store
+    config = _load(args)
+    workspace = members.Workspace.for_domain(config)
+    found = members.relinks(workspace)
+    for r in found:
+        print(f"{r.old_id} ({members.describe(workspace.path_of(r.old))}) -> "
+              f"{r.new_id} ({members.describe(workspace.path_of(r.new))})  {r.url}")
+    if not found:
+        print("no superseded-by URLs name an entry in this workspace")
+    if not args.write:
+        if found:
+            print("dry run; --write relinks them")
+        return 0
+    for r in found:
+        old_store, new_store = Store(r.old.paths.entries), Store(r.new.paths.entries)
+        old, new = old_store.load(r.old_id), new_store.load(r.new_id)
+        # Retired entry first: a partial failure leaves an extra event, not a
+        # one-sided `supersedes`.
+        old.history.append(Event(
+            _iso(), "superseded", args.session,
+            f"retired as superseded by {r.new_id} (relinked from {r.url})"))
+        old_store.save(old)
+        if r.old_id not in new.supersedes:
+            new.supersedes.append(r.old_id)
+        new.history.append(Event(
+            _iso(), "superseded", args.session,
+            f"{r.old_id} retired as superseded by this entry"))
+        new.updated = _iso()
+        new_store.save(new)
+        _render_views(r.old)
+        if r.new.paths.root != r.old.paths.root:
+            _render_views(r.new)
+    if found:
+        print(f"relinked {len(found)}")
+    return 0
+
+
 def cmd_domains(args):
     """The umbrella and its member domains, from the umbrella or any member
     (#63): path, name, id prefixes and open / closed counts. A domain with no
@@ -2857,6 +2899,12 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     domshow.add_argument("--json", action="store_true",
                          default=argparse.SUPPRESS, help="print the rows as JSON")
     domshow.set_defaults(func=cmd_domains_show)
+    domrelink = domsub.add_parser(
+        "relink", help="turn `superseded-by <url>` closures that point at an "
+        "entry in this workspace into ids (dry run unless --write)")
+    domrelink.add_argument("--write", action="store_true",
+                           help="record the relink on both entries")
+    domrelink.set_defaults(func=cmd_domains_relink)
 
     kit = sub.add_parser(
         "kit", help="shared measurement code vendored into the domain "

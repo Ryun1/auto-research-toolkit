@@ -262,3 +262,60 @@ def test_resolver_survives_a_broken_sibling(umbrella, capsys):
     out = capsys.readouterr().out
     assert f"domains: umbrella at {umbrella}: member domains/b:" in out
     assert "not valid TOML" in out
+
+
+# -- `ar domains relink` (#65 migration) ---------------------------------------
+
+URL = "https://github.com/o/r/blob/main/domains/b/state/entries/C1.yaml"
+
+
+def _retire_q1_by(umbrella, replacement):
+    from conftest import memo
+    umb = _load(umbrella)
+    make_entry(Store(umb.paths.entries), "Q1")
+    assert _ar(umbrella, "claim", "Q1", "--why", "retiring it") == 0
+    assert _ar(umbrella, "close", "Q1", "superseded", "--superseded-by",
+               replacement, "--memo", memo(umb, "inbox/Q1.md"),
+               "--summary", "absorbed elsewhere") == 0
+
+
+def _snapshot(umbrella):
+    return {p: p.read_bytes() for p in umbrella.rglob("*.yaml")}
+
+
+def test_relink_finds_a_github_url_to_a_member_entry(umbrella, capsys):
+    _seed_c1(umbrella)
+    _retire_q1_by(umbrella, URL)
+    before = _snapshot(umbrella)
+    capsys.readouterr()
+    assert _ar(umbrella, "domains", "relink") == 0
+    out = capsys.readouterr().out
+    assert "Q1" in out and "C1" in out and URL in out
+    assert _snapshot(umbrella) == before
+
+
+def test_relink_write(umbrella, capsys):
+    _seed_c1(umbrella)
+    _retire_q1_by(umbrella, URL)
+    capsys.readouterr()
+    assert _ar(umbrella, "domains", "relink", "--write") == 0
+    c1 = Store(_load(umbrella / "domains" / "b").paths.entries).load("C1")
+    assert c1.supersedes == ["Q1"]
+    q1 = Store(_load(umbrella).paths.entries).load("Q1")
+    assert q1.history[-1].kind == "superseded"
+    assert q1.history[-1].detail == f"retired as superseded by C1 (relinked from {URL})"
+    assert c1.history[-1].kind == "superseded"
+    for root in (umbrella, umbrella / "domains" / "b"):
+        capsys.readouterr()
+        assert _ar(root, "validate") == 0, capsys.readouterr().out
+    capsys.readouterr()
+    assert _ar(umbrella, "domains", "relink") == 0
+    assert "Q1" not in capsys.readouterr().out
+
+
+def test_relink_ignores_urls_to_missing_entries(umbrella, capsys):
+    _retire_q1_by(umbrella, URL)  # C1 was never filed
+    capsys.readouterr()
+    assert _ar(umbrella, "domains", "relink", "--write") == 0
+    assert "Q1" not in capsys.readouterr().out
+    assert _ar(umbrella, "domains", "relink") == 0
