@@ -11,8 +11,10 @@ it weaken a safety rule by omission or override:
 - `policy.human_only` and `policy.never_push_remotes` accumulate: the
   umbrella's rules, then the member's. A rule a member could shadow would be
   a comment.
-- `policy.spend_ceiling` takes the smaller value; both sides must name the
-  same `policy.currency` (unset is the Policy default), or it is refused.
+- `policy.spend_ceiling` takes the smaller value; both ceilings must be in
+  the same effective `policy.currency` (a member's unset currency is the
+  umbrella's; the umbrella's unset one is the Policy default), or it is
+  refused.
 - `upstream.min_core` takes the higher floor: one core install serves every
   member.
 
@@ -126,12 +128,14 @@ def _merge_table(table: str, theirs: dict, ours: dict,
                     f"the member's {ceilings[1]!r} must both be numbers (not "
                     "strings or NaN) so the smaller can be chosen")
             # min() of 5 EUR and 2 USD is not a ceiling in either currency.
-            # Each side's currency is what its own [policy] says, else the
-            # Policy default -- the member's unset currency is not the
-            # umbrella's, so a bare member ceiling is read as the default.
+            # Each side's currency is its effective one after the key-level
+            # merge: the umbrella's own, else the Policy default; the
+            # member's own, else the umbrella's (an unset member key is
+            # inherited like any other).
             default = Policy.__dataclass_fields__["currency"].default
-            currencies = (theirs.get("currency", default),
-                          ours.get("currency", default))
+            umbrella_currency = theirs.get("currency", default)
+            currencies = (umbrella_currency,
+                          ours.get("currency", umbrella_currency))
             if currencies[0] != currencies[1]:
                 raise ConfigError(
                     f"policy.spend_ceiling: the umbrella's is "

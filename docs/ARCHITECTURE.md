@@ -452,7 +452,8 @@ it weaken a safety rule by omission:
   umbrella's patterns could match the wrong files in a member).
 - `policy.spend_ceiling` takes the **smaller** value; a non-number is
   refused, and so are two ceilings in different `policy.currency` values
-  (an unset currency is the default, USD).
+  (a member that sets no currency has the umbrella's; an umbrella that
+  sets none has the default, USD).
 - `upstream.min_core` takes the **higher** floor, because one core install
   serves every member. An empty member value never erases the umbrella's.
 

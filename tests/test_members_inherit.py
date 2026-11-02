@@ -321,11 +321,11 @@ def test_bare_domains_still_lists(umbrella, capsys):
 
 
 @pytest.mark.parametrize("umbrella_currency, member_currency", [
-    ("EUR", "USD"), (None, "GBP"), ("GBP", None)])
+    ("EUR", "USD"), (None, "GBP")])
 def test_ceilings_in_different_currencies_are_refused(umbrella_currency,
                                                        member_currency):
-    """min() across currencies is meaningless; an unset currency is the
-    Policy default (USD)."""
+    """min() across currencies is meaningless; an umbrella's unset currency
+    is the Policy default (USD)."""
     def policy(currency, ceiling):
         return {"spend_ceiling": ceiling,
                 **({"currency": currency} if currency else {})}
@@ -334,6 +334,15 @@ def test_ceilings_in_different_currencies_are_refused(umbrella_currency,
             rf"{member_currency or 'USD'}")):
         inherit.merge({"policy": policy(umbrella_currency, 5.0)},
                       {"policy": policy(member_currency, 2.0)})
+
+
+def test_a_member_ceiling_without_a_currency_is_in_the_umbrellas():
+    """[policy] merges key by key: a member that sets only a ceiling
+    inherits the umbrella's currency, so both ceilings are in GBP."""
+    data, _ = inherit.merge(
+        {"policy": {"spend_ceiling": 5.0, "currency": "GBP"}},
+        {"policy": {"spend_ceiling": 2.0}})
+    assert data["policy"] == {"spend_ceiling": 2.0, "currency": "GBP"}
 
 
 def test_ceilings_in_the_same_currency_still_take_the_smaller():
