@@ -230,15 +230,20 @@ def _terminal(config, entry) -> bool:
     return config.track_for(entry.id).machine.status(entry.status).terminal
 
 
-def _cite_re(config) -> re.Pattern:
+def _cite_re(config, workspace=None) -> re.Pattern:
     """Inline citations, built from the track prefixes this domain actually
-    declares. Guessing the prefix is how a regex over prose starts being
-    approximately right.
+    declares -- and, in a workspace with members (`workspace`, from
+    `members.shared_workspace`), every domain's, since a skill may cite an
+    entry of the umbrella or a sibling (#65). Guessing the prefix is how a
+    regex over prose starts being approximately right.
 
     A bracket may hold a comma list, `[B4, B5, B6]`; group 1 is its contents,
     which `_inline_cites` splits. Reading only the first id reported the rest
     as never cited (SLH-DSA-128 H5)."""
-    prefixes = sorted((t.prefix for t in config.tracks.values()), key=len, reverse=True)
+    domains = ([c for _, c in workspace.domains()] if workspace is not None
+               else [config])
+    prefixes = sorted({t.prefix for c in domains for t in c.tracks.values()},
+                      key=len, reverse=True)
     one = "(?:" + "|".join(re.escape(p) for p in prefixes) + r")\d+"
     return re.compile(rf"\[\s*({one}(?:\s*,\s*{one})*)\s*\]")
 
@@ -365,9 +370,14 @@ def check(config, skills, entries, measurements=None) -> list[str]:
     metrics, or None when nothing has been measured yet -- in which case the
     derived-constant lint does not run, which is a gap and not a pass.
     """
+    from . import members
     by_id = {e.id: e for e in entries}
+    # Built once per call, not per citation: validate runs this over the
+    # whole skill set. A citation another member owns is read from that
+    # member's store, and only after the local store misses it.
+    workspace = members.shared_workspace(config)
     names = {}
-    cite_re = _cite_re(config)
+    cite_re = _cite_re(config, workspace)
     problems = []
     for skill in sorted(skills, key=lambda s: s.name):
         where = skill.path.parent.name if skill.path else skill.name
@@ -423,12 +433,22 @@ def check(config, skills, entries, measurements=None) -> list[str]:
             if cid in seen:
                 problems.append(f"skills: {where} cites {cid} twice")
             seen.add(cid)
-            entry = by_id.get(cid)
+            entry, owner = by_id.get(cid), config
+            if entry is None and members.foreign_owner(workspace, config, cid):
+                try:
+                    found = workspace.entry(cid)
+                except SchemaError as exc:
+                    problems.append(
+                        f"skills: {where} cites {cid}, which does not load: "
+                        f"{exc}")
+                    continue
+                if found is not None:
+                    owner, entry = found
             if entry is None:
                 problems.append(
                     f"skills: {where} cites {cid}, which is not in the store")
                 continue
-            if not _terminal(config, entry):
+            if not _terminal(owner, entry):
                 problems.append(
                     f"skills: {where} cites {cid}, which is {entry.status!r} "
                     "and not terminal. Unsettled work is not evidence.")

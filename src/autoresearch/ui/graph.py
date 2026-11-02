@@ -19,10 +19,22 @@ from ..entries import Store
 MEMO_MAX = 256 * 1024
 
 
+def _foreign(config, entries) -> set[str]:
+    """The `sources` items another member domain of the workspace owns
+    (#65): citations, drawn as links, never listed as paths. Prefix only,
+    so no other store is read."""
+    from .. import members
+    workspace = members.shared_workspace(config)
+    if workspace is None:
+        return set()
+    return {item for e in entries for item in e.sources
+            if members.foreign_owner(workspace, config, item)}
+
+
 def graph(config) -> dict:
     store = Store(config.paths.entries)
     entries = store.all()
-    links = links_mod.links(entries)
+    links = links_mod.links(entries, _foreign(config, entries))
     linked = {link.src for link in links} | {link.dst for link in links}
     overruns = board_mod.overruns(config, store, entries)
     statuses = {}
@@ -89,19 +101,24 @@ def entry(config, entry_id: str, rows: dict) -> dict | None:
         record["claim"].pop("token_sha", None)   # a hash, but nobody's to read here
         over = board_mod.overruns(config, store, [e]).get(e.id)
         record["claim"]["overrun"] = _overrun(over)
-    links = [link for link in links_mod.links(entries) if entry_id in (link.src, link.dst)]
+    foreign = _foreign(config, [e])
+    links = [link for link in links_mod.links(entries, foreign)
+             if entry_id in (link.src, link.dst)]
     root = config.paths.root
     return {
         "entry": record,
         "terminal": config.track_for(e.id).machine.status(e.status).terminal,
         "memo": _memo(root, e.result.memo) if e.result and e.result.memo else None,
-        "upstream": [{"id": link.src, "kind": link.kind, "title": by_id[link.src].title}
+        # A cited entry of another member has no title in this store; the
+        # panel names it by id rather than reading a sibling's record.
+        "upstream": [{"id": link.src, "kind": link.kind,
+                      "title": by_id[link.src].title if link.src in by_id else ""}
                      for link in links if link.dst == entry_id],
         "downstream": [{"id": link.dst, "kind": link.kind, "title": by_id[link.dst].title}
                        for link in links if link.src == entry_id],
         "paths": [{"path": p, "exists": _inside(root, p) is not None
                    and _inside(root, p).exists()}
-                  for p in links_mod.source_paths(e, by_id)],
+                  for p in links_mod.source_paths(e, by_id.keys() | foreign)],
         "runs": sorted((row for row in rows.values() if row["entry"] == entry_id),
                        key=lambda row: row["started"]),
         "history": history,

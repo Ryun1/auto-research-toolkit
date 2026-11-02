@@ -37,6 +37,7 @@ from . import escalate as escalate_mod
 from . import external as external_mod
 from . import gates as gates_mod
 from . import hardware as hw
+from . import members as members_mod
 from . import merge as merge_mod
 from . import plugins as plugins_mod
 from . import rank as rank_mod
@@ -761,7 +762,7 @@ def cmd_entry_new(args):
     # filings both pass it.
     with store.filing_lock(f"entry new ({args.session})"):
         tree.check_derived(store, getattr(args, "derived_from", None) or "",
-                           args.parent or "", track.id)
+                           args.parent or "", track.id, config)
         tree.check_branch(config, store, args.parent or "", args.kind or "",
                           track.id)
         entry = Entry(
@@ -1082,7 +1083,20 @@ def cmd_harness_update(args):
 
 def cmd_entry_show(args):
     config = _load(args)
-    entry = _store(config).load(args.id)
+    try:
+        entry = _store(config).load(args.id)
+    except SchemaError:
+        # An id resolves across the workspace (#65): another member's entry
+        # is shown as-is, and stderr says whose it is, so stdout stays the
+        # same JSON a script parses.
+        workspace = members_mod.shared_workspace(config)
+        owner = members_mod.foreign_owner(workspace, config, args.id)
+        found = workspace.entry(args.id) if owner else None
+        if found is None:
+            raise
+        entry = found[1]
+        print(f"ar: {args.id} is in {members_mod.describe(owner[0])} "
+              f"({owner[1].name})", file=sys.stderr)
     data = entry.to_dict()
     if not getattr(args, "history", False):
         # The default is the current state: the append-only history is the bulk
@@ -1256,6 +1270,10 @@ def cmd_close(args):
     # After the relabel/reopen returns: `--reopen` and `--relabel` carry no
     # destination, so a `superseded` closure rule must not fire on them.
     replacement = None
+    # Where the replacement lives: this domain, unless the id names an entry
+    # of another member (#65) -- then the relation is written to that
+    # member's record, where the entry is.
+    replacement_store, replacement_config, replacement_where = store, config, ""
     superseded_by = getattr(args, "superseded_by", None)
     if superseded_by:
         if args.status != "superseded":
@@ -1275,10 +1293,28 @@ def cmd_close(args):
             try:
                 replacement = store.load(superseded_by)
             except Exception as exc:
-                raise AutoresearchError(
-                    f"cannot retire {args.id} as superseded: no entry "
-                    f"{superseded_by!r} (an outside record is named with a "
-                    f"scheme, e.g. https://... or hosted:<id>)") from exc
+                missing = (f"no entry {superseded_by!r} (an outside record is "
+                           "named with a scheme, e.g. https://... or "
+                           "hosted:<id>)")
+                workspace = members_mod.shared_workspace(config)
+                owner = members_mod.foreign_owner(workspace, config,
+                                                  superseded_by)
+                found = workspace.entry(superseded_by) if owner else None
+                if found is None:
+                    if owner is not None:
+                        missing = (f"{members_mod.describe(owner[0])} has "
+                                   + missing)
+                    elif (workspace is not None
+                          and workspace.owner_of(superseded_by) is None):
+                        missing += (" -- no domain in this workspace owns "
+                                    f"entry id {superseded_by!r}")
+                    raise AutoresearchError(
+                        f"cannot retire {args.id} as superseded: "
+                        f"{missing}") from exc
+                replacement_config, replacement = found
+                replacement_store = _store(replacement_config)
+                replacement_where = (owner[0] if owner[0] != members_mod.UMBRELLA_PATH
+                                     else "the umbrella")
     if args.status == "superseded" and replacement is None:
         raise AutoresearchError(
             "closing as superseded requires --superseded-by: a retirement "
@@ -1400,7 +1436,7 @@ def cmd_close(args):
             _iso(), "superseded", args.session,
             f"{entry.id} retired as superseded by this entry"))
         replacement.updated = _iso()
-        store.save(replacement)
+        replacement_store.save(replacement)
     if tamper_hunks:
         from . import tamper as tamper_mod
         entry.history.append(Event(_iso(), "tamper-scan", args.session,
@@ -1408,10 +1444,13 @@ def cmd_close(args):
     entry.claim = None
     store.save(entry)
     _render_views(config)
+    if replacement_config is not config:
+        _render_views(replacement_config)
     print(f"{entry.id} closed {args.status}"
           + (f" ({args.closure})" if args.closure else "")
           + (f" — superseded by {getattr(replacement, 'id', replacement)}"
              if replacement else "")
+          + (f" ({replacement_where})" if replacement_where else "")
           + (f" — evidence: {result.memo}" if terminal or result.memo
              else ""))
     if tamper_hunks:
@@ -1974,6 +2013,7 @@ def cmd_validate(args):
     found, skill_problems = skills_mod.read_all(config)
     problems += skill_problems
     problems += skills_mod.check(config, found, entries, skills_mod.best_measurements(config))
+    problems += validate_mod.cross_member_problems(config, entries)
     for entry in entries:
         try:
             track = config.track_for(entry.id)
@@ -2157,6 +2197,14 @@ def cmd_skill_check(args):
     config = _load(args)
     entries = _store(config).all()
     found, problems = skills_mod.read_all(config)
+    try:
+        members_mod.Workspace.for_domain(config)
+    except ConfigError as exc:
+        # `check` reads only this domain's store when the workspace is broken,
+        # so a citation of the umbrella or a sibling reads as missing; say why
+        # rather than leave that looking like the skill's fault.
+        problems.append(f"domains: {exc}; citations of other domains were "
+                        "not checked")
     problems += skills_mod.check(config, found, entries, skills_mod.best_measurements(config))
     measured = skills_mod.best_measurements(config) is not None
     print(f"checked {len(found)} skill(s) against {len(entries)} entries")

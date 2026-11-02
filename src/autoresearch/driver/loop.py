@@ -781,7 +781,8 @@ class Coordinator:
         with self.store.filing_lock(f"loop generate ({self.session})"):
             from .. import tree
             derived_from = str(proposal.get("derived_from", "") or "")
-            tree.check_derived(self.store, derived_from, parent, track.id)
+            tree.check_derived(self.store, derived_from, parent, track.id,
+                               self.config)
             tree.check_branch(self.config, self.store, parent, kind, track.id)
             entry = Entry(
                 id=self.store.next_id(track.prefix), track=track.id,

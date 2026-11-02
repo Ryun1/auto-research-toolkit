@@ -381,6 +381,45 @@ def lineage_warnings(config, limit: int = 15) -> list[str]:
             f"with `ar entry amend ID --parent ...`"]
 
 
+def cross_member_problems(config, entries) -> list[str]:
+    """A `sources` or `supersedes` item naming an entry another member domain
+    owns but does not have (#65).
+
+    Ids resolve across the workspace, so `C9` in an umbrella entry is a claim
+    about `domains/b`'s record. This domain's store cannot check it, and
+    `lineage_warnings` never sees it: a deletion or a typo next door would
+    leave the citation pointing at nothing, silently. One workspace per call,
+    and each foreign id is read once."""
+    from . import members
+    from .errors import SchemaError
+    workspace = members.shared_workspace(config)
+    if workspace is None:
+        return []
+    answers: dict[str, str] = {}
+
+    def problem(item: str) -> str:
+        if item not in answers:
+            owner = members.foreign_owner(workspace, config, item)
+            answer = ""
+            if owner is not None:
+                try:
+                    if workspace.entry(item) is None:
+                        answer = (f"{members.describe(owner[0])} has no such "
+                                  "entry")
+                except SchemaError as exc:
+                    answer = f"{members.describe(owner[0])}: {exc}"
+            answers[item] = answer
+        return answers[item]
+
+    out = []
+    for e in entries:
+        for field, items in (("sources", e.sources), ("supersedes", e.supersedes)):
+            for item in items:
+                if found := problem(item):
+                    out.append(f"{e.id} {field} {item}: {found}")
+    return out
+
+
 def core_warnings(config) -> list[str]:
     """Warning (not a problem) when the installed core is below the domain's
     declared `min_core` floor.

@@ -15,10 +15,32 @@ from .entries import KINDS
 from .errors import AutoresearchError
 
 
-def check_derived(store, derived_from: str, parent: str, track_id: str) -> None:
+def _refuse_cross_member(config, target: str) -> None:
+    """Refuse lineage onto an entry another member domain owns (#65).
+
+    Ids resolve across the workspace, so a missing local entry may be a real
+    one next door. The tree is still one domain's: its depth and sibling caps,
+    the stagnation tally and ranking all read one store, so a cross-member
+    parent would be counted nowhere. Citation is the link that crosses."""
+    if config is None:
+        return
+    from . import members
+    owner = members.foreign_owner(members.shared_workspace(config), config,
+                                  target)
+    if owner is not None:
+        raise AutoresearchError(
+            f"cannot file a branch of {target}: it belongs to "
+            f"{members.describe(owner[0])}; lineage (--parent, --derived-from) "
+            f"stays inside one domain -- cite it with --source {target} "
+            "instead")
+
+
+def check_derived(store, derived_from: str, parent: str, track_id: str,
+                  config=None) -> None:
     """Refuse a `derived_from` that names nothing, crosses tracks, or doubles
     a `parent` (#23). It is the tree's lineage without the tree's budgets, so
-    it carries none of `check_branch`'s depth or sibling checks."""
+    it carries none of `check_branch`'s depth or sibling checks. `config`
+    names the domain, so an entry of another member is refused as such."""
     if not derived_from:
         return
     if parent:
@@ -29,6 +51,7 @@ def check_derived(store, derived_from: str, parent: str, track_id: str) -> None:
     try:
         source = store.load(derived_from)
     except Exception as exc:
+        _refuse_cross_member(config, derived_from)
         raise AutoresearchError(
             f"cannot derive from {derived_from!r}: no such entry") from exc
     if source.track != track_id:
@@ -58,6 +81,7 @@ def check_branch(config, store, parent: str, kind: str,
     try:
         parent_entry = store.load(parent)
     except Exception as exc:
+        _refuse_cross_member(config, parent)
         raise AutoresearchError(
             f"cannot file a branch of {parent!r}: no such entry") from exc
     if parent_entry.track != track_id:

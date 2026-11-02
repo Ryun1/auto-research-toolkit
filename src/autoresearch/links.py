@@ -6,7 +6,8 @@ Five kinds of link, each a field an entry carries:
 * `derived` -- `derived_from`, lineage the tree's caps kept off it (#23);
 * `supersedes` -- the old entry and the one that replaced it;
 * `related` -- undirected, drawn once per pair;
-* `cites` -- a `sources` item that is the id of an entry in the store.
+* `cites` -- a `sources` item that is the id of an entry in the store, or
+  of an entry another member domain owns (#65; the caller names those).
 
 `sources` matters most on a large record: ECDSA Fail sets no `parent`,
 `supersedes` or `related` at all, but 406 of its 470 entries carry
@@ -22,6 +23,7 @@ view's focus mode and taint propagation (#54) both need.
 """
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 KINDS = ("parent", "derived", "supersedes", "related", "cites")
@@ -34,10 +36,15 @@ class Link:
     kind: str
 
 
-def links(entries) -> list[Link]:
+def links(entries, foreign: Collection[str] = ()) -> list[Link]:
     """Every link between entries in `entries`, sorted, each pair joined at
     most once per kind. A `cites` link is dropped where a lineage link
-    already joins the pair: a child citing its parent says nothing more."""
+    already joins the pair: a child citing its parent says nothing more.
+
+    `foreign` is the ids, among the `sources`, that another member domain of
+    the workspace owns: a citation of one is a `cites` link too. Only
+    citation crosses domains -- lineage stays inside one (tree.py) -- and
+    this module reads no config, so the caller decides which ids those are."""
     ids = {e.id for e in entries}
     out: set[Link] = set()
     joined: set[frozenset] = set()
@@ -58,7 +65,9 @@ def links(entries) -> list[Link]:
                 out.add(Link(a, b, "related"))
     for e in entries:
         for item in e.sources:
-            if item in ids and item != e.id and frozenset((item, e.id)) not in joined:
+            if item in foreign and item not in ids:
+                out.add(Link(item, e.id, "cites"))
+            elif item in ids and item != e.id and frozenset((item, e.id)) not in joined:
                 out.add(Link(item, e.id, "cites"))
     return sorted(out)
 

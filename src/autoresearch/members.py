@@ -349,6 +349,33 @@ def resolve(config: DomainConfig, entry_id: str) -> tuple[DomainConfig, Entry]:
     return owning, Store(owning.paths.entries).load(entry_id)
 
 
+def shared_workspace(config: DomainConfig) -> Workspace | None:
+    """`config`'s workspace when it has other domains to look into, else
+    None. Every cross-member lookup goes through this, so a domain with no
+    umbrella -- and one whose workspace is broken -- reads only its own store
+    and says exactly what it said before members existed."""
+    workspace = workspace_or_none(config)
+    return workspace if workspace is not None and workspace.members else None
+
+
+def foreign_owner(workspace: Workspace | None, config: DomainConfig,
+                  entry_id: str) -> tuple[str, DomainConfig] | None:
+    """The workspace path and config of the domain owning `entry_id`, when
+    that is a domain other than `config`; None otherwise."""
+    if workspace is None:
+        return None
+    owner = workspace.owner_of(entry_id)
+    if owner is None or owner[1].paths.root == config.paths.root:
+        return None
+    return owner
+
+
+def describe(path: str) -> str:
+    """A workspace path as a message names it: `member domains/b`, or `the
+    umbrella` (its path, `.`, reads as punctuation in a sentence)."""
+    return "the umbrella" if path == UMBRELLA_PATH else f"member {path}"
+
+
 # -- `ar domains` -------------------------------------------------------------
 
 def rows(workspace: Workspace, current: DomainConfig | None = None) -> list[dict]:
