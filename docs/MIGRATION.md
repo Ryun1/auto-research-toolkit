@@ -63,18 +63,20 @@ breaks without it), **behavioural** (it loads, but acts differently), or
      `domains/<x>`, `member` becomes `umbrella`):
 
      ```sh
-     norm='[.rows[] | {table, key, value}] | sort_by(.table, .key)'
-     diff <(jq -S "$norm" .ar/<x>-before.json) \
-          <(ar --domain domains/<x> domains show --json | jq -S "$norm")
+     norm='[.rows[] | "\(.table).\(.key) = \(.value|tojson)"] | sort | .[]'
+     diff <(jq -r "$norm" .ar/<x>-before.json) \
+          <(ar --domain domains/<x> domains show --json | jq -r "$norm")
      ```
 
      Whatever differs is a value the member had set differently from the
      umbrella.
-     Keep each deliberate override in the member's own table, e.g. t1's
-     `[budgets] iteration_max_spawns = 10` (the umbrella has 30). In a trial
-     on starks, t1's only differences were that and `upstream.min_core`
-     (empty in t1, "0.12.0" in the umbrella; the higher floor wins either
-     way, so that one needs no override). Re-diff until only intended
+     Keep each deliberate override in the member's own table. In a trial
+     on starks (origin/main, 2026-11-02) every member differed in exactly
+     two keys: `budgets.iteration_max_spawns` (10 in each member, 30 in the
+     umbrella) -- keep `[budgets] iteration_max_spawns = 10` in each member --
+     and `upstream.min_core` (empty in the members, "0.12.0" in the
+     umbrella; the higher floor wins either way, so that one needs no
+     override). Re-diff until only intended
      differences remain.
   3. Run `ar domains relink` and check the dry run: Q58 -> C1 and
      Q93 -> C2 should be listed. Then run `ar domains relink --write`.

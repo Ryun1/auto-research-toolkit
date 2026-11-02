@@ -1,6 +1,7 @@
 # Member domains: one checkout, several goals
 
-Status: proposed, 2026-11-02. Source: starks-research, which has run five domains from one
+Status: implemented, 2026-11-02 (#64–#68; decisions taken during the build are under
+"Decisions" at the end). Source: starks-research, which has run five domains from one
 checkout since 29 Oct 2026 without any toolkit support.
 
 ## Why
@@ -47,7 +48,7 @@ A thin layer over the existing domains, not a new kind of domain:
 - an umbrella `domain.toml` lists its **members**;
 - members **inherit** the umbrella's shared tables and override what differs;
 - entry ids **resolve across** the umbrella and its members by prefix;
-- `board`, `rank`, `budget`, `validate` and `reap` take **`--all`**;
+- `board`, `rank`, `budget`, `validate` and `reap` take **`--all-domains`**;
 - members **share the umbrella's defect track**.
 
 A member stays a complete domain: its own goal, measure, state, claims, budgets and loop. A
@@ -56,7 +57,7 @@ domain with no `[domains]` table behaves exactly as today.
 ### Non-goals
 
 - **One ranking across goals.** Members measure different things (counts, proof progress,
-  bounds checked); their scores do not compare. `rank --all` shows each member's ranking
+  bounds checked); their scores do not compare. `rank --all-domains` shows each member's ranking
   side by side. Choosing which goal gets attention is a curator's judgement, and starks shows
   curators doing it well.
 - **A loop that switches between members.** `ar loop` runs one domain. Running several loops
@@ -105,9 +106,10 @@ Rules:
 
 - **Key-level merge within a table.** A member that sets
   `[budgets] iteration_max_spawns = 10` keeps every other umbrella budget.
-- **`[[policy.human_only]]` rules accumulate.** A member gets the umbrella's rules plus its own
-  and cannot drop one. A safety rule that a member could quietly shadow would be a comment.
-  `spend_ceiling` takes the smaller of the two values.
+- **`[[policy.human_only]]` and `[[policy.never_push_remotes]]` rules accumulate.** A member
+  gets the umbrella's rules plus its own and cannot drop one. A safety rule that a member could
+  quietly shadow would be a comment. `forbidden_paths` stays member-wins, because its patterns
+  are relative to each domain's root. `spend_ceiling` takes the smaller of the two values.
 - **`[upstream] min_core` takes the higher floor**, since one core install serves every member.
 - The merge happens in `DomainConfig.load` before validation, so every existing check sees the
   effective config.
@@ -141,23 +143,23 @@ Writing `supersedes` into another member's record changes two stores in one comm
 in the same git repository, so they commit together. The other member's entry needs no claim,
 because `supersedes` is a back-reference, the same as today's local case.
 
-**Migration:** `ar migrate` (or a one-off `ar entry amend`) rewrites a superseded-by URL that
+**Migration:** `ar domains relink` (dry run; `--write` applies) rewrites a superseded-by URL that
 points into a member's `state/entries/<ID>.yaml` back to `<ID>`. starks has two (Q58→C1,
 Q93→C2).
 
-### 4. `--all`
+### 4. `--all-domains`
 
-`board`, `rank`, `budget`, `validate` and `reap` take `--all`, run from the umbrella or any
+`board`, `rank`, `budget`, `validate` and `reap` take `--all-domains`, run from the umbrella or any
 member:
 
 - **Prose:** one section per domain, umbrella first, each headed with its path, name and goal
   line. Each section is what the verb prints today for that domain alone.
 - **`--json`:** `{"domains": {"<path>": <today's json for that domain>}}`, so existing parsers
   only need to step into one key.
-- **Exit status:** `validate --all` fails if any member fails, and names each one.
-- **`rank --all` does not merge.** Each member's own ranking, with its own risk dial and
+- **Exit status:** `validate --all-domains` fails if any member fails, and names each one.
+- **`rank --all-domains` does not merge.** Each member's own ranking, with its own risk dial and
   budget, under its own heading.
-- `reap --all` lists reapable claims across members. Reaping still takes one id, resolved
+- `reap --all-domains` lists reapable claims across members. Reaping still takes one id, resolved
   across members.
 
 This is the twenty commands a starks curator runs per pass, turned into five.
@@ -189,7 +191,7 @@ This is the twenty commands a starks curator runs per pass, turned into five.
 1  [domains] members, Workspace, prefix uniqueness, `ar domains`
 ├─ 2  inheritance (+ lanes path rebasing check)
 ├─ 3  ids across members  (fixes starks H9)
-├─ 4  --all on board/rank/budget/validate/reap
+├─ 4  --all-domains on board/rank/budget/validate/reap
 └─ 5  shared defect track
 6  `ar init --member`, docs, starks migration           (after 2–5)
 ```
@@ -201,5 +203,24 @@ Items 2 to 5 depend only on 1 and can land in any order.
 - The four member `domain.toml` files shrink to their identity tables, and
   `ar domains show domains/t1` reports the same effective budgets and policy as today.
 - `bin/ar close Q58 superseded --superseded-by C1` works, and C1 records `supersedes: [Q58]`.
-- `bin/ar board --all` and `bin/ar rank --all` replace the five-board read in a curator pass.
+- `bin/ar board --all-domains` and `bin/ar rank --all-domains` replace the five-board read in a curator pass.
 - `bin/ar --domain domains/bounds harness export` exports H1–H12.
+
+## Decisions taken during the build
+
+- **The flag is `--all-domains`, not `--all`.** `rank --all`, `entry list --all` and
+  `harness export --all` already had meanings; one spelling per meaning keeps scripts working.
+- **`never_push_remotes` accumulates** like `human_only`; `forbidden_paths` does not (above).
+- **A member cannot weaken its umbrella through bad values**: a non-table or non-list value
+  over an inherited table or rule list, a string or NaN ceiling, an empty `min_core`, and
+  ceilings in different effective currencies are refused. A member's unset currency is the
+  umbrella's.
+- **A `domain.toml` above a member that fails to parse and declares `[domains]` stops the member
+  loading.** Running without the umbrella's safety rules would be fail-open. An unparseable
+  file that declares no `[domains]` is only a `validate` problem.
+- **A directory holding a `.git` entry is never a member**, so a session worktree under
+  `domains/` does not join the workspace.
+- **`ar init --member`** also writes `[lanes]` (copied from the umbrella; lanes are not
+  inherited and load requires them) and refuses a target inside or around an existing member.
+- **A domain with no umbrella picks its QC defect track exactly as before** (a local `harness`
+  track); the umbrella's track is used only by a member with no local one.
