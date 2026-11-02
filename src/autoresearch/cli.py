@@ -603,10 +603,13 @@ def _run_all_domains(workspace, args, fn, as_json, name_failing) -> int:
     data: dict[str, object] = {}
     sections: list[str] = []
     for path, config in workspace.domains():
+        # Each section's verb sees its domain's path, so a note it writes to
+        # stderr -- outside the section -- can say whose it is.
+        section_args = argparse.Namespace(**{**vars(args), "section": path})
         try:
-            report = fn(config, args)
+            report = fn(config, section_args)
         except AutoresearchError as exc:
-            report = Report(2, f"ar: {exc}\n", {"error": str(exc)})
+            report = Report(2, f"ar: {exc}\n", {"error": str(exc), "ok": False})
         statuses[path] = report.status
         data[path] = report.data
         sections.append(f"== {path} ({config.name}) ==\n"
@@ -638,7 +641,11 @@ def _board_report(config, args) -> Report:
     try:
         target = _probe_target(config)
     except AutoresearchError as exc:
-        print(f"(target unavailable: {exc})", file=sys.stderr)
+        # Under --all-domains stderr is one stream for every section, so
+        # the note names its domain; a single domain's note is unchanged.
+        section = getattr(args, "section", None)
+        print(f"{section + ': ' if section else ''}(target unavailable: {exc})",
+              file=sys.stderr)
         target, target_error = None, str(exc)
     from . import board as board_mod
     doc = board_mod.snapshot(config, target=target, target_error=target_error,
@@ -1418,7 +1425,7 @@ def cmd_reap(args):
         line = f"{entry.id} orphan repaired to {entry.status} (no live claim)"
     else:
         line = f"{entry.id} reaped from {former} (silent {age:.1f} h)"
-    print(f"{line} ({owner[0]})" if owner else line)
+    print(f"{line} ({members_mod.describe(owner[0])})" if owner else line)
     return 0
 
 

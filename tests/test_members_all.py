@@ -139,6 +139,8 @@ def test_a_failing_member_section_does_not_hide_the_others(umbrella, capsys):
     assert code == 0
     # The board's stderr note goes to stderr, once, for the member it names.
     assert err.count("(target unavailable: ") == 1 and "probe broke" in err
+    # One stderr stream for every section: the note names its domain.
+    assert err.startswith("domains/a: (target unavailable: ")
     assert "== domains/b (b) ==" in out
 
 
@@ -157,7 +159,8 @@ def test_a_member_that_refuses_is_an_ar_line_in_its_section(umbrella, capsys):
                         "--all-domains", "--json")
     assert code == 2
     doc = json.loads(out)["domains"]
-    assert list(doc["domains/a"]) == ["error"] and "A1.yaml" in doc["domains/a"]["error"]
+    assert doc["domains/a"]["ok"] is False and list(doc["domains/a"]) == ["error", "ok"]
+    assert "A1.yaml" in doc["domains/a"]["error"]
     assert "meters" in doc["domains/b"]
 
 
@@ -215,7 +218,7 @@ def test_reap_id_in_another_member(umbrella, capsys):
                         "reap", "C1")
     assert code == 0, out
     assert out.startswith("C1 reaped from gone (silent ")
-    assert out.rstrip().endswith("h) (domains/b)")
+    assert out.rstrip().endswith("h) (member domains/b)")
     assert store.load("C1").claim is None
     # The owner's views were re-rendered, not the caller's.
     assert stale_views() == []
@@ -242,3 +245,22 @@ def test_reap_id_with_all_domains_is_refused(umbrella, capsys):
 def test_reap_outside_a_workspace_is_unchanged(sandbox, capsys):
     code, out, _ = _run(capsys, "--domain", str(sandbox.paths.root), "reap")
     assert code == 0 and out == "0 reapable record(s)\n"
+
+
+def test_reap_id_in_the_umbrella_names_it_in_words(umbrella, capsys):
+    """`(.)` reads as punctuation; the suffix is `members.describe()`."""
+    _stale(umbrella, "Q1")
+    code, out, _ = _run(capsys, "--domain", str(umbrella / "domains" / "a"),
+                        "reap", "Q1")
+    assert code == 0, out
+    assert out.rstrip().endswith("h) (the umbrella)")
+
+
+def test_single_domain_board_target_note_is_unchanged(sandbox, capsys):
+    """No --all-domains: the stderr note carries no domain prefix."""
+    root = sandbox.paths.root
+    (root / "bin" / "probe-target").write_text(
+        "#!/bin/sh\necho 'probe broke' >&2\nexit 3\n")
+    code, _, err = _run(capsys, "--domain", str(root), "board")
+    assert code == 0
+    assert err.startswith("(target unavailable: ") and "probe broke" in err
