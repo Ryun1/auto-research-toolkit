@@ -52,7 +52,7 @@ DISTIL_EVERY = 5
 _TOP_LEVEL = {"domain", "state", "tracks", "lanes", "policy", "budgets",
               "commands", "knowledge", "coordinator", "hardware", "remote",
               "skills", "upstream", "brain", "plugins", "session",
-              "challenge", "evaluator", "holdout", "render"}
+              "challenge", "evaluator", "holdout", "render", "domains"}
 
 #: Option keys a `[brain]` table may carry for the built-in TypeSafe brain
 #: (`value = "typesafe"`), beyond `default` / role names / `authorize_spend`.
@@ -358,6 +358,10 @@ class DomainConfig:
     #: fails `ar validate` ("problem", the default -- invariant 1) or is a
     #: warning `ar render` fixes ("warning", for multi-session trees, #24)
     stale_views: str = "problem"
+    #: `[domains] members`: globs, relative to this domain.toml, naming the
+    #: member domains this one is the umbrella of (#63). Empty for a domain
+    #: that is not an umbrella; see members.py.
+    members: tuple[str, ...] = ()
     description: str = ""
 
     # -- lookup -----------------------------------------------------------
@@ -428,6 +432,15 @@ class DomainConfig:
                     f"goal.required_gates names {name!r}, which no track's "
                     f"[[tracks.gates]] defines; declared: "
                     f"{sorted(gate_names) or '(none)'}")
+        # The member globs resolve against the filesystem, so the workspace
+        # is checked here, not at parse time -- from the umbrella and from
+        # every member, since a prefix a member shares with a sibling makes
+        # the member's own ids ambiguous too.
+        from .members import Workspace
+        try:
+            Workspace.for_domain(self)
+        except ConfigError as exc:
+            problems.append(f"domains: {exc}")
         if self.challenge.source:
             # Lazy: keeps the config module's import graph free of the
             # adapters, which need only `errors`.
@@ -558,6 +571,7 @@ class DomainConfig:
             challenge=Challenge.from_dict(dict(data.get("challenge") or {})),
             evaluator_files=_evaluator_files(data.get("evaluator") or {}),
             evaluator_kits=_evaluator_kits(data.get("evaluator") or {}),
+            members=_members(data.get("domains")),
             holdout=_holdout(data.get("holdout") or {}),
             stale_views=_stale_views(data.get("render") or {}))
 
@@ -812,6 +826,26 @@ def _session(data) -> dict:
         raise ConfigError(
             f"session.settle_hours must be a positive number, got {settle!r}")
     return {"parent": parent, "settle_hours": float(settle)}
+
+
+def _members(raw) -> tuple[str, ...]:
+    """`[domains] members`, shape-checked. Every key is refused but `members`:
+    a misspelled `member` would read as an umbrella with no members, and each
+    member would quietly run alone."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise ConfigError("[domains] must be a table")
+    unknown = set(raw) - {"members"}
+    if unknown:
+        raise ConfigError(f"[domains] has unknown key(s) {sorted(unknown)}; "
+                          "known: ['members']")
+    globs = raw.get("members")
+    if (not isinstance(globs, list) or not globs
+            or not all(isinstance(g, str) and g.strip() for g in globs)):
+        raise ConfigError("[domains] members must be a non-empty list of "
+                          f"globs relative to {CONFIG_NAME}, got {globs!r}")
+    return tuple(g.strip() for g in globs)
 
 
 def discover(start=None) -> pathlib.Path:

@@ -192,6 +192,26 @@ def cmd_doctor(args):
     return 1 if problems else 0
 
 
+def cmd_domains(args):
+    """The umbrella and its member domains, from the umbrella or any member
+    (#63): path, name, id prefixes and open / closed counts. A domain with no
+    umbrella lists itself alone."""
+    from . import members
+    config = _load(args)
+    workspace = members.Workspace.for_domain(config)
+    rows = members.rows(workspace, current=config)
+    if args.json:
+        # Keyed by path, the shape `--all --json` uses on the other verbs.
+        print(json.dumps({
+            "umbrella": str(workspace.root) if workspace.members else None,
+            "domains": {r["path"]: r for r in rows}}, indent=2))
+        return 0
+    print(f"umbrella: {workspace.root}" if workspace.members
+          else f"domain:   {workspace.root}  (no [domains] members)")
+    sys.stdout.write(members.render_rows(rows))
+    return 0
+
+
 def cmd_hardware(args):
     """What this machine is, what it can run, and what it cannot."""
     config = _load(args)
@@ -2752,6 +2772,13 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
 
     sub.add_parser("doctor", help="diagnose the installed core against this "
                    "domain's declarations").set_defaults(func=cmd_doctor)
+
+    domsp = sub.add_parser(
+        "domains", help="list the umbrella and its member domains: path, name, "
+        "id prefixes, open / closed counts")
+    domsp.add_argument("--json", action="store_true",
+                       help="print the rows as JSON")
+    domsp.set_defaults(func=cmd_domains)
 
     kit = sub.add_parser(
         "kit", help="shared measurement code vendored into the domain "
