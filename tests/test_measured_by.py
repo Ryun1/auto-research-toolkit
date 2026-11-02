@@ -46,6 +46,20 @@ def test_a_row_under_a_proven_claim_is_measured_by_the_claim(sandbox, store, cap
     assert row.provenance["measured_by"] == f"claim:a@{claim_at}"
 
 
+def test_a_claim_token_after_domain_flags_proves_the_claim(sandbox, store, capsys):
+    """starks H10 (#61): the unclaimed warning teaches appending
+    --claim-token; after a domain flag it reached the domain's measure, which
+    refused it as unrecognized. It must prove the claim instead."""
+    make_entry(store, "Q1")
+    assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0
+    token = _token(capsys)
+    claim_at = store.load("Q1").claim.at
+    assert _ar(sandbox, "--session", "other", "measure", "--entry", "Q1",
+               "--knob", "unroll=2", "--claim-token", token) == 0
+    [row] = read_all(sandbox.paths.runs)
+    assert row.provenance["measured_by"] == f"claim:a@{claim_at}"
+
+
 def test_a_row_with_no_proof_is_unclaimed(sandbox, store, capsys):
     make_entry(store, "Q1")
     assert _ar(sandbox, "--session", "a", "claim", "Q1", "--why", "t") == 0

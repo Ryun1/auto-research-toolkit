@@ -2727,7 +2727,9 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                            "from the slot, and the row lands in the slot "
                            "with a receipt harvest checks (#36)")
     meas.add_argument("rest", nargs="*",
-                      help="passed through to the domain command, flags included")
+                      help="passed through to the domain command, flags "
+                           "included, except --claim-token (after a `--`, "
+                           "everything)")
     meas.set_defaults(func=cmd_measure)
 
     challenge = sub.add_parser(
