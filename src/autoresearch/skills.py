@@ -66,10 +66,11 @@ def core_version() -> str:
 
     Read from the same place `ar doctor` and `ar harness check` read it, so a
     skill, a defect and a diagnosis never quote three different versions for one
-    checkout (sig.golf H20)."""
+    checkout (sig.golf H20). Between releases it names the commit,
+    `0.13.0+g7b9d0da`, so a stale dev install cannot pass for a release (#62)."""
     from . import upstream
     try:
-        return upstream.installed().version
+        return upstream.installed().stamp()
     except AutoresearchError:
         return "unknown"
 

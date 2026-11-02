@@ -56,6 +56,27 @@ class Install:
     #: the branch or tag pip was pointed at, when the install recorded one
     ref: str | None = None
     editable: bool = False
+    #: src/ had uncommitted changes when this core was built (or, editable,
+    #: has them now): the commit alone does not name the code
+    dirty: bool = False
+    #: tags pointing at `commit`, when known
+    tags: tuple[str, ...] = ()
+
+    def stamp(self) -> str:
+        """What a record should say wrote it (#62).
+
+        The bare version only for a clean build of the commit tagged
+        `v<version>`. Anything else -- a checkout between releases, a dirty
+        tree -- names its commit as a PEP 440 local segment, so
+        `0.13.0+g7b9d0da` can never pass for 0.13.0. With no commit known
+        there is nothing to add, and the version is all there is."""
+        if not self.commit:
+            return self.version
+        release = f"v{self.version}" in self.tags or self.ref == f"v{self.version}"
+        if release and not self.dirty:
+            return self.version
+        return (f"{self.version}+g{self.commit[:7]}"
+                + (".dirty" if self.dirty else ""))
 
 
 def _checkout_version(url: str | None) -> str | None:
@@ -77,9 +98,46 @@ def _checkout_version(url: str | None) -> str | None:
     return match.group(1) if match else None
 
 
+def _build_info() -> dict | None:
+    """What setup.py recorded about the checkout this core was built from, or
+    None (an sdist build, an editable install, a build without git)."""
+    try:
+        from . import _build
+    except ImportError:
+        return None
+    return {"commit": getattr(_build, "COMMIT", None) or None,
+            "dirty": bool(getattr(_build, "DIRTY", False)),
+            "tags": tuple(getattr(_build, "TAGS", ()) or ())}
+
+
+def _checkout_state(url: str | None) -> dict | None:
+    """HEAD, dirtiness and tags of an editable install's checkout, read now:
+    the tree keeps moving after pip ran, so only the live state names it."""
+    if not url or not url.startswith("file://"):
+        return None
+    root = url.removeprefix("file://")
+    try:
+        # A tree inside some other repository is not a checkout of its own;
+        # that repository's HEAD would name the wrong code.
+        top = _git(["-C", root, "rev-parse", "--show-toplevel"]).strip()
+        if pathlib.Path(top).resolve() != pathlib.Path(root).resolve():
+            return None
+        commit = _git(["-C", root, "rev-parse", "HEAD"]).strip()
+        dirty = bool(_git(["-C", root, "status", "--porcelain", "--", "src",
+                           "pyproject.toml", "setup.py"]).strip())
+        tags = tuple(_git(["-C", root, "tag", "--points-at", "HEAD"]).split())
+    except (AutoresearchError, OSError):
+        return None
+    return {"commit": commit or None, "dirty": dirty, "tags": tags}
+
+
 def installed() -> Install:
     """Read the install from pip's own metadata. There is exactly one source
-    of truth for where this core came from, and pip already wrote it."""
+    of truth for where this core came from, and pip already wrote it.
+
+    pip records a commit only for a `git+` install; a local directory install
+    falls back to what setup.py stamped at build time, and an editable one to
+    its checkout's live HEAD (#62)."""
     try:
         dist = metadata.distribution("autoresearch")
     except metadata.PackageNotFoundError:
@@ -97,15 +155,24 @@ def installed() -> Install:
         ref = vcs.get("requested_revision")
         editable = bool((data.get("dir_info") or {}).get("editable"))
     declared = _checkout_version(url) if editable else None
+    state = _checkout_state(url) if editable else _build_info()
+    dirty, tags = False, ()
+    # A build record about some other commit says nothing about this one.
+    if state and state["commit"] and (commit is None or commit == state["commit"]):
+        commit, dirty, tags = state["commit"], state["dirty"], state["tags"]
     return Install(version=declared or dist.version or "unknown", commit=commit,
-                   url=url, ref=ref, editable=editable)
+                   url=url, ref=ref, editable=editable, dirty=dirty, tags=tags)
 
 
 def version_tuple(version: str) -> tuple[int, ...] | None:
     """`("0", "2", "0")` for "0.2.0"; None when any component is not purely
     numeric (a dev suffix or a hash), which means 'cannot compare' rather than
-    'oldest' -- a floor must never silently pass a version it cannot read."""
-    parts = version.strip().split(".")
+    'oldest' -- a floor must never silently pass a version it cannot read.
+
+    A PEP 440 local segment (`0.13.0+g7b9d0da`, a build between releases) is
+    ignored: it names a commit, not a version, and refusing it would make
+    `min_core` refuse every dev install."""
+    parts = version.strip().split("+", 1)[0].split(".")
     if not parts or not all(p.isdigit() for p in parts):
         return None
     return tuple(int(p) for p in parts)
@@ -148,12 +215,15 @@ def doctor(config) -> tuple[list[str], list[str]]:
     problems: list[str] = []
     try:
         inst = installed()
-        lines.append(f"core:      {inst.version}"
+        lines.append(f"core:      {inst.stamp()}"
                      + ("  (editable install)" if inst.editable
                         else "  (copied install)")
-                     + (f"\n           from {inst.url}"
-                        + (f" @ {inst.commit[:12]}" if inst.commit else "")
-                        if inst.url else ""))
+                     + (f"\n           from {inst.url}" if inst.url else ""))
+        lines.append("commit:    "
+                     + (inst.commit[:12] + ("  (uncommitted changes in src/)"
+                                            if inst.dirty else "")
+                        if inst.commit else
+                        "unknown (no git metadata at install or build time)"))
     except AutoresearchError as exc:
         lines.append("core:      unidentified")
         problems.append(str(exc))

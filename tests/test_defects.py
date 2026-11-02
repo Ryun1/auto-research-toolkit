@@ -378,7 +378,7 @@ def test_core_auto_records_this_cores_version(sandbox, store):
                "--observed", "y", "--expected", "z"]) == 0
     stored = store.load("H1").core
     assert stored and stored != "auto"
-    assert stored == up_mod.installed().version
+    assert stored == up_mod.installed().stamp()
 
 
 def test_an_ingested_defect_carries_its_tracks_gates(sandbox):

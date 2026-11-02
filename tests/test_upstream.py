@@ -537,3 +537,131 @@ def test_verify_runs_the_real_cli_against_the_domain(sandbox):
     problems = up._verify(sandbox)
     assert not [p for p in problems if "unrecognized arguments" in p], problems
     assert not [p for p in problems if p.startswith("render failed")], problems
+
+
+# -- a build between releases names its commit (#62) -------------------------
+
+SHA = "7b9d0da" + "1" * 33
+
+
+def test_a_directory_install_stamps_the_commit_setup_py_recorded(monkeypatch):
+    """`pip install /path/to/checkout` writes `dir_info` and no `vcs_info`, so
+    pip records no commit. starks H10-H12 were filed as `core: 0.12.0` by a
+    core built after 0.12.0 -- the build record is what names it."""
+    from autoresearch.skills import core_version
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.13.0", json.dumps({"url": "file:///src/core", "dir_info": {}})))
+    monkeypatch.setattr(up, "_build_info", lambda: {
+        "commit": SHA, "dirty": False, "tags": ()})
+    assert up.installed().commit == SHA
+    assert core_version() == "0.13.0+g7b9d0da"
+
+
+def test_a_dirty_build_says_so(monkeypatch):
+    from autoresearch.skills import core_version
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.13.0", json.dumps({"url": "file:///src/core", "dir_info": {}})))
+    monkeypatch.setattr(up, "_build_info", lambda: {
+        "commit": SHA, "dirty": True, "tags": ("v0.13.0",)})
+    assert core_version() == "0.13.0+g7b9d0da.dirty"
+
+
+def test_a_clean_release_build_still_says_just_the_version(monkeypatch):
+    from autoresearch.skills import core_version
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.13.0", json.dumps({"url": "file:///src/core", "dir_info": {}})))
+    monkeypatch.setattr(up, "_build_info", lambda: {
+        "commit": SHA, "dirty": False, "tags": ("v0.13.0",)})
+    assert core_version() == "0.13.0"
+    # a tag for some other version does not make this build that release
+    monkeypatch.setattr(up, "_build_info", lambda: {
+        "commit": SHA, "dirty": False, "tags": ("v0.12.0",)})
+    assert core_version() == "0.13.0+g7b9d0da"
+
+
+def test_a_git_install_of_the_release_tag_stamps_the_version(monkeypatch):
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.13.0", json.dumps({"url": "https://example.invalid/core",
+                              "vcs_info": {"vcs": "git", "commit_id": SHA,
+                                           "requested_revision": "v0.13.0"}})))
+    monkeypatch.setattr(up, "_build_info", lambda: None)
+    assert up.installed().stamp() == "0.13.0"
+
+
+def test_a_git_install_ignores_a_build_record_for_another_commit(monkeypatch):
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.13.0", json.dumps({"url": "https://example.invalid/core",
+                              "vcs_info": {"vcs": "git", "commit_id": SHA}})))
+    monkeypatch.setattr(up, "_build_info", lambda: {
+        "commit": "f" * 40, "dirty": True, "tags": ("v0.13.0",)})
+    inst = up.installed()
+    assert (inst.commit, inst.dirty) == (SHA, False)
+    assert inst.stamp() == "0.13.0+g7b9d0da"
+
+
+def test_no_commit_anywhere_leaves_the_bare_version(monkeypatch):
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.13.0", json.dumps({"url": "file:///src/core", "dir_info": {}})))
+    monkeypatch.setattr(up, "_build_info", lambda: None)
+    assert up.installed().stamp() == "0.13.0"
+
+
+def test_an_editable_install_reads_its_checkout_now(tmp_path, monkeypatch):
+    """The tree moves after pip ran: HEAD, dirtiness and tags come from it."""
+    def g(*args):
+        return git(*args, cwd=tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "pyproject.toml").write_text('version = "1.2.0"\n')
+    (tmp_path / "src" / "m.py").write_text("x = 1\n")
+    g("init", "-q")
+    g("add", "-A")
+    g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c")
+    head = g("rev-parse", "HEAD")
+    monkeypatch.setattr(up.metadata, "distribution", lambda name: _FakeDist(
+        "0.1.0", json.dumps({"url": f"file://{tmp_path}",
+                             "dir_info": {"editable": True}})))
+    assert up.installed().stamp() == f"1.2.0+g{head[:7]}"
+    g("tag", "v1.2.0")
+    assert up.installed().stamp() == "1.2.0"
+    (tmp_path / "src" / "m.py").write_text("x = 2\n")
+    assert up.installed().stamp() == f"1.2.0+g{head[:7]}.dirty"
+    # a plain directory inside it is not a checkout of its own
+    inner = tmp_path / "inner"
+    inner.mkdir()
+    assert up._checkout_state(f"file://{inner}") is None
+
+
+def test_setup_py_records_the_checkout_it_builds(tmp_path, monkeypatch):
+    """The build step's git reading, against a real repository. setuptools is
+    stubbed: the test venv does not carry it, and only `git_state` is tested."""
+    import importlib.util
+    import shutil
+    import sys
+    import types
+    fake = types.ModuleType("setuptools")
+    fake.setup = lambda **kw: None
+    build_py_mod = types.ModuleType("setuptools.command.build_py")
+    build_py_mod.build_py = type("build_py", (), {})
+    monkeypatch.setitem(sys.modules, "setuptools", fake)
+    monkeypatch.setitem(sys.modules, "setuptools.command",
+                        types.ModuleType("setuptools.command"))
+    monkeypatch.setitem(sys.modules, "setuptools.command.build_py", build_py_mod)
+    root = pathlib.Path(__file__).resolve().parent.parent
+    shutil.copy(root / "setup.py", tmp_path / "setup.py")
+    spec = importlib.util.spec_from_file_location("setup_under_test",
+                                                  tmp_path / "setup.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.git_state() is None          # not a checkout: an sdist build
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "m.py").write_text("x = 1\n")
+    git("init", "-q", cwd=tmp_path)
+    git("add", "-A", cwd=tmp_path)
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c",
+        cwd=tmp_path)
+    git("tag", "v1.0.0", cwd=tmp_path)
+    state = mod.git_state()
+    assert state == {"commit": git("rev-parse", "HEAD", cwd=tmp_path),
+                     "dirty": False, "tags": ("v1.0.0",)}
+    (tmp_path / "src" / "m.py").write_text("x = 2\n")
+    assert mod.git_state()["dirty"] is True

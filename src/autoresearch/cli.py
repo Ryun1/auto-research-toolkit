@@ -692,7 +692,7 @@ def _core_version(named: str | None) -> str:
     (sig.golf H20).
     """
     if (named or "").strip().lower() == "auto":
-        return upstream_mod.installed().version
+        return upstream_mod.installed().stamp()
     return named or ""
 
 

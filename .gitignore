@@ -6,3 +6,4 @@ build/
 dist/
 .venv/
 uv.lock
+src/autoresearch/_build.py

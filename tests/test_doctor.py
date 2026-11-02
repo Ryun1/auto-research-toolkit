@@ -29,6 +29,32 @@ def test_version_tuple_reads_numeric_components_only():
     # never as the oldest possible version.
     assert version_tuple("0.2.0.dev1") is None
     assert version_tuple("unknown") is None
+    # A build between releases names its commit as a local segment; that is
+    # not a different version, and min_core must not refuse it (#62).
+    assert version_tuple("0.13.0+g7b9d0da") == (0, 13, 0)
+    assert version_tuple("0.13.0+g7b9d0da.dirty") == (0, 13, 0)
+
+
+def test_a_floor_compares_a_dev_build_by_its_version(sandbox, install):
+    install("0.13.0+g7b9d0da")
+    sandbox.upstream.min_core = "0.13.0"
+    assert min_core_problem(sandbox) is None
+    sandbox.upstream.min_core = "0.14.0"
+    assert "below" in min_core_problem(sandbox)
+
+
+def test_doctor_prints_the_commit(sandbox, monkeypatch):
+    inst = Install(version="0.13.0", url="file:///core", commit="7b9d0da" + "0" * 33,
+                   dirty=True)
+    monkeypatch.setattr("autoresearch.upstream.installed", lambda: inst)
+    lines, _ = doctor(sandbox)
+    assert "core:      0.13.0+g7b9d0da.dirty  (copied install)" in lines[0]
+    assert any(ln.startswith("commit:    7b9d0da00000") and "uncommitted" in ln
+               for ln in lines)
+    monkeypatch.setattr("autoresearch.upstream.installed",
+                        lambda: Install(version="0.13.0"))
+    lines, _ = doctor(sandbox)
+    assert any(ln.startswith("commit:    unknown") for ln in lines)
 
 
 def test_a_floor_at_or_below_the_install_passes(sandbox, install):
