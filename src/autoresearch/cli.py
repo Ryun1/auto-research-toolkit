@@ -120,6 +120,16 @@ def cmd_init(args):
     """Scaffold a new domain that is valid and runnable before you edit it."""
     from .scaffold import init
 
+    if args.member:
+        return _init_member(args)
+    if not args.path:
+        raise AutoresearchError(
+            "ar init needs a directory to scaffold, or --member <path> "
+            "--prefix <P> to add a member to the umbrella")
+    if args.prefix:
+        raise AutoresearchError(
+            "--prefix only applies with --member; a new domain's prefixes "
+            "are set in its domain.toml")
     root = pathlib.Path(args.path).resolve()
     written = init(root, name=args.name or root.name,
                    objective=args.objective, metrics=args.metric or ["cost"],
@@ -137,6 +147,38 @@ def cmd_init(args):
           4. run   ar --domain {root} board
           5. run   ar --domain {root} hardware   -- what this machine can do
           6. later ar --domain {root} skill list -- what the loop has distilled
+        """).rstrip())
+    return validation
+
+
+def _init_member(args):
+    """Scaffold a member under the umbrella of `--domain` (or the cwd's)."""
+    from .scaffold import init_member
+
+    if args.path:
+        raise AutoresearchError(
+            f"give either a path ({args.path!r}) or --member, not both: "
+            "--member scaffolds inside the umbrella, a path scaffolds a "
+            "standalone domain")
+    if not args.prefix:
+        raise AutoresearchError(
+            "--member needs --prefix <P>: the capital-letter prefix of the "
+            "member's ids, unique across the workspace")
+    config = _load(args)
+    umbrella = members_mod.Workspace.for_domain(config).umbrella
+    written = init_member(umbrella, args.member, args.prefix, name=args.name)
+    root = written[0].parent
+    print(f"scaffolded member {args.name or root.name!r} in {root}")
+    for path in written:
+        print(f"  {path.relative_to(root)}")
+
+    validation = cmd_validate(argparse.Namespace(domain=str(root)))
+    print(textwrap.dedent(f"""
+        Next:
+          1. edit  {root.name}/bin/measure -- replace evaluate() with the real experiment
+          2. edit  {root.name}/goal.yaml   -- the metrics it returns, and what winning means
+          3. run   ar --domain {root} board
+          4. run   ar --domain {umbrella.paths.root} validate --all-domains
         """).rstrip())
     return validation
 
@@ -2583,7 +2625,13 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     ini = sub.add_parser("init", help="scaffold a new domain")
-    ini.add_argument("path", help="directory for the new domain")
+    ini.add_argument("path", nargs="?", help="directory for the new domain")
+    ini.add_argument("--member", metavar="REL",
+                     help="scaffold a member domain at REL under the umbrella "
+                          "of --domain, e.g. domains/<name> (instead of path)")
+    ini.add_argument("--prefix", metavar="P",
+                     help="with --member: the member's id prefix, capital "
+                          "letters, unique across the workspace")
     ini.add_argument("--name", help="domain name (default: the directory name)")
     ini.add_argument("--objective", default="cost",
                      help="expression over your metrics, e.g. \"round(T) * Q\"")

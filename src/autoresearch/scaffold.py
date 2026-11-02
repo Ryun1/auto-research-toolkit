@@ -27,7 +27,10 @@ records, and "it seemed empty" is not a check.
 """
 from __future__ import annotations
 
+import os
 import pathlib
+import re
+import shutil
 import sys
 import textwrap
 
@@ -768,4 +771,161 @@ def init(root, name: str, objective: str = "cost", metrics=("cost",),
     written.extend(path for path, state in skills_mod.link(domain)
                    if state == "linked")
     written.extend(write_views(domain, Store(domain.paths.entries).all()))
+    return written
+
+
+_PREFIX_RE = re.compile(r"^[A-Z]+$")
+
+
+def _with_member(text: str, rel: str, config_path) -> str:
+    """The umbrella's domain.toml text with `rel` added to `[domains].members`.
+
+    Only the `members = [...]` line changes, so the file's comments and layout
+    survive. A list spread over several lines is refused rather than parsed
+    with a regex that would guess: the message says what to add by hand."""
+    item = f'"{rel}"'
+    lines = text.splitlines(keepends=True)
+    in_domains = False
+    header = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if re.match(r"\[\s*domains\s*\]\s*(#.*)?$", stripped):
+            in_domains, header = True, i
+        elif stripped.startswith("["):
+            in_domains = False
+        elif in_domains and re.match(r"members\s*=", stripped):
+            m = re.match(r"^(\s*members\s*=\s*\[)([^\]\n]*)(\].*)$", line, re.S)
+            if not m:
+                raise ConfigError(
+                    f"{config_path}: `members` spans several lines, which "
+                    f"`ar init --member` will not rewrite; add {item} to "
+                    f"[domains].members by hand, then re-run")
+            inner = m.group(2)
+            if not inner.strip():
+                inner = item
+            elif inner.rstrip().endswith(","):
+                inner = inner.rstrip() + " " + item
+            else:
+                inner = inner.rstrip() + ", " + item
+            lines[i] = m.group(1) + inner + m.group(3)
+            return "".join(lines)
+    if header is not None:
+        lines.insert(header + 1, f"members = [{item}]\n")
+        return "".join(lines)
+    joiner = "" if not text or text.endswith("\n") else "\n"
+    return text + joiner + f"\n[domains]\nmembers = [{item}]\n"
+
+
+def init_member(umbrella: DomainConfig, rel: str, prefix: str,
+                name: str | None = None) -> list[pathlib.Path]:
+    """Scaffold a member domain at `rel` under `umbrella`.
+
+    Minimal on purpose: the member inherits the umbrella's policy, budgets and
+    the other shared tables (#64), so its domain.toml carries only what is
+    never inherited. `[lanes] findings` is copied because lanes are not
+    inherited and load requires it. Everything is checked before anything is
+    written, and a failed umbrella edit takes the member's files back out."""
+    from . import members as members_mod
+
+    if not _PREFIX_RE.match(prefix or ""):
+        raise ConfigError(
+            f"--prefix {prefix!r} must be capital letters only (^[A-Z]+$), "
+            f"like the umbrella's {', '.join(t.prefix for t in umbrella.tracks.values())}")
+    root = umbrella.paths.root
+    if pathlib.PurePath(rel).is_absolute():
+        raise ConfigError(
+            f"--member {rel!r} is absolute; give a path relative to the "
+            f"umbrella at {root}, like domains/<name>")
+    target = (root / rel).resolve()
+    if target == root or not target.is_relative_to(root):
+        raise ConfigError(
+            f"--member {rel!r} is not below the umbrella at {root}; a member "
+            f"lives inside its umbrella, like domains/<name>")
+    rel = target.relative_to(root).as_posix()
+    if (target / "domain.toml").exists():
+        raise ConfigError(
+            f"{target / 'domain.toml'} already exists. `ar init --member` "
+            f"will not scaffold over a live domain; pick a new directory.")
+    workspace = members_mod.Workspace.load(root)
+    for path, config in workspace.domains():
+        if any(t.prefix == prefix for t in config.tracks.values()):
+            raise ConfigError(
+                f"--prefix {prefix!r} is already declared by "
+                f"{path} ({config.name!r}); prefixes are unique across the "
+                f"workspace so an id names one entry -- pick another")
+
+    name = name or target.name
+    # TOML basic strings: the findings regex is full of backslash-free text
+    # today, but escape so a pattern with one still round-trips.
+    findings = umbrella.lanes.findings_pattern.replace("\\", "\\\\").replace('"', '\\"')
+    umbrella_ref = os.path.relpath(root, target).replace(os.sep, "/")
+    domain_toml = textwrap.dedent(f'''\
+        # {name} -- a member of the umbrella at {umbrella_ref}.
+        # Policy, budgets and the other shared tables are inherited from it;
+        # set a key here only to override it. `ar domains show` lists the source.
+
+        [domain]
+        name = "{name}"
+        description = "TODO: one line on what winning looks like."
+        goal = "goal.yaml"
+
+        [state]
+        entries    = "state/entries"
+        claims     = "state/claims"
+        runs       = "data/runs"
+        memos      = "inbox"
+        iterations = "state/iterations"
+
+        [[tracks]]
+        id     = "research"
+        prefix = "{prefix}"
+        title  = "Hypothesis Queue"
+        view   = "docs/log/Hypothesis Queue.md"
+
+        [lanes]
+        findings = "{findings}"
+
+        [commands]
+        measure = "bin/measure"
+        ''')
+    agents = (f"# AGENTS.md -- {name}\n\n"
+              f"Shared rules, tools and the defect track live in the umbrella: "
+              f"read `{umbrella_ref}/AGENTS.md` first.\n")
+    files = {
+        "domain.toml": domain_toml,
+        "goal.yaml": _goal_yaml(name, "cost", ["cost"], 100.0),
+        "bin/measure": MEASURE,
+        "AGENTS.md": agents,
+    }
+    # the topmost directory this call creates, so a rollback removes `labs/`
+    # along with `labs/x` rather than leaving the parent behind
+    created = None
+    if not target.exists():
+        created = target
+        while not created.parent.exists():
+            created = created.parent
+    written = []
+    try:
+        for sub in ("bin", "state/entries"):
+            (target / sub).mkdir(parents=True, exist_ok=True)
+        for sub, content in files.items():
+            path = target / sub
+            path.write_text(content)
+            written.append(path)
+        (target / "bin" / "measure").chmod(0o755)
+        # `ar validate` refuses a track view that was never rendered
+        written.extend(write_views(DomainConfig.load(target), []))
+
+        config_path = root / "domain.toml"
+        covered = target in members_mod._expand(
+            root, umbrella.members, strict=False).values()
+        if not covered:
+            text = config_path.read_text()
+            config_path.write_text(_with_member(text, rel, config_path))
+    except BaseException:
+        for path in written:
+            path.unlink(missing_ok=True)
+        if created:
+            shutil.rmtree(created, ignore_errors=True)
+        raise
     return written
