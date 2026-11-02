@@ -779,22 +779,59 @@ def _core_version(named: str | None) -> str:
     return named or ""
 
 
+def _shared_defect_home(config, args):
+    """The umbrella's defect home, when this filing belongs on it (#67).
+
+    Only a filing this member cannot place itself -- a track it does not
+    declare, or an id no local track owns -- is looked for on the umbrella,
+    and only when the umbrella's defect track is the one named, by track or
+    by id. Anything else gets exactly the refusal it got before members
+    existed."""
+    local_owner = next((t for t in config.tracks.values()
+                        if args.id and t.is_id(args.id)), None)
+    if args.track in config.tracks and (not args.id or local_owner):
+        return None
+    home = defects_mod.defect_home(config)
+    if home is None or not home.shared:
+        return None
+    by_track = home.track.id == args.track
+    if not args.id or by_track == home.track.is_id(args.id):
+        return home if by_track else None
+    # One names the shared track and the other does not: the same refusal a
+    # single domain gives for an id filed on the wrong track.
+    if by_track:
+        owner, named = local_owner or config.track_for(args.id), home.track
+    else:
+        owner, named = home.track, config.tracks.get(args.track)
+        if named is None:
+            return None       # an undeclared track: refused as before
+    raise AutoresearchError(
+        f"id {args.id!r} belongs to track {owner.id!r} (prefix "
+        f"{owner.prefix!r}), not {named.id!r} (prefix {named.prefix!r})")
+
+
 def cmd_entry_new(args):
     config = _load(args)
-    if args.track not in config.tracks:
-        raise AutoresearchError(
-            f"track {args.track!r} is not declared by this domain; "
-            f"declared: {sorted(config.tracks)}")
-    store = _store(config)
-    track = config.tracks[args.track]
-    if args.id:
-        # An id no track owns was written, and that one file then stopped
-        # every store-reading verb for the whole domain (#18).
-        owner = config.track_for(args.id)
-        if owner.id != track.id:
+    home = _shared_defect_home(config, args)
+    if home is not None:
+        # Filed on the umbrella's track, into the umbrella's store, under the
+        # umbrella's filing lock: a member's lock does not cover that store.
+        config, track = home.config, home.track
+    else:
+        if args.track not in config.tracks:
             raise AutoresearchError(
-                f"id {args.id!r} belongs to track {owner.id!r} (prefix "
-                f"{owner.prefix!r}), not {track.id!r} (prefix {track.prefix!r})")
+                f"track {args.track!r} is not declared by this domain; "
+                f"declared: {sorted(config.tracks)}")
+        track = config.tracks[args.track]
+        if args.id:
+            # An id no track owns was written, and that one file then stopped
+            # every store-reading verb for the whole domain (#18).
+            owner = config.track_for(args.id)
+            if owner.id != track.id:
+                raise AutoresearchError(
+                    f"id {args.id!r} belongs to track {owner.id!r} (prefix "
+                    f"{owner.prefix!r}), not {track.id!r} (prefix {track.prefix!r})")
+    store = _store(config)
     from . import tree
     # The same gate the coordinator's generate phase runs: a human or a
     # native-dispatch agent files through the identical tree rules, so the
@@ -840,6 +877,9 @@ def cmd_entry_new(args):
         # the store is skipped rather than overwritten. A `--id` the caller chose
         # is never moved -- a taken one is refused (H79).
         print(store.create(entry, renumber=not args.id))
+    if home is not None:
+        print(f"filed in umbrella {config.paths.root} "
+              f"(shared defect track {track.id!r})")
     _render_views(config)
     return 0
 
@@ -1022,9 +1062,8 @@ def cmd_harness_export(args):
     and the scaffold's policy makes the publishing commands human-only.
     """
     config = _load(args)
-    entries = _store(config).all()
     bundle, refused, stats = defects_mod.export_bundle(
-        config, entries, all_status=args.all)
+        config, all_status=args.all)
     print(f"read {stats['read']} entr(ies) on defect track {stats['track']!r}: "
           f"exported {len(bundle['defects'])}, refused {len(refused)}, "
           f"skipped {stats['closed_skipped']} closed"

@@ -27,8 +27,8 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 
-from .config import Track
-from .entries import Entry
+from .config import DomainConfig, Track
+from .entries import Entry, Store
 from .errors import AutoresearchError
 
 #: Bumped only when the bundle shape changes; ingest refuses any other value.
@@ -43,18 +43,49 @@ def _now() -> str:
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
 
 
-def defect_track(config):
-    """The track this domain files harness defects on, or None.
+def _local_defect_track(config) -> Track | None:
+    """The track this domain itself declares for defects, or None.
 
     A track declares itself by `requires_defect_evidence = true`, so the
-    boundary is data-driven: a domain that names no defect track has no
-    export surface, and `export_bundle` says so rather than guessing a track
-    by its prefix.
-    """
+    boundary is data-driven: a track is never guessed from its prefix."""
     for track in config.tracks.values():
         if track.requires_defect_evidence:
             return track
     return None
+
+
+@dataclasses.dataclass
+class DefectHome:
+    """Where a domain's harness defects are filed and exported from.
+
+    `shared` is True when the track, config and store are the umbrella's, not
+    this domain's: a member that declares no defect track files on the
+    umbrella's, so one workspace keeps one defect queue and one bundle."""
+    track: Track
+    config: DomainConfig
+    store: Store
+    shared: bool
+
+
+def defect_home(config) -> DefectHome | None:
+    """This domain's defect track first; else, for a member, the umbrella's.
+
+    A member declaring its own defect track keeps it -- the umbrella is only
+    consulted when the domain declares none. A domain with no umbrella (or a
+    broken workspace) gets None exactly when it declares no defect track, as
+    before members existed (#67)."""
+    track = _local_defect_track(config)
+    if track is not None:
+        return DefectHome(track, config, Store(config.paths.entries), False)
+    from . import members
+    workspace = members.workspace_or_none(config)
+    if workspace is None or workspace.umbrella.paths.root == config.paths.root:
+        return None
+    umbrella = workspace.umbrella
+    track = _local_defect_track(umbrella)
+    if track is None:
+        return None
+    return DefectHome(track, umbrella, Store(umbrella.paths.entries), True)
 
 
 def evidence_problems(entry: Entry, track) -> list[str]:
@@ -77,8 +108,13 @@ def evidence_problems(entry: Entry, track) -> list[str]:
         "nobody can reproduce is an opinion, not a record"]
 
 
-def export_bundle(config, entries, all_status: bool = False) -> tuple[dict, list, dict]:
+def export_bundle(config, entries=None, all_status: bool = False,
+                  ) -> tuple[dict, list, dict]:
     """Collect this project's defect entries into one upstream bundle.
+
+    The project is the defect home's: a member filing on the umbrella's track
+    exports the umbrella's bundle, the same one the umbrella itself exports.
+    `entries` defaults to that home's store.
 
     Returns `(bundle, refused, stats)`. `refused` is a list of
     `(entry_id, reason)` for entries missing evidence; they are named, never
@@ -90,13 +126,16 @@ def export_bundle(config, entries, all_status: bool = False) -> tuple[dict, list
     from . import hardware as hw
     from .skills import core_version
 
-    track = defect_track(config)
-    if track is None:
+    home = defect_home(config)
+    if home is None:
         raise AutoresearchError(
             f"domain {config.name!r} declares no track with "
             "`requires_defect_evidence = true`; there is no defect track to "
             "export. Add one to domain.toml, or file harness debt on the "
             "research track if that is where this domain keeps it.")
+    track = home.track
+    if entries is None:
+        entries = home.store.all()
 
     machine = track.machine
     defects: list[dict] = []
@@ -119,7 +158,7 @@ def export_bundle(config, entries, all_status: bool = False) -> tuple[dict, list
         "schema": BUNDLE_SCHEMA,
         "exported_at": _now(),
         "project": {
-            "name": config.name,
+            "name": home.config.name,
             "core": core_version(),
             "host": hw.detect().fingerprint,
         },

@@ -51,6 +51,7 @@ from .. import attempts, preflight, render, scoring
 from .. import attempts as attempts_mod
 from .. import budget as budget_mod
 from .. import challenge as challenge_mod
+from .. import defects as defects_mod
 from .. import entries as entries_mod
 from .. import hardware as hw
 from .. import rank as rank_mod
@@ -762,10 +763,18 @@ class Coordinator:
         phase.seconds = time.time() - start
         return phase
 
-    def _file(self, proposal: dict) -> Entry:
-        track = self.config.tracks[proposal.get("track", "research")] \
-            if proposal.get("track") in self.config.tracks \
-            else next(iter(self.config.tracks.values()))
+    def _file(self, proposal: dict, home=None) -> Entry:
+        """File one proposal. Given a `DefectHome`, it lands on that track in
+        that store, checked against that domain's tree -- the umbrella's, for
+        a member that declares no defect track (#67) -- under that store's
+        own filing lock, since this member's lock does not cover it."""
+        if home is not None:
+            track, config, store = home.track, home.config, home.store
+        else:
+            config, store = self.config, self.store
+            track = self.config.tracks[proposal.get("track", "research")] \
+                if proposal.get("track") in self.config.tracks \
+                else next(iter(self.config.tracks.values()))
         from ..skills import core_version
         # The tree. A proposal may name the entry it branches from; the
         # coordinator -- not the proposing agent -- owns the tree structure,
@@ -778,14 +787,13 @@ class Coordinator:
         parent = str(proposal.get("parent", "") or "")
         kind = str(proposal.get("kind", "") or "")
         # Check and create under one filing lock (#48), as `ar entry new` does.
-        with self.store.filing_lock(f"loop generate ({self.session})"):
+        with store.filing_lock(f"loop generate ({self.session})"):
             from .. import tree
             derived_from = str(proposal.get("derived_from", "") or "")
-            tree.check_derived(self.store, derived_from, parent, track.id,
-                               self.config)
-            tree.check_branch(self.config, self.store, parent, kind, track.id)
+            tree.check_derived(store, derived_from, parent, track.id, config)
+            tree.check_branch(config, store, parent, kind, track.id)
             entry = Entry(
-                id=self.store.next_id(track.prefix), track=track.id,
+                id=store.next_id(track.prefix), track=track.id,
                 title=str(proposal["title"])[:200],
                 status=track.machine.initial,
                 parent=parent,
@@ -812,7 +820,7 @@ class Coordinator:
                 core=str(proposal.get("core", ""))
                 or (core_version() if track.requires_defect_evidence else ""))
             entry.gates = [dataclasses.replace(gate) for gate in track.gates]
-            self.store.create(entry, renumber=True)
+            store.create(entry, renumber=True)
             return entry
 
     def rank(self, it: Iteration, budget) -> tuple[Phase, list]:
@@ -1664,11 +1672,18 @@ class Coordinator:
             # A defect in the scaffolding is filed against the harness track, not
             # against the research queue -- an agent booting into research work
             # should never read harness debt as a lead on the score.
-            harness_track = next(
-                (t for t in self.config.tracks.values() if t.id == "harness"), None)
+            # A member that declares no defect track files on the umbrella's
+            # (#67). A local track named `harness` that does not declare
+            # itself a defect track still takes this domain's debt, as it did
+            # before defect homes existed.
+            home = defects_mod.defect_home(self.config)
+            local = self.config.tracks.get("harness")
+            if local is not None and (home is None or home.shared):
+                home = defects_mod.DefectHome(local, self.config, self.store,
+                                              shared=False)
             debts = [d for d in data.get("harness_debt", [])
                      if isinstance(d, dict) and d.get("title")]
-            if debts and harness_track is None:
+            if debts and home is None:
                 # Not filed into research instead -- that is the misreading
                 # the separate track exists to prevent -- but not silent
                 # either: QC found defects and the record should say they
@@ -1676,8 +1691,8 @@ class Coordinator:
                 phase.detail.append(
                     f"harness debt not filed: no 'harness' track "
                     f"({len(debts)} item(s) dropped)")
-            for debt in debts if harness_track else []:
-                entry = self._file({**debt, "track": harness_track.id})
+            for debt in debts if home else []:
+                entry = self._file({**debt, "track": home.track.id}, home)
                 phase.detail.append(f"filed {entry.id} (harness debt)")
         except (BudgetExceeded, AutoresearchError, KeyError, TypeError) as exc:
             problems.append(f"qc role skipped: {exc}")
