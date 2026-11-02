@@ -1355,24 +1355,41 @@ def cmd_release(args):
 
 
 def cmd_reap(args):
+    if args.id and getattr(args, "all_domains", False):
+        raise AutoresearchError(
+            "--all-domains lists reapable claims; reap one id without it")
+    if not args.id:
+        return _run_report(args, _reap_report)
     config = _load(args)
+    # The local owner goes first, so a domain with no members behaves as it
+    # always did. Only an id this domain's prefixes do not cover, and which
+    # another domain of the workspace owns, is reaped over there.
+    owner = None
+    if not any(t.is_id(args.id) for t in config.tracks.values()):
+        owner = members_mod.foreign_owner(
+            members_mod.shared_workspace(config), config, args.id)
+    target = owner[1] if owner else config
+    claims = Claims(_store(target), target, args.session)
+    entry, former, age = claims.reap(args.id, ttl_hours=args.ttl_hours)
+    _render_views(target)
+    if former is None:
+        line = f"{entry.id} orphan repaired to {entry.status} (no live claim)"
+    else:
+        line = f"{entry.id} reaped from {former} (silent {age:.1f} h)"
+    print(f"{line} ({owner[0]})" if owner else line)
+    return 0
+
+
+def _reap_report(config, args) -> Report:
     claims = Claims(_store(config), config, args.session)
-    if args.id:
-        entry, former, age = claims.reap(args.id, ttl_hours=args.ttl_hours)
-        _render_views(config)
-        if former is None:
-            print(f"{entry.id} orphan repaired to {entry.status} (no live claim)")
-        else:
-            print(f"{entry.id} reaped from {former} (silent {age:.1f} h)")
-        return 0
     candidates = claims.reapable(ttl_hours=args.ttl_hours)
-    print(f"{len(candidates)} reapable record(s)")
+    lines = [f"{len(candidates)} reapable record(s)"]
     for entry, age in candidates:
         if age is None:
-            print(f"  {entry.id:6} {'orphan':24} no live claim")
+            lines.append(f"  {entry.id:6} {'orphan':24} no live claim")
         else:
-            print(f"  {entry.id:6} {entry.claim.session:24} silent {age:.1f} h")
-    return 0
+            lines.append(f"  {entry.id:6} {entry.claim.session:24} silent {age:.1f} h")
+    return Report(0, "\n".join(lines) + "\n")
 
 
 def cmd_close(args):
@@ -2923,6 +2940,7 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
         help="repair an unowned in-progress record, or free ONE expired claim")
     reap.add_argument("id", nargs="?",
                       help="the entry to free; omit to list what is reapable")
+    _all_domains_flag(reap)
     reap.add_argument("--ttl-hours", type=float, dest="ttl_hours",
                       help="silence after which a claim is reapable "
                            "(default budgets.claim_ttl_hours)")

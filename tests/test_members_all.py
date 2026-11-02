@@ -169,3 +169,76 @@ def test_a_broken_workspace_refuses_rather_than_showing_one_domain(umbrella, cap
                           "board", "--all-domains")
     assert code == 2 and out == ""
     assert err.startswith("ar: ") and "prefix 'A'" in err
+
+
+# -- reap (#66) ----------------------------------------------------------------
+
+def _stale(root, entry_id, session="gone", hours=10):
+    """A claim on `entry_id` in the domain at `root`, silent for `hours`."""
+    import datetime as dt
+
+    from autoresearch.claims import Claims
+    from autoresearch.config import DomainConfig
+    config = DomainConfig.load(root)
+    store = Store(config.paths.entries)
+    make_entry(store, entry_id, track="research")
+    entry = Claims(store, config, session).claim(entry_id, why="t")
+    then = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=hours)).isoformat()
+    entry.claim.at = then
+    for event in entry.history:
+        event.at = then
+    store.save(entry)
+    return store
+
+
+def test_reap_all_domains_lists_each_domain(umbrella, capsys):
+    _stale(umbrella / "domains" / "a", "A1")
+    _stale(umbrella / "domains" / "b", "C1", session="other")
+    code, out, _ = _run(capsys, "--domain", str(umbrella), "reap", "--all-domains")
+    assert code == 0, out
+    assert [ln for ln in out.splitlines() if ln.startswith("== ")] == [
+        "== . (umb) ==", "== domains/a (a) ==", "== domains/b (b) =="]
+    assert "0 reapable record(s)" in out.split("== domains/a")[0]
+    section_a = out.split("== domains/a (a) ==")[1].split("== domains/b")[0]
+    assert "1 reapable record(s)" in section_a and "A1" in section_a
+    assert "C1" in out.split("== domains/b (b) ==")[1]
+
+
+def test_reap_id_in_another_member(umbrella, capsys):
+    store = _stale(umbrella / "domains" / "b", "C1")
+    from autoresearch.config import DomainConfig
+    cli._render_views(DomainConfig.load(umbrella / "domains" / "b"))
+    stale_views = lambda: [f for f in (umbrella / "domains" / "b").rglob("*.md")
+                           if "gone" in f.read_text()]
+    assert stale_views(), "fixture: the claim should show in a rendered view"
+    code, out, _ = _run(capsys, "--domain", str(umbrella / "domains" / "a"),
+                        "reap", "C1")
+    assert code == 0, out
+    assert out.startswith("C1 reaped from gone (silent ")
+    assert out.rstrip().endswith("h) (domains/b)")
+    assert store.load("C1").claim is None
+    # The owner's views were re-rendered, not the caller's.
+    assert stale_views() == []
+
+
+def test_reap_id_in_the_local_domain_is_unchanged(umbrella, capsys):
+    _stale(umbrella / "domains" / "a", "A1")
+    code, out, _ = _run(capsys, "--domain", str(umbrella / "domains" / "a"),
+                        "reap", "A1")
+    assert code == 0 and "(domains/" not in out
+    assert out.startswith("A1 reaped from gone (silent ")
+
+
+def test_reap_id_with_all_domains_is_refused(umbrella, capsys):
+    _stale(umbrella / "domains" / "b", "C1")
+    code, out, err = _run(capsys, "--domain", str(umbrella), "reap", "C1",
+                          "--all-domains")
+    assert code != 0
+    assert ("--all-domains lists reapable claims; reap one id without it"
+            in err + out)
+    assert Store(umbrella / "domains" / "b" / "state" / "entries").load("C1").claim
+
+
+def test_reap_outside_a_workspace_is_unchanged(sandbox, capsys):
+    code, out, _ = _run(capsys, "--domain", str(sandbox.paths.root), "reap")
+    assert code == 0 and out == "0 reapable record(s)\n"
