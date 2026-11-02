@@ -442,11 +442,13 @@ class DomainConfig:
         # is checked here, not at parse time -- from the umbrella and from
         # every member, since a prefix a member shares with a sibling makes
         # the member's own ids ambiguous too.
-        from .members import Workspace
+        from .members import Workspace, unparseable_ancestors
         try:
             Workspace.for_domain(self)
         except ConfigError as exc:
             problems.append(f"domains: {exc}")
+        problems += [f"domains: {p}"
+                     for p in unparseable_ancestors(self.paths.root)]
         if self.challenge.source:
             # Lazy: keeps the config module's import graph free of the
             # adapters, which need only `errors`.

@@ -169,3 +169,76 @@ def test_a_broken_umbrella_that_parses_is_inherited_and_named(tmp_path):
     assert config.sources["budgets.iteration_fanout"] == "umbrella"
     assert [p for p in config.check()
             if p.startswith(f"domains: umbrella at {umbrella}: domain.goal")]
+
+
+# -- a member cannot weaken what it inherits (#64 review) ---------------------
+
+@pytest.mark.parametrize("member_policy", [
+    {"human_only": False}, {"human_only": {}}, {"human_only": ""},
+    {"never_push_remotes": False}])
+def test_a_member_cannot_blank_an_accumulated_rule_list(member_policy):
+    key = next(iter(member_policy))
+    umbrella = {"policy": {key: [{"pattern": "toy publish", "reason": "r"}]}}
+    with pytest.raises(ConfigError, match=rf"policy\.{key}.*cannot be removed"):
+        inherit.merge(umbrella, {"policy": member_policy})
+
+
+@pytest.mark.parametrize("member_policy", [False, "", []])
+def test_a_member_cannot_blank_the_umbrella_policy(member_policy):
+    umbrella = {"policy": {"spend_ceiling": 5.0}}
+    with pytest.raises(ConfigError, match=r"\[policy\].*cannot be removed"):
+        inherit.merge(umbrella, {"policy": member_policy})
+
+
+def test_a_member_blanking_human_only_in_toml_is_refused_at_load(tmp_path):
+    member = _workspace(tmp_path, member_drop=("policy",),
+                        member_extra="[policy]\nhuman_only = false\n")
+    with pytest.raises(ConfigError, match="cannot be removed"):
+        DomainConfig.load(member)
+
+
+@pytest.mark.parametrize("ceiling", ["100", "inf", True, float("nan")])
+def test_a_member_ceiling_that_is_not_a_number_is_refused(ceiling):
+    with pytest.raises(ConfigError, match="spend_ceiling"):
+        inherit.merge({"policy": {"spend_ceiling": 5.0}},
+                      {"policy": {"spend_ceiling": ceiling}})
+
+
+def test_a_nan_umbrella_ceiling_is_refused():
+    with pytest.raises(ConfigError, match="spend_ceiling"):
+        inherit.merge({"policy": {"spend_ceiling": float("nan")}},
+                      {"policy": {"spend_ceiling": 2.0}})
+
+
+def test_an_infinite_member_ceiling_still_takes_the_smaller():
+    data, sources = inherit.merge({"policy": {"spend_ceiling": 5.0}},
+                                  {"policy": {"spend_ceiling": float("inf")}})
+    assert data["policy"]["spend_ceiling"] == 5.0
+    assert sources["policy.spend_ceiling"] == "umbrella"
+
+
+def test_an_empty_member_min_core_keeps_the_umbrella_floor():
+    data, sources = inherit.merge({"upstream": {"min_core": "0.9.0"}},
+                                  {"upstream": {"min_core": ""}})
+    assert data["upstream"]["min_core"] == "0.9.0"
+    assert sources["upstream.min_core"] == "umbrella"
+
+
+def test_merge_shares_nothing_with_its_inputs():
+    umbrella = {"budgets": {"x": 1}, "hardware": {"c": {"min_threads": 2}}}
+    data, _ = inherit.merge(umbrella, {})
+    data["budgets"]["x"] = 2
+    data["hardware"]["c"]["min_threads"] = 9
+    assert umbrella == {"budgets": {"x": 1}, "hardware": {"c": {"min_threads": 2}}}
+
+
+def test_an_unparseable_umbrella_is_a_problem_in_the_member(tmp_path):
+    """Load still succeeds -- an unrelated outer domain.toml must not block a
+    domain -- but validate must say the shared safety rules are not applied."""
+    member = _workspace(tmp_path)
+    umbrella_toml = member.parent.parent / "domain.toml"
+    umbrella_toml.write_text(umbrella_toml.read_text() + "x = [\n")
+    problems = DomainConfig.load(member).check()
+    assert [p for p in problems
+            if p.startswith(f"domains: {umbrella_toml} is not valid TOML")
+            and "NOT applied" in p]

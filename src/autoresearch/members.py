@@ -155,6 +155,29 @@ def umbrella_raw(root) -> tuple[pathlib.Path, dict] | None:
     return None
 
 
+def unparseable_ancestors(root) -> list[str]:
+    """A problem for each `domain.toml` above `root` that is not valid TOML.
+
+    `umbrella_raw` passes over such a file, so a domain's load never fails
+    on an unrelated outer config. But if the file is this domain's umbrella,
+    the domain is running without the umbrella's shared tables and safety
+    rules, and `ar validate` must say so rather than pass."""
+    problems = []
+    for candidate in pathlib.Path(root).resolve().parents:
+        config_path = candidate / CONFIG_NAME
+        if not config_path.exists():
+            continue
+        try:
+            with config_path.open("rb") as fh:
+                tomllib.load(fh)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            problems.append(
+                f"{config_path} is not valid TOML ({exc}); if it is this "
+                "domain's umbrella, its shared tables and safety rules are "
+                "NOT applied")
+    return problems
+
+
 @dataclass
 class Workspace:
     umbrella: DomainConfig

@@ -24,6 +24,9 @@ Identity tables (`[domain]`, `[state]`, `[[tracks]]`, `[commands]`,
 """
 from __future__ import annotations
 
+import copy
+import math
+
 from .errors import ConfigError
 from .upstream import version_tuple
 
@@ -41,7 +44,15 @@ UMBRELLA, MEMBER = "umbrella", "member"
 def merge(umbrella: dict, member: dict) -> tuple[dict, dict[str, str]]:
     """`member`'s raw TOML with the umbrella's shared tables merged in, and
     where each inherited key came from, keyed `<table>.<key>` (accumulated
-    rules as `policy.human_only[<pattern>]`). Neither input is modified."""
+    rules as `policy.human_only[<pattern>]`). The result shares nothing
+    with either input.
+
+    A member value that would remove what the umbrella sets rather than
+    override it -- `policy = false`, `human_only = {}`, a `spend_ceiling`
+    that is a string -- is refused: the loader reads a falsy table as an
+    empty one, so passing it through would silently drop every inherited
+    safety rule."""
+    umbrella, member = copy.deepcopy(umbrella), copy.deepcopy(member)
     data = dict(member)
     sources: dict[str, str] = {}
     for table in INHERITED:
@@ -51,8 +62,12 @@ def merge(umbrella: dict, member: dict) -> tuple[dict, dict[str, str]]:
         if table not in member:
             data[table] = theirs
             _record(sources, table, theirs, UMBRELLA)
-        elif table not in umbrella or not (isinstance(theirs, dict)
-                                           and isinstance(ours, dict)):
+        elif isinstance(theirs, dict) and not isinstance(ours, dict):
+            raise ConfigError(
+                f"[{table}] is {ours!r} in the member, not a table; the "
+                f"umbrella's [{table}] cannot be removed this way -- set the "
+                "keys that differ, or leave the table out to inherit it")
+        elif not (isinstance(theirs, dict) and isinstance(ours, dict)):
             # The member's alone, or a shape only the parser can judge
             # (`[[remote]]` is a list, and a list replaces a list whole).
             _record(sources, table, ours, MEMBER)
@@ -81,7 +96,13 @@ def _merge_table(table: str, theirs: dict, ours: dict,
         sources[f"{table}.{key}"] = MEMBER if key in ours else UMBRELLA
     if table == "policy":
         for key in _ACCUMULATED:
-            # A malformed (non-list) value is left member-wins for
+            if (isinstance(theirs.get(key), list) and key in ours
+                    and not isinstance(ours[key], list)):
+                raise ConfigError(
+                    f"policy.{key} is {ours[key]!r} in the member, not a list "
+                    f"of rules; the umbrella's policy.{key} rules cannot be "
+                    "removed -- a member's rules are added to them")
+            # Any other malformed (non-list) value is left member-wins for
             # `Policy.from_dict` to refuse; a list from one side only is
             # that side's rules, recorded rule by rule like an accumulation.
             if not isinstance(merged.get(key), list):
@@ -92,13 +113,22 @@ def _merge_table(table: str, theirs: dict, ours: dict,
                 ours.get(key) if isinstance(ours.get(key), list) else [],
                 sources)
         ceilings = (theirs.get("spend_ceiling"), ours.get("spend_ceiling"))
-        if all(_is_number(c) for c in ceilings):
+        if all(c is not None for c in ceilings):
+            # min() of a string and a number is not a ceiling: "inf" would
+            # win over 5.0 and the loader would read it as no limit at all.
+            if not all(_is_number(c) for c in ceilings):
+                raise ConfigError(
+                    f"policy.spend_ceiling: the umbrella's {ceilings[0]!r} and "
+                    f"the member's {ceilings[1]!r} must both be numbers (not "
+                    "strings or NaN) so the smaller can be chosen")
             # Ties go to the umbrella: the value is the umbrella's either way.
             merged["spend_ceiling"] = min(ceilings)
             sources["policy.spend_ceiling"] = (
                 UMBRELLA if ceilings[0] <= ceilings[1] else MEMBER)
-    if table == "upstream" and theirs.get("min_core") and ours.get("min_core"):
-        higher = _higher_floor(theirs["min_core"], ours["min_core"])
+    if table == "upstream" and theirs.get("min_core"):
+        # An empty member floor is no floor, and never lowers the umbrella's.
+        higher = (_higher_floor(theirs["min_core"], ours["min_core"])
+                  if ours.get("min_core") else UMBRELLA)
         merged["min_core"] = (theirs if higher == UMBRELLA else ours)["min_core"]
         sources["upstream.min_core"] = higher
     return merged
@@ -123,7 +153,9 @@ def _accumulate(key: str, theirs: list, ours: list,
 
 
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """An int or float, infinity allowed; not a bool, a string or NaN."""
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and not math.isnan(value))
 
 
 def _pattern(rule):
