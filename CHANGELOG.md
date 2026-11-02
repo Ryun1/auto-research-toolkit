@@ -5,6 +5,32 @@ v0.2.0 and v0.8.0 onward are git tags (`git tag`); v0.3.0 to v0.7.1 exist
 only as their `Release:` commits, named beside each heading. What a domain
 must change to take a release is in [docs/MIGRATION.md](docs/MIGRATION.md).
 
+## v0.14.0 — 2026-11-02
+
+Member domains (one checkout running several goals), a read-only web view of
+a campaign, and field fixes from starks-research.
+
+- Member domains (#63-#69): an umbrella lists its members in `[domains]
+  members`; members inherit `[policy]`, `[budgets]`, `[upstream]`,
+  `[coordinator]` and the other shared tables, with safety rules that only
+  add up (`human_only` and `never_push_remotes` accumulate, the smaller
+  `spend_ceiling` and the higher `min_core` win); `ar domains` and
+  `ar domains show` print the workspace and each key's source.
+- Entry ids resolve across members in `ar close --superseded-by`,
+  `ar entry show`, skill citations and `ar validate`; lineage stays inside one
+  domain; `ar domains relink` turns superseded-by URLs back into ids.
+- `--all-domains` on `board`, `rank`, `budget`, `validate` and `reap`.
+- A member with no defect track files and exports harness defects on the
+  umbrella's track; `ar init --member` scaffolds a member.
+- The tamper scan classifies a member's git paths against the member's lanes.
+- `ar ui`: a local read-only page of the campaign with a knowledge graph of
+  entries, pushed live as records change; `ar board --json` prints the board
+  as data.
+- `ar reap` counts a commit as liveness only when it marks the holder
+  (`[session]` or a `Session:` trailer).
+- A `--claim-token` after a domain's measure flags stays `ar`'s.
+- A core installed from a checkout between releases reports its commit.
+
 ## v0.13.0 — 2026-10-29
 
 Field fixes from mldsa87, SLH-DSA-128 and starks-research, measurement kits,

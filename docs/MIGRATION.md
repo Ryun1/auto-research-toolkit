@@ -16,7 +16,7 @@ breaks without it), **behavioural** (it loads, but acts differently), or
 
 ---
 
-## Unreleased
+## 0.14.0
 
 - **Behavioural: only a commit that marks the holder keeps its claim alive.**
   `ar reap` no longer counts a commit whose message names both the holder's
