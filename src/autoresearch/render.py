@@ -284,6 +284,13 @@ def board_document(doc) -> str:
     return out
 
 
+def goal_line(goal) -> str:
+    """The goal's header line. One derivation, so the board and each
+    `--all-domains` section name a goal the same way. `goal` is a config's
+    `Goal` or `board.snapshot`'s goal dict."""
+    return f"## Goal: {goal['id'] if isinstance(goal, dict) else goal.id}"
+
+
 def holdout_line(summary) -> str:
     """Pass/fail and the count: everything the search may know (#38)."""
     verdict = summary["last"] or "not consulted on the best config"
@@ -308,7 +315,7 @@ def board_text(doc) -> str:
     goal = doc["goal"]
     out = [f"# {doc['domain']} — board", ""]
 
-    out.append(f"## Goal: {goal['id']}")
+    out.append(goal_line(goal))
     out.append(f"objective  {goal['objective']}  ({goal['direction']})")
     if goal["derived"]:
         out.append("derived    " + ", ".join(f"{k} = {v}" for k, v in goal["derived"].items()))

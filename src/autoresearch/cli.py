@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import datetime as dt
+import io
 import json
 import math
 import os
@@ -514,8 +515,83 @@ def cmd_escalate(args):
                                        escalate_mod.NOT_TRIGGERED) else 1
 
 
-def cmd_board(args):
+@dataclasses.dataclass
+class Report:
+    """One domain's answer from a read-only verb, before it is printed.
+
+    `text` is exactly the prose the verb prints for that domain alone and
+    `data` exactly what its `--json` prints, so `--all-domains` composes the
+    single-domain output rather than re-deriving it. Stderr is not captured:
+    a verb's notes go out as they happen, in either mode."""
+    status: int
+    text: str
+    data: object | None = None
+
+
+def _run_report(args, fn, *, name_failing=False) -> int:
+    """Run `fn(config, args) -> Report` for this domain, or with
+    `--all-domains` for every domain of its workspace, umbrella first.
+
+    Each section is the domain's single output under a `== <path> (<name>) ==`
+    header and its goal line. A domain whose verb refuses gets `ar: <error>`
+    as its body and status 2, and the sections after it still print: one
+    broken member must not hide the others. The exit is the worst status.
+    `name_failing` appends `failing: <path>, ...` to the prose when any
+    domain's status is non-zero."""
     config = _load(args)
+    as_json = getattr(args, "json", False)
+    if getattr(args, "all_domains", False):
+        # Not `workspace_or_none`: asked for every domain, a broken umbrella
+        # or sibling is the answer, and one domain alone would pass for it.
+        workspace = members_mod.Workspace.for_domain(config)
+        if workspace.members:
+            return _run_all_domains(workspace, args, fn, as_json, name_failing)
+        print(f"ar: --all-domains: {workspace.root} has no member domains; "
+              "showing this domain only", file=sys.stderr)
+    report = fn(config, args)
+    if as_json:
+        print(json.dumps(report.data, indent=2))
+    else:
+        sys.stdout.write(report.text)
+    return report.status
+
+
+def _run_all_domains(workspace, args, fn, as_json, name_failing) -> int:
+    statuses: dict[str, int] = {}
+    data: dict[str, object] = {}
+    sections: list[str] = []
+    for path, config in workspace.domains():
+        try:
+            report = fn(config, args)
+        except AutoresearchError as exc:
+            report = Report(2, f"ar: {exc}\n", {"error": str(exc)})
+        statuses[path] = report.status
+        data[path] = report.data
+        sections.append(f"== {path} ({config.name}) ==\n"
+                        f"{render.goal_line(config.goal)}\n{report.text}")
+    if as_json:
+        print(json.dumps({"domains": data}, indent=2))
+        return max(statuses.values())
+    failing = [path for path, status in statuses.items() if status]
+    if name_failing and failing:
+        sections.append(f"failing: {', '.join(failing)}\n")
+    out = ""
+    for section in sections:
+        # Exactly one blank line between sections. A body that already ends
+        # in one (the board does) keeps its bytes, so each section stays the
+        # domain's single output verbatim.
+        if out and not out.endswith("\n\n"):
+            out += "\n" if out.endswith("\n") else "\n\n"
+        out += section
+    sys.stdout.write(out)
+    return max(statuses.values())
+
+
+def cmd_board(args):
+    return _run_report(args, _board_report)
+
+
+def _board_report(config, args) -> Report:
     target_error = None
     try:
         target = _probe_target(config)
@@ -525,11 +601,7 @@ def cmd_board(args):
     from . import board as board_mod
     doc = board_mod.snapshot(config, target=target, target_error=target_error,
                              epoch=getattr(args, "epoch", None))
-    if getattr(args, "json", False):
-        print(json.dumps(board_mod.finite(doc), indent=2))
-        return 0
-    sys.stdout.write(render.board_document(doc))
-    return 0
+    return Report(0, render.board_document(doc), board_mod.finite(doc))
 
 
 def cmd_ui(args):
@@ -1740,7 +1812,10 @@ def _score_row(score) -> dict:
 
 
 def cmd_rank(args):
-    config = _load(args)
+    return _run_report(args, _rank_report)
+
+
+def _rank_report(config, args) -> Report:
     entries = _store(config).all()
     domain = budget_mod.domain_budget(
         config, spent_runs=budget_mod.total_runs(config))
@@ -1748,40 +1823,38 @@ def cmd_rank(args):
     risk = config.risk if args.risk is None else args.risk
     ranking = rank_mod.rank(entries, config, risk=risk,
                             budget_ok=lambda e: e.cost <= remaining)
+    lines = []
     if "score" in config.commands:
         # The human-correction surface shows what the loop would dispatch,
         # which is the domain's prices when the seam is installed.
         ranking = scoring.seam_ranking(config, ranking, entries, risk)
-        if not getattr(args, "json", False):
-            print(f"priced by domain seam: {config.commands['score']}\n")
+        lines.append(f"priced by domain seam: {config.commands['score']}\n")
     # Shortlisted first: `shortlist` is where the risk dial spends its slots,
     # and the table is the ranking a human corrects. A novel pick may sit low
     # in it by design, and one shown unmarked reads as the formula having
     # gone wrong.
     shortlist = ranking.shortlist(args.top) if args.top else []
-    if getattr(args, "json", False):
-        by_filter: dict[str, int] = {}
-        for card in ranking.excluded:
-            by_filter[card.excluded] = by_filter.get(card.excluded, 0) + 1
-        # An unlimited meter's remaining is float infinity, which is not a
-        # number any JSON consumer can parse -- it degrades to null.
-        print(json.dumps({
-            "ranking": [_score_row(s) for s in ranking.scored]
-                       + [_score_row(s) for s in ranking.excluded],
-            "shortlist": [_score_row(s) for s in shortlist],
-            "excluded_summary": {"count": len(ranking.excluded),
-                                 "by_filter": by_filter},
-            "risk": ranking.risk,
-            "remaining": remaining if math.isfinite(remaining) else None,
-        }, indent=2))
-        return 0
-    print(ranking.explain(full=args.all))
+    by_filter: dict[str, int] = {}
+    for card in ranking.excluded:
+        by_filter[card.excluded] = by_filter.get(card.excluded, 0) + 1
+    # An unlimited meter's remaining is float infinity, which is not a
+    # number any JSON consumer can parse -- it degrades to null.
+    data = {
+        "ranking": [_score_row(s) for s in ranking.scored]
+                   + [_score_row(s) for s in ranking.excluded],
+        "shortlist": [_score_row(s) for s in shortlist],
+        "excluded_summary": {"count": len(ranking.excluded),
+                             "by_filter": by_filter},
+        "risk": ranking.risk,
+        "remaining": remaining if math.isfinite(remaining) else None,
+    }
+    lines.append(ranking.explain(full=args.all))
     if args.top:
-        print(f"\nshortlist (top {args.top}):")
+        lines.append(f"\nshortlist (top {args.top}):")
         for s in shortlist:
-            print(f"  {s.entry_id}  {s.title}"
-                  + ("  [novel]" if s.novel else "  [branch]"))
-    return 0
+            lines.append(f"  {s.entry_id}  {s.title}"
+                         + ("  [novel]" if s.novel else "  [branch]"))
+    return Report(0, "".join(line + "\n" for line in lines), data)
 
 
 def _meter_json(meter) -> dict:
@@ -1795,7 +1868,10 @@ def _meter_json(meter) -> dict:
 
 
 def cmd_budget(args):
-    config = _load(args)
+    return _run_report(args, _budget_report)
+
+
+def _budget_report(config, args) -> Report:
     store = _store(config)
     entries = store.all()
     all_runs = runs_mod.read_all(config.paths.runs)
@@ -1859,45 +1935,45 @@ def cmd_budget(args):
             target),
         holdout=holdout_reason)
 
-    if getattr(args, "json", False):
-        # Non-finite objective/target values serialise as bare Infinity/NaN,
-        # which spec-compliant parsers reject (the brief builder fights the
-        # same failure at loop.py). "No number" rides as null, same contract.
-        def finite(v):
-            return v if isinstance(v, (int, float)) and math.isfinite(v) else None
-        print(json.dumps({
-            "meters": meters,
-            "claims": claim_rows,
-            "stop": {"reason": decision.reason, "detail": decision.detail},
-            "target": finite(target),
-            "best": finite(best[0]) if best else None,
-            # Named, never dropped silently: a wiring check's number is real,
-            # and a reader who cannot see what the frontier ignored cannot tell
-            # a flat frontier from a moved one (sig.golf H4).
-            "excluded_scaffold": (
-                {"id": excluded[1].id, "entry": excluded[1].entry,
-                 "objective": finite(excluded[0]), "reason": excluded[2]}
-                if excluded else None),
-            **({"holdout": holdout_mod.summary(config, best, target)}
-               if holdout_mod.declared(config) else {}),
-        }, indent=2))
-        return 0
+    # Non-finite objective/target values serialise as bare Infinity/NaN,
+    # which spec-compliant parsers reject (the brief builder fights the
+    # same failure at loop.py). "No number" rides as null, same contract.
+    def finite(v):
+        return v if isinstance(v, (int, float)) and math.isfinite(v) else None
+    data = {
+        "meters": meters,
+        "claims": claim_rows,
+        "stop": {"reason": decision.reason, "detail": decision.detail},
+        "target": finite(target),
+        "best": finite(best[0]) if best else None,
+        # Named, never dropped silently: a wiring check's number is real,
+        # and a reader who cannot see what the frontier ignored cannot tell
+        # a flat frontier from a moved one (sig.golf H4).
+        "excluded_scaffold": (
+            {"id": excluded[1].id, "entry": excluded[1].entry,
+             "objective": finite(excluded[0]), "reason": excluded[2]}
+            if excluded else None),
+        **({"holdout": holdout_mod.summary(config, best, target)}
+           if holdout_mod.declared(config) else {}),
+    }
 
-    print(domain.report())
-    print()
-    print(iteration.report())
-    print(f"\n{len(held)} live claim(s)")
+    out = io.StringIO()
+    print(domain.report(), file=out)
+    print(file=out)
+    print(iteration.report(), file=out)
+    print(f"\n{len(held)} live claim(s)", file=out)
     for entry, row in zip(held, claim_rows, strict=True):
         claim = budget_mod.claim_budget(entry, config)
         claim["runs"].spent = row["runs_spent"]
-        print(f"  {entry.id}  {entry.claim.session}")
-        print("    " + claim.report().replace("\n", "\n    "))
+        print(f"  {entry.id}  {entry.claim.session}", file=out)
+        print("    " + claim.report().replace("\n", "\n    "), file=out)
         if row["overrun"]:
-            print(f"    OVERRUN: {row['overrun']}")
+            print(f"    OVERRUN: {row['overrun']}", file=out)
 
     if holdout_mod.declared(config):
-        print("\n" + render.holdout_line(holdout_mod.summary(config, best, target)))
-    print(f"\nstop decision: {decision}")
+        print("\n" + render.holdout_line(holdout_mod.summary(config, best, target)),
+              file=out)
+    print(f"\nstop decision: {decision}", file=out)
     # The last line repeats the decision above it in the numbers a reader is
     # looking for, so it is derived from that decision rather than from a
     # second, looser `is_met`: a budget that prints GOAL MET beside a
@@ -1907,15 +1983,15 @@ def cmd_budget(args):
     if best is not None and target:
         met = decision.reason == budget_mod.MET
         print(f"best objective {render._fmt(best[0])} vs target {render._fmt(target)}"
-              + ("  ** GOAL MET **" if met else ""))
+              + ("  ** GOAL MET **" if met else ""), file=out)
     if excluded is not None:
         # Named, never dropped silently (sig.golf H4): a wiring check's number
         # is real, and a reader who cannot see what the frontier ignored cannot
         # tell a flat frontier from a moved one.
         value, record, reason = excluded
         print(f"excluded  {record.id} on {record.entry or '(no entry)'}: "
-              f"objective {render._fmt(value)}: {reason}")
-    return 0
+              f"objective {render._fmt(value)}: {reason}", file=out)
+    return Report(0, out.getvalue(), data)
 
 
 def cmd_usage(args):
@@ -2061,7 +2137,10 @@ def cmd_migrate(args):
 
 
 def cmd_validate(args):
-    config = _load(args)
+    return _run_report(args, _validate_report, name_failing=True)
+
+
+def _validate_report(config, args) -> Report:
     problems = list(config.check())
     # Read the merge residue before the entry store parses, and stop here. An
     # unfinished merge leaves no unmerged path for git to report, and the only
@@ -2069,14 +2148,9 @@ def cmd_validate(args):
     # naming the cause, in every file at once, is the whole point.
     residue = merge_mod.residue_problems(config)
     if residue:
-        if getattr(args, "json", False):
-            print(json.dumps({"ok": False, "problems": residue, "skipped_runs": 0},
-                             indent=2))
-        else:
-            print(f"\n{len(residue)} problem(s):")
-            for p in residue:
-                print(f"  - {p}")
-        return 1
+        return Report(1, f"\n{len(residue)} problem(s):\n"
+                         + "".join(f"  - {p}\n" for p in residue),
+                      {"ok": False, "problems": residue, "skipped_runs": 0})
     store = _store(config)
     entries, read_problems = store.read_all()
     problems += read_problems
@@ -2154,32 +2228,32 @@ def cmd_validate(args):
                 + validate_mod.lineage_warnings(config)
                 + validate_mod.citation_warnings(config))
 
-    if getattr(args, "json", False):
-        # Only the document: warnings and the read-counts summary are prose
-        # channels, and a --json consumer parses stdout, not around it.
-        # `skipped_runs` rides in the document because a domain of nothing but
-        # foreign rows must not read as a clean board that read everything.
-        print(json.dumps({"ok": not problems, "problems": problems,
-                          "skipped_runs": skipped_runs}, indent=2))
-        return 1 if problems else 0
+    # Only the document: warnings and the read-counts summary are prose
+    # channels, and a --json consumer parses stdout, not around it.
+    # `skipped_runs` rides in the document because a domain of nothing but
+    # foreign rows must not read as a clean board that read everything.
+    data = {"ok": not problems, "problems": problems,
+            "skipped_runs": skipped_runs}
+    status = 1 if problems else 0
 
+    out = io.StringIO()
     for w in warnings:
-        print(f"! {w}")
+        print(f"! {w}", file=out)
 
     if skipped_runs:
         print(f"note: {skipped_runs} run row(s) predate adoption of this schema "
-              f"and were not checked")
+              f"and were not checked", file=out)
     print(f"checked {len(entries)} entries, {len(found)} skills, "
           f"{len(config.tracks)} tracks, "
           f"{len(config.policy.forbidden_paths + config.policy.human_only + config.policy.never_push_remotes)} "
-          f"policy rules")
+          f"policy rules", file=out)
     if problems:
-        print(f"\n{len(problems)} problem(s):")
+        print(f"\n{len(problems)} problem(s):", file=out)
         for p in problems:
-            print(f"  - {p}")
-        return 1
-    print("clean")
-    return 0
+            print(f"  - {p}", file=out)
+    else:
+        print("clean", file=out)
+    return Report(status, out.getvalue(), data)
 
 
 def _skills(config):
@@ -2466,6 +2540,13 @@ def _env():
 
 # -- parser ---------------------------------------------------------------
 
+def _all_domains_flag(parser) -> None:
+    parser.add_argument(
+        "--all-domains", action="store_true", dest="all_domains",
+        help="run for every domain of this workspace, umbrella first, one "
+             "section (or JSON key) per domain")
+
+
 def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> argparse.ArgumentParser:
     import os
     ap = argparse.ArgumentParser(prog="ar", description=__doc__.splitlines()[0])
@@ -2544,6 +2625,7 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                                         "instead of the current one")
     boardp.add_argument("--json", action="store_true",
                         help="print the board's facts as one JSON document")
+    _all_domains_flag(boardp)
     boardp.set_defaults(func=cmd_board)
     holdoutp = sub.add_parser("holdout", help="the held-out check a win must pass")
     hsub = holdoutp.add_subparsers(dest="holdout_cmd", required=True)
@@ -2567,6 +2649,7 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     validatep = sub.add_parser("validate", help="check records, views, runs and policy")
     validatep.add_argument("--json", action="store_true",
                            help="print {ok, problems} as JSON and nothing else")
+    _all_domains_flag(validatep)
     validatep.set_defaults(func=cmd_validate)
     sub.add_parser("policy", help="show never-rules and prove each refuses something"
                    ).set_defaults(func=cmd_policy)
@@ -2584,11 +2667,13 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
                        help="share of the shortlist aimed at novel branches "
                             "(entries with no parent); overrides the domain's "
                             f"coordinator.risk (core default {rank_mod.RISK})")
+    _all_domains_flag(rankp)
     rankp.set_defaults(func=cmd_rank)
 
     bud = sub.add_parser("budget", help="every meter, and the stop decision")
     bud.add_argument("--json", action="store_true",
                      help="print meters, claims and the stop decision as JSON")
+    _all_domains_flag(bud)
     bud.set_defaults(func=cmd_budget)
 
     mig = sub.add_parser("migrate", help="convert a prose corpus into records (one way)")
