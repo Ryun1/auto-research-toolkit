@@ -11,13 +11,16 @@ it weaken a safety rule by omission or override:
 - `policy.human_only` and `policy.never_push_remotes` accumulate: the
   umbrella's rules, then the member's. A rule a member could shadow would be
   a comment.
-- `policy.spend_ceiling` takes the smaller value.
+- `policy.spend_ceiling` takes the smaller value; both sides must name the
+  same `policy.currency` (unset is the Policy default), or it is refused.
 - `upstream.min_core` takes the higher floor: one core install serves every
   member.
 
-`policy.forbidden_paths` is member-wins like any key: its patterns are
-relative to each domain's root, so the umbrella's would match the wrong
-files in a member.
+`policy.forbidden_paths` is member-wins like any key, and its patterns are
+relative to whichever domain's root loads them. A member that does not set
+it inherits the umbrella's patterns, applied from the member's own root; a
+member that sets it replaces the umbrella's list whole -- they do not
+accumulate, since the umbrella's patterns would match the wrong files there.
 
 Identity tables (`[domain]`, `[state]`, `[[tracks]]`, `[commands]`,
 `[lanes]`, ...) are never inherited: each says which domain this is.
@@ -28,6 +31,7 @@ import copy
 import math
 
 from .errors import ConfigError
+from .policy import Policy
 from .upstream import version_tuple
 
 #: the umbrella tables a member inherits unless it sets them
@@ -121,6 +125,20 @@ def _merge_table(table: str, theirs: dict, ours: dict,
                     f"policy.spend_ceiling: the umbrella's {ceilings[0]!r} and "
                     f"the member's {ceilings[1]!r} must both be numbers (not "
                     "strings or NaN) so the smaller can be chosen")
+            # min() of 5 EUR and 2 USD is not a ceiling in either currency.
+            # Each side's currency is what its own [policy] says, else the
+            # Policy default -- the member's unset currency is not the
+            # umbrella's, so a bare member ceiling is read as the default.
+            default = Policy.__dataclass_fields__["currency"].default
+            currencies = (theirs.get("currency", default),
+                          ours.get("currency", default))
+            if currencies[0] != currencies[1]:
+                raise ConfigError(
+                    f"policy.spend_ceiling: the umbrella's is "
+                    f"{ceilings[0]!r} {currencies[0]} and the member's "
+                    f"{ceilings[1]!r} {currencies[1]}; the smaller of two "
+                    "currencies is meaningless -- set the same "
+                    "policy.currency in both")
             # Ties go to the umbrella: the value is the umbrella's either way.
             merged["spend_ceiling"] = min(ceilings)
             sources["policy.spend_ceiling"] = (

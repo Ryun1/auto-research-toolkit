@@ -31,6 +31,7 @@ What loading refuses, each by name:
 from __future__ import annotations
 
 import pathlib
+import re
 import tomllib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -122,6 +123,33 @@ def _read_raw(config_path: pathlib.Path) -> dict | None:
         return None
 
 
+#: a `[domains]` header, found by text in a file that does not parse
+_DOMAINS_HEADER = re.compile(r"^\s*\[\s*domains\s*\]", re.MULTILINE)
+
+
+def _read_ancestor(config_path: pathlib.Path) -> dict | None:
+    """`_read_raw` for a `domain.toml` above a domain, except that one which
+    does not parse but declares `[domains]` is refused: it is plausibly this
+    domain's umbrella, and a member loaded without it would run without the
+    umbrella's `human_only` and `never_push_remotes` rules -- fail-open."""
+    try:
+        with config_path.open("rb") as fh:
+            return tomllib.load(fh)
+    except OSError:
+        return None
+    except tomllib.TOMLDecodeError as exc:
+        try:
+            text = config_path.read_text(errors="replace")
+        except OSError:
+            return None
+        if _DOMAINS_HEADER.search(text):
+            raise ConfigError(
+                f"{config_path} is not valid TOML ({exc}) and declares "
+                "[domains]; a member below it cannot load without its "
+                "umbrella's safety rules -- fix that file") from None
+        return None
+
+
 def _globs_in(data: dict | None) -> tuple[str, ...]:
     domains = (data or {}).get("domains")
     members = domains.get("members") if isinstance(domains, dict) else None
@@ -143,14 +171,15 @@ def umbrella_raw(root) -> tuple[pathlib.Path, dict] | None:
     Raw, never a `DomainConfig`: `DomainConfig.load` calls this to merge the
     inherited tables, so loading the umbrella here would recurse, and would
     make a member's load fail on the umbrella's own problems -- which
-    `check()` reports through `Workspace.for_domain` instead. An umbrella
-    that does not parse is not one: nothing is inherited from it."""
+    `check()` reports through `Workspace.for_domain` instead. An outer
+    file that does not parse is passed over, unless it declares `[domains]`:
+    then it is refused (`_read_ancestor`), never silently not inherited."""
     root = pathlib.Path(root).resolve()
     for candidate in root.parents:
         config_path = candidate / CONFIG_NAME
         if not config_path.exists():
             continue
-        data = _read_raw(config_path)
+        data = _read_ancestor(config_path)
         globs = _globs_in(data)
         if not globs:
             continue
@@ -162,10 +191,11 @@ def umbrella_raw(root) -> tuple[pathlib.Path, dict] | None:
 def unparseable_ancestors(root) -> list[str]:
     """A problem for each `domain.toml` above `root` that is not valid TOML.
 
-    `umbrella_raw` passes over such a file, so a domain's load never fails
-    on an unrelated outer config. But if the file is this domain's umbrella,
-    the domain is running without the umbrella's shared tables and safety
-    rules, and `ar validate` must say so rather than pass."""
+    `umbrella_raw` passes over such a file when it does not declare
+    `[domains]` (one that does refuses the load), so a domain's load never
+    fails on an unrelated outer config. If the file was meant as this
+    domain's umbrella, the domain is running without its shared tables and
+    safety rules, and `ar validate` must say so rather than pass."""
     problems = []
     for candidate in pathlib.Path(root).resolve().parents:
         config_path = candidate / CONFIG_NAME

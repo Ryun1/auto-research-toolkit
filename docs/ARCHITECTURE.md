@@ -445,18 +445,24 @@ it weaken a safety rule by omission:
   member could shadow would be a comment. This includes
   `never_push_remotes`, where a member that wants to push somewhere the
   umbrella forbids has to change the umbrella.
-- `policy.forbidden_paths` is **member-wins**. Its patterns are relative to
-  each domain's root, so the umbrella's would match the wrong files in a
-  member.
-- `policy.spend_ceiling` takes the **smaller** value; a non-number is refused.
+- `policy.forbidden_paths` is **member-wins**, and its patterns are relative
+  to the root of the domain that loads them. A member that does not set it
+  inherits the umbrella's list, applied from the member's own root; a member
+  that sets it replaces the umbrella's list whole (no accumulation: the
+  umbrella's patterns could match the wrong files in a member).
+- `policy.spend_ceiling` takes the **smaller** value; a non-number is
+  refused, and so are two ceilings in different `policy.currency` values
+  (an unset currency is the default, USD).
 - `upstream.min_core` takes the **higher** floor, because one core install
   serves every member. An empty member value never erases the umbrella's.
 
 A member also cannot remove an inherited table by passing a non-table
 (`policy = false`, `human_only = {}`): the loader reads a falsy table as an
 empty one, which would silently drop every inherited rule, so it is refused.
-An unparseable `domain.toml` anywhere above a domain is a `validate` problem,
-not a silent skip.
+An unparseable `domain.toml` above a member that declares `[domains]` refuses
+the member's load, since the member would otherwise run without the
+umbrella's safety rules; any other unparseable `domain.toml` above a domain
+is a `validate` problem, not a silent skip.
 
 Relative paths inside inherited tables (`skills.dir`, `forbidden_paths`)
 resolve against each member's own root, not the umbrella's, so a shared

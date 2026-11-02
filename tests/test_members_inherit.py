@@ -5,6 +5,8 @@ every check downstream sees the effective config. Tables merge key by key
 with the member winning, except where a member winning would weaken a
 safety rule: `human_only` and `never_push_remotes` accumulate,
 `spend_ceiling` takes the smaller value and `min_core` the higher floor."""
+import re
+
 import pytest
 
 from autoresearch import cli, inherit, members
@@ -148,14 +150,31 @@ def test_the_umbrella_itself_inherits_nothing(umbrella):
     assert config.sources == {} and config.umbrella_root is None
 
 
-def test_a_malformed_umbrella_does_not_break_a_member_load(tmp_path):
+def test_a_malformed_umbrella_refuses_its_member_load(tmp_path):
+    """An unparseable file that declares [domains] is plausibly this
+    member's umbrella: loading without it would run the member fail-open,
+    without the umbrella's human_only and never_push_remotes rules."""
     member = _workspace(tmp_path, member_drop=("budgets",))
     umbrella_toml = member.parent.parent / "domain.toml"
     umbrella_toml.write_text(umbrella_toml.read_text() + "x = [\n")
-    assert members.umbrella_raw(member) is None
-    config = DomainConfig.load(member)
-    assert config.budgets == {} and config.sources == {}
+    with pytest.raises(ConfigError, match=(
+            rf"{re.escape(str(umbrella_toml))} is not valid TOML \(.*\) and declares "
+            r"\[domains\]; a member below it cannot load without its "
+            r"umbrella's safety rules -- fix that file")):
+        DomainConfig.load(member)
+
+
+def test_an_unrelated_unparseable_outer_file_still_loads(tmp_path):
+    """No [domains] line: not an umbrella, so it must not block a domain."""
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    (outer / "domain.toml").write_text('[domain]\nname = "x"\nbroken = [\n')
+    inner = member_domain(outer / "inner")
+    assert members.umbrella_raw(inner) is None
+    config = DomainConfig.load(inner)
     assert config.umbrella_root is None
+    assert [p for p in config.check()
+            if p.startswith(f"domains: {outer / 'domain.toml'} is not valid")]
 
 
 def test_a_broken_umbrella_that_parses_is_inherited_and_named(tmp_path):
@@ -232,18 +251,6 @@ def test_merge_shares_nothing_with_its_inputs():
     assert umbrella == {"budgets": {"x": 1}, "hardware": {"c": {"min_threads": 2}}}
 
 
-def test_an_unparseable_umbrella_is_a_problem_in_the_member(tmp_path):
-    """Load still succeeds -- an unrelated outer domain.toml must not block a
-    domain -- but validate must say the shared safety rules are not applied."""
-    member = _workspace(tmp_path)
-    umbrella_toml = member.parent.parent / "domain.toml"
-    umbrella_toml.write_text(umbrella_toml.read_text() + "x = [\n")
-    problems = DomainConfig.load(member).check()
-    assert [p for p in problems
-            if p.startswith(f"domains: {umbrella_toml} is not valid TOML")
-            and "NOT applied" in p]
-
-
 # -- `ar domains show` -------------------------------------------------------
 
 def _show(args, capsys):
@@ -311,3 +318,26 @@ def test_bare_domains_still_lists(umbrella, capsys):
     assert code == 0
     assert cap.out.splitlines()[0] == f"umbrella: {umbrella}"
     assert "* . (umbrella)" in cap.out
+
+
+@pytest.mark.parametrize("umbrella_currency, member_currency", [
+    ("EUR", "USD"), (None, "GBP"), ("GBP", None)])
+def test_ceilings_in_different_currencies_are_refused(umbrella_currency,
+                                                       member_currency):
+    """min() across currencies is meaningless; an unset currency is the
+    Policy default (USD)."""
+    def policy(currency, ceiling):
+        return {"spend_ceiling": ceiling,
+                **({"currency": currency} if currency else {})}
+    with pytest.raises(ConfigError, match=(
+            rf"spend_ceiling.*{umbrella_currency or 'USD'}.*"
+            rf"{member_currency or 'USD'}")):
+        inherit.merge({"policy": policy(umbrella_currency, 5.0)},
+                      {"policy": policy(member_currency, 2.0)})
+
+
+def test_ceilings_in_the_same_currency_still_take_the_smaller():
+    data, _ = inherit.merge(
+        {"policy": {"spend_ceiling": 5.0, "currency": "EUR"}},
+        {"policy": {"spend_ceiling": 2.0, "currency": "EUR"}})
+    assert data["policy"]["spend_ceiling"] == 2.0
