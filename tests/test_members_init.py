@@ -144,3 +144,21 @@ def test_init_member_refuses_a_name_that_would_break_the_toml(umbrella, capsys, 
     assert code == 2
     assert "--name" in err
     assert not (umbrella / "domains" / "c").exists()
+
+
+@pytest.mark.parametrize("rel, culprit, relation", [
+    ("domains/a/sub", "domains/a", "inside"),
+    ("domains", "domains/a", "contains")])
+def test_init_member_refuses_nesting_with_an_existing_member(
+        umbrella, capsys, rel, culprit, relation):
+    """Appending `domains/a/sub` to [domains] would nest a member and break
+    every workspace load; refuse before writing anything."""
+    toml = umbrella / "domain.toml"
+    before = toml.read_bytes()
+    tree = sorted(p for p in umbrella.rglob("*"))
+    code, _, err = _ar(capsys, "--domain", str(umbrella), "init",
+                       "--member", rel, "--prefix", "Z")
+    assert code == 2
+    assert f"member {culprit}" in err and relation in err
+    assert toml.read_bytes() == before
+    assert sorted(p for p in umbrella.rglob("*")) == tree

@@ -852,6 +852,22 @@ def init_member(umbrella: DomainConfig, rel: str, prefix: str,
             f"{target / 'domain.toml'} already exists. `ar init --member` "
             f"will not scaffold over a live domain; pick a new directory.")
     workspace = members_mod.Workspace.load(root)
+    # Members nest one level only: a member inside another (or around one)
+    # is refused by every workspace load, so scaffolding it -- and appending
+    # it to [domains] -- would break the umbrella. The umbrella's own
+    # non-member directories (`labs/x`) are fine.
+    for path, config in workspace.members.items():
+        member_root = config.paths.root
+        if target.is_relative_to(member_root):
+            raise ConfigError(
+                f"--member {rel!r} is inside member {path}; member domains "
+                f"nest one level only -- pick a directory outside every "
+                f"member, like domains/<name>")
+        if member_root.is_relative_to(target):
+            raise ConfigError(
+                f"--member {rel!r} contains member {path}; member domains "
+                f"nest one level only -- pick a directory that holds no "
+                f"member, like domains/<name>")
     for path, config in workspace.domains():
         if any(t.prefix == prefix for t in config.tracks.values()):
             raise ConfigError(
