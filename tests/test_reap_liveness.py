@@ -5,7 +5,8 @@ a provably.fast session that had committed a memo two hours earlier: "its
 claim was silent but the session was not". And claims ran 27-47 h past a
 2 h budget with only a curator's manual check noticing. The holder's last
 sign of life -- an event it wrote on any entry, a run row it recorded, a
-commit naming it -- now counts, and the board names overrun claims.
+commit marking it as the author -- now counts, and the board names overrun
+claims.
 """
 import datetime as dt
 import subprocess
@@ -70,7 +71,7 @@ def _commit(root, message):
         subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
 
 
-def test_a_commit_naming_the_holder_keeps_it_alive(sandbox, store):
+def test_a_commit_marking_the_holder_keeps_it_alive(sandbox, store):
     _stale_claim(sandbox, store, session="scout-3")
     _commit(sandbox.paths.root, "Q1 memo [scout-3]")
     with pytest.raises(ClaimError, match=r"commit \w+ marking \[scout-3\]"):
@@ -79,12 +80,10 @@ def test_a_commit_naming_the_holder_keeps_it_alive(sandbox, store):
 
 @pytest.mark.parametrize("message, matched", [
     ("B10 audit\n\nSession: moon", "marking Session: moon"),
-    ("moon closes in on Q1", "naming Q1 and moon"),
-    ("Q1 closed by moon.", "naming Q1 and moon"),      # a sentence ends in
-    ("moon closes Q1.", "naming Q1 and moon"),         # a full stop
+    ("B10 audit\n\nsession:  moon ", "marking Session: moon"),
+    ("[moon] B10 audit", r"marking \[moon\]"),
 ])
-def test_a_marked_commit_or_one_naming_holder_and_entry_keeps_it_alive(
-        sandbox, store, message, matched):
+def test_a_marked_commit_keeps_it_alive(sandbox, store, message, matched):
     _stale_claim(sandbox, store, session="moon")
     _commit(sandbox.paths.root, message)
     with pytest.raises(ClaimError, match=matched):
@@ -96,6 +95,9 @@ def test_a_marked_commit_or_one_naming_holder_and_entry_keeps_it_alive(
     "Q1 closed superseded",                     # the entry, not the holder
     "moon notes on Q10",                        # Q10 is not Q1
     "moon.v2 notes on Q1",                      # moon.v2 is not moon
+    "moon closes in on Q1",                     # holder and entry, unmarked
+    "Q1 closed by moon.",
+    "Session: moon.v2",                         # another session's trailer
 ])
 def test_a_commit_that_only_mentions_the_name_is_not_a_sign_of_life(
         sandbox, store, message):
@@ -106,6 +108,24 @@ def test_a_commit_that_only_mentions_the_name_is_not_a_sign_of_life(
     _commit(sandbox.paths.root, message)
     _, former, _ = Claims(store, sandbox, "reaper").reap("Q1")
     assert former == "moon"
+
+
+def test_another_session_writing_about_a_stuck_claim_does_not_keep_it_alive(
+        sandbox, store):
+    """starks H12 (#60): a curator noting that a claim is stuck names exactly
+    the holder and the entry. starks commit cc925cf, by session c42-recheck,
+    kept bounds-1031's claim on C15 alive 2.29 h after its holder last acted.
+    (C15 is Q15 here: the sandbox has one prefix.)"""
+    _stale_claim(sandbox, store, entry_id="Q15", session="bounds-1031")
+    _commit(sandbox.paths.root,
+            "C42 confirmed: all 1,344 outside Odd(4) solutions pass our own "
+            "T-form check (max m = 2, C35/C38 stand); Q98 closed refuted; Q15 "
+            "close waits on bounds-1031 claim TTL (~16:12 UTC)\n\n"
+            "Claude-Session: https://claude.ai/code/session_01PxH1RoceXzwoEujApBH8Ws")
+    claims = Claims(store, sandbox, "reaper")
+    assert claims._commit_marking("bounds-1031", _iso(10)) is None
+    _, former, _ = claims.reap("Q15")
+    assert former == "bounds-1031"
 
 
 def test_an_old_sign_of_life_does_not_count(sandbox, store):

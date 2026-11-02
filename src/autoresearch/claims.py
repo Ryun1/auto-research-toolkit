@@ -326,8 +326,7 @@ class Claims:
         so it reaped a session that had committed a memo two hours earlier
         ("its claim was silent but the session was not"). Any of these, after
         the claim was taken, is the holder working: an event it wrote on any
-        entry, a run row it recorded, a commit that marks it as the author
-        or names it beside the claimed entry."""
+        entry, a run row it recorded, a commit that marks it as the author."""
         claim = entry.claim
         if claim.session in self.ANONYMOUS:
             return _age_hours(claim.at), "the claim itself (a shared default name)"
@@ -341,9 +340,9 @@ class Claims:
         row = index["runs"].get(claim.session)
         if row:
             best = min(best, ((time.time() - row[0]) / 3600.0, row[1]))
-        key = ("git", claim.session, claim.at, entry.id)
+        key = ("git", claim.session, claim.at)
         if key not in cache:
-            cache[key] = self._commit_naming(claim.session, claim.at, entry.id)
+            cache[key] = self._commit_marking(claim.session, claim.at)
         if cache[key]:
             best = min(best, cache[key])
         return best
@@ -365,29 +364,25 @@ class Claims:
                 runs_seen[row.session] = (stamp, f"run row {row.id}")
         return {"events": events, "runs": runs_seen}
 
-    def _commit_naming(self, session, since, entry_id) -> tuple[float, str] | None:
-        """The latest commit since `since` that is the holder's own work.
+    def _commit_marking(self, session, since) -> tuple[float, str] | None:
+        """The latest commit since `since` that marks itself as the holder's:
+        `[moon]` in the message or a `Session: moon` trailer.
 
-        The session's name as a bare word is not enough: a session called
-        `moon` was kept alive by "moon memo corrected", a commit that never
-        touched its claim (SLH-DSA-128 H6). A commit counts when it marks the
-        session -- `[moon]` or a `Session: moon` trailer -- or names the session
-        and the claimed entry both."""
+        A commit that merely names the session is not enough. "moon memo
+        corrected" kept a session called `moon` alive without touching its
+        claim (SLH-DSA-128 H6), and naming the session beside the claimed
+        entry is exactly what another session writes about a stuck claim:
+        "C15 close waits on bounds-1031 claim TTL" kept bounds-1031's dead
+        claim alive (starks H12, #60). A holder doing real work writes events
+        and run rows, which count on their own."""
         import re
         import subprocess
-        # Words, not substrings: `scout` is not `scouting`, `Q1` is not `Q10`,
-        # `moon` is not `moon.v2`. A `.` or `-` ends a word unless a name
-        # character follows, so "closes Q1." still names Q1.
-        def word(text):
-            return (rf"(?<![A-Za-z0-9_])(?<![A-Za-z0-9_][.-]){re.escape(text)}"
-                    rf"(?![A-Za-z0-9_])(?![.-][A-Za-z0-9_])")
-        named, entry = re.compile(word(session)), re.compile(word(entry_id))
         bracket = re.compile(rf"\[{re.escape(session)}\]")
         trailer = re.compile(rf"^Session:[ \t]*{re.escape(session)}[ \t]*$",
                              re.M | re.I)
         try:
-            # git narrows to commits containing the name at all; whether it is
-            # a word, and which kind of mention, is decided here, newest first.
+            # git narrows to commits containing the name at all; which kind
+            # of mention it is, is decided here, newest first.
             proc = subprocess.run(
                 ["git", "log", f"--since={since}", "--fixed-strings",
                  f"--grep={session}", "--format=%x00%ct %h%n%B"],
@@ -403,8 +398,6 @@ class Claims:
                 how = f"marking [{session}]"
             elif trailer.search(message):
                 how = f"marking Session: {session}"
-            elif named.search(message) and entry.search(message):
-                how = f"naming {entry_id} and {session}"
             else:
                 continue
             return ((time.time() - int(stamp)) / 3600.0, f"commit {sha} {how}")

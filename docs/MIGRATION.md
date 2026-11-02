@@ -16,6 +16,20 @@ breaks without it), **behavioural** (it loads, but acts differently), or
 
 ---
 
+## Unreleased
+
+- **Behavioural: only a commit that marks the holder keeps its claim alive.**
+  `ar reap` no longer counts a commit whose message names both the holder's
+  session and the claimed entry. That is what another session writes about a
+  stuck claim ("C15 close waits on bounds-1031 claim TTL"), and it kept a dead
+  claim alive for hours (starks H12). A commit counts only when it carries
+  `[name]` in its message or a `Session: name` trailer, where `name` is the
+  `ar` session (a `Claude-Session:` URL is not one). Events the holder writes
+  on any entry (a claim, amend, re-price or close) and its run rows count as
+  before, so a holder doing real work through `ar` stays alive without any
+  of this. A session that works for longer than `claim_ttl_hours` with only
+  commits to show for it should mark them, e.g. `git commit -m "C15 memo" --trailer "Session: bounds-1031"`.
+
 ## 0.13.0
 
 - **Required (orchestrators that close their subagents' claims): pass the

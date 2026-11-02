@@ -558,6 +558,11 @@ a hand-maintained map would.
   (bookkeeping). The record counts these to learn which verdicts hold.
 - Stuck past your ceiling: `bin/ar release` with a reason. A claim abandoned
   by a dead session is freed with `bin/ar reap ID` once past its TTL.
+- **Stay visibly alive.** Reap reads a holder's last sign of life: an event
+  it wrote on any entry, a run row, or a commit marked as its own -- `[name]`
+  in the message or a `Session: name` trailer (`git commit --trailer
+  "Session: name"`). A commit that only mentions your session and entry does
+  not count: other sessions write exactly that about stuck claims.
 
 ## Researching
 
