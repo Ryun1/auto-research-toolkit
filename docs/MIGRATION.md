@@ -30,6 +30,49 @@ breaks without it), **behavioural** (it loads, but acts differently), or
   of this. A session that works for longer than `claim_ttl_hours` with only
   commits to show for it should mark them, e.g. `git commit -m "C15 memo" --trailer "Session: bounds-1031"`.
 
+- **Optional: member domains (starks recipe).** A checkout that runs several
+  goals as separate domains (an umbrella and `domains/*`) can now say so, and
+  stop copying shared config into every member. Nothing changes for a domain
+  with no `[domains]` table. What is new: `[domains] members = [...]` in the
+  umbrella's `domain.toml`; members inherit the umbrella's `policy`,
+  `budgets`, `upstream`, `coordinator`, `skills`, `hardware`, `remote`,
+  `brain` and `session` tables (see ARCHITECTURE.md section 7 for the merge
+  rules); ids resolve across members, so `ar close Q58 superseded
+  --superseded-by C1` works; `--all-domains` on `board`, `rank`, `budget`,
+  `validate` and `reap`; `ar domains`, `ar domains show [PATH] [--json]`,
+  `ar domains relink [--write]`; `ar init --member`; a member with no defect
+  track files `--track harness` on the umbrella's and `harness export` gives
+  the same bundle from any member. Behaviour to know: the member's inherited
+  tables now come from the umbrella, so a stale copy in a member that you
+  leave in place still wins key by key, except that `human_only` and
+  `never_push_remotes` accumulate, `spend_ceiling` takes the smaller value
+  and `min_core` the higher.
+
+  To convert starks-research:
+
+  1. Save the baseline first: for each member,
+     `ar domains show domains/<x> --json > /tmp/<x>-before.json`.
+     Then add `[domains] members = ["domains/*"]` to the umbrella's
+     `domain.toml`.
+  2. In each member's `domain.toml`, delete the inherited tables
+     (`[policy]`, `[budgets]`, `[upstream]`, `[coordinator]`, ... whichever
+     it copies) and keep identity tables only. Diff
+     `ar domains show domains/<x> --json` against the saved copy. Whatever
+     differs is a value the member had set differently from the umbrella.
+     Keep each deliberate override in the member's own table, e.g. t1's
+     `[budgets] iteration_max_spawns = 10` (the umbrella has 30). In a trial
+     on starks, t1's only differences were that and `upstream.min_core`
+     (empty in t1, "0.12.0" in the umbrella; the higher floor wins either
+     way, so that one needs no override). Re-diff until only intended
+     differences remain.
+  3. Run `ar domains relink` and check the dry run: Q58 -> C1 and
+     Q93 -> C2 should be listed. Then run `ar domains relink --write`.
+  4. Delete the "harness defects go on the PRIMARY domain" comments; a member
+     now files `--track harness` on the umbrella's store by itself.
+  5. Run `ar validate --all-domains`; it should be clean. `bin/ar --domain
+     domains/bounds harness export` should now export the umbrella's H
+     entries.
+
 ## 0.13.0
 
 - **Required (orchestrators that close their subagents' claims): pass the

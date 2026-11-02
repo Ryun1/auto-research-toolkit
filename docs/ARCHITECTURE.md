@@ -401,3 +401,97 @@ claim lock and the workspace pool never travel: they name a holder, a pid and
 absolute paths that mean nothing on the other machine. What to commit, what
 stays behind, the one-session-name rule and crash recovery are in the
 README's [Working across two machines](../README.md#working-across-two-machines).
+
+## 7. Member domains
+
+The core runs one goal per domain, so a campaign with several goals is
+several domains. Member domains make the relationship explicit without
+changing what a domain is: an umbrella `domain.toml` at the checkout's root
+declares `[domains] members = ["domains/*"]` (globs relative to that file),
+and each match is a complete domain with its own goal, measure, state,
+claims, budgets and loop. A member never names its umbrella; the umbrella is
+found by walking up to the nearest `domain.toml` whose globs match, so a
+member stays loadable on its own and the relationship is written down once.
+A domain with no `[domains]` table and no umbrella above it behaves exactly
+as it did before. `src/autoresearch/members.py` is the workspace (the
+umbrella plus its members) and `inherit.py` is the config merge.
+
+**When to split a goal into a member.** When its scores do not compare with
+the umbrella's. A member measures its own thing (counts, proof progress,
+bounds checked), so there is deliberately no single ranking across members:
+choosing which goal gets attention is a curator's judgement, and a combined
+number would only hide that. If the new work scores on the same metric as
+the existing work, it is another track in the same domain, not a member.
+`ar loop` still runs one domain; running several loops is the operator's
+scheduling question. Nesting is refused, and so is a member outside the
+umbrella's directory.
+
+**What a member inherits.** The umbrella's `policy`, `budgets`, `upstream`,
+`coordinator`, `skills`, `hardware`, `remote`, `brain` and `session` tables
+are merged into the member's raw TOML before any table is parsed, so every
+check sees the effective config. `domain`, `state`, `tracks`, `commands`,
+`knowledge`, `lanes`, `challenge`, `evaluator`, `holdout`, `render`,
+`plugins` and `domains` are never inherited: each says which domain this is.
+Without that split, ~80% of every member's `domain.toml` was a copy of the
+umbrella's that drifted (a human-only rule added at the root never reached
+the members). `ar domains show [PATH] [--json]` prints the effective config
+with each key sourced `umbrella`, `member` or `default`.
+
+Member-wins is the rule key by key, except where a member winning would let
+it weaken a safety rule by omission:
+
+- `policy.human_only` and `policy.never_push_remotes` **accumulate**: the
+  umbrella's rules, then the member's, de-duplicated by `pattern`. A rule a
+  member could shadow would be a comment. This includes
+  `never_push_remotes`, where a member that wants to push somewhere the
+  umbrella forbids has to change the umbrella.
+- `policy.forbidden_paths` is **member-wins**. Its patterns are relative to
+  each domain's root, so the umbrella's would match the wrong files in a
+  member.
+- `policy.spend_ceiling` takes the **smaller** value; a non-number is refused.
+- `upstream.min_core` takes the **higher** floor, because one core install
+  serves every member. An empty member value never erases the umbrella's.
+
+A member also cannot remove an inherited table by passing a non-table
+(`policy = false`, `human_only = {}`): the loader reads a falsy table as an
+empty one, which would silently drop every inherited rule, so it is refused.
+An unparseable `domain.toml` anywhere above a domain is a `validate` problem,
+not a silent skip.
+
+Relative paths inside inherited tables (`skills.dir`, `forbidden_paths`)
+resolve against each member's own root, not the umbrella's, so a shared
+`skills.dir = "skills"` means each member's own `skills/`.
+
+**Ids across members.** Id prefixes are unique across the workspace
+(`ar init --member` and `validate` refuse a duplicate), so an id like `C1`
+names one entry with no namespace syntax: the prefix finds the owning
+domain without reading a store. `ar close Q58 superseded --superseded-by C1`
+works from Q's domain, and `sources` can cite an entry in another member.
+`ar domains relink [--write]` turns older `superseded-by <url>` closures
+that point at an entry in this workspace into ids; it is a dry run unless
+`--write`, and history stays append-only (the URL event remains, the new
+event says where the id came from). **Lineage stays local.** `parent` and
+`derived_from` name entries in the same domain; a cross-member relation is a
+citation (`sources`), not an ancestry, so one domain's tree never depends on
+another's store.
+
+**Looking across members.** `board`, `rank`, `budget`, `validate` and `reap`
+take `--all-domains`: each domain's ordinary output under a
+`== <path> (<name>) ==` header, umbrella first, worst exit status wins, and
+one broken member does not hide the others. It is not `--all` because that
+already means other things (`rank --all` lists every terminal exclusion,
+`entry list --all` includes terminal entries, `harness export --all` includes
+closed defects); one spelling per meaning keeps old scripts working. On a workspace
+with no members the flag says so on stderr and shows the one domain.
+`ar reap --all-domains` lists reapable claims across members, and `ar reap ID`
+frees an id in whichever member owns it. `ar domains` lists the workspace.
+
+**One defect queue.** A member that declares no defect track files
+`--track harness` into the umbrella's store, so the workspace keeps one queue
+and one bundle; `ar harness export` from any member gives the umbrella's
+bundle. A member that declares its own defect track (`requires_defect_evidence
+= true`) keeps it.
+
+**Adding a member.** `ar init --member domains/<name> --prefix P [--name N]`
+scaffolds one under the umbrella named by `--domain`, refusing a prefix or
+name that would break the umbrella's `domain.toml`, and then validates it.
