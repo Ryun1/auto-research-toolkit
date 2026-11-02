@@ -82,7 +82,7 @@ def test_close_superseded_by_a_member_entry(umbrella, capsys):
                "--memo", memo(umb, "inbox/Q1.md"),
                "--summary", "domains/b absorbed it") == 0
     out = capsys.readouterr().out
-    assert "— superseded by C1 (domains/b)" in out
+    assert "— superseded by C1 (member domains/b)" in out
     sibling = _load(umbrella / "domains" / "b")
     assert Store(sibling.paths.entries).load("C1").supersedes == ["Q1"]
     assert not Store(umb.paths.entries).path("C1").exists()

@@ -1532,8 +1532,7 @@ def cmd_close(args):
                         f"{missing}") from exc
                 replacement_config, replacement = found
                 replacement_store = _store(replacement_config)
-                replacement_where = (owner[0] if owner[0] != members_mod.UMBRELLA_PATH
-                                     else "the umbrella")
+                replacement_where = members_mod.describe(owner[0])
     if args.status == "superseded" and replacement is None:
         raise AutoresearchError(
             "closing as superseded requires --superseded-by: a retirement "
