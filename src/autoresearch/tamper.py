@@ -22,6 +22,7 @@ about `time.time` is not a patch of it.
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import subprocess
 from dataclasses import asdict, dataclass
@@ -71,9 +72,15 @@ def _imported(lines) -> set[str]:
     return names
 
 
-def scan(config, diff: str) -> list[Hunk]:
-    """Typed tamper-shaped hunks in a unified diff (`git diff` output)."""
+def scan(config, diff: str, prefix: str = "") -> list[Hunk]:
+    """Typed tamper-shaped hunks in a unified diff (`git diff` output).
+
+    `prefix` is the domain's `git rev-parse --show-prefix`: the diff names
+    paths from the repository top, the lanes and the evaluator are written
+    against the domain root. A path inside is reported domain-relative; one
+    outside is scaffolding whatever the lanes say, reported `../`-relative."""
     from . import evaluator
+    from .lanes import rebase
     evaluator_files = set(evaluator.files(config))
     files: dict[str, list[tuple[int, str]]] = {}
     path, line_no = None, 0
@@ -110,10 +117,17 @@ def scan(config, diff: str) -> list[Hunk]:
             new_left = int(match.group(4) or 1)
     out = []
     for path, added in files.items():
-        if config.lanes.classify(path) == "findings" or not added:
-            continue
+        inside = rebase(path, prefix)
+        if inside is None:
+            if not added:
+                continue
+            path = posixpath.relpath(path, prefix.rstrip("/"))
+        else:
+            if config.lanes.classify(inside) == "findings" or not added:
+                continue
+            path = inside
         first = added[0]
-        if path in evaluator_files:
+        if inside is not None and path in evaluator_files:
             out.append(Hunk("evaluator", path, *first))
         if _TEST.search(path):
             out.append(Hunk("test", path, *first))
@@ -153,6 +167,11 @@ def _git(root, *args) -> str | None:
 def diff_of(tree, base="HEAD") -> str | None:
     """Tracked changes since `base`, plus untracked files as whole additions.
     None outside git -- there is no diff to read, and none is guessed."""
+    top = _git(tree, "rev-parse", "--show-toplevel")
+    if top is None:
+        return None
+    # From the toplevel, tracked and untracked paths are both repo-relative.
+    tree = top.strip()
     tracked = _git(tree, *_DIFF, base)
     if tracked is None:
         return None
@@ -174,7 +193,12 @@ def base_of(tree) -> str | None:
 
 def scan_tree(config, tree, base="HEAD") -> list[Hunk] | None:
     diff = diff_of(tree, base)
-    return None if diff is None else scan(config, diff)
+    if diff is None:
+        return None
+    # Read from the domain root, not `tree`: a worker slot is a worktree of
+    # the same repo, so the domain sits at the same prefix inside it.
+    prefix = (_git(config.paths.root, "rev-parse", "--show-prefix") or "").strip()
+    return scan(config, diff, prefix)
 
 
 def event_detail(hunks) -> str:

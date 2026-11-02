@@ -27,6 +27,17 @@ from .errors import ConfigError
 FINDINGS, SCAFFOLDING = "findings", "scaffolding"
 
 
+def rebase(repo_path: str, prefix: str) -> str | None:
+    """`repo_path` (as git prints it, from the repository top) relative to the
+    domain whose `git rev-parse --show-prefix` is `prefix` (`"domains/a/"`, or
+    `""` at the top). None when the path lies outside the domain: a member's
+    lanes are written against its own root, so a path elsewhere in the repo
+    must never reach `classify`, which would match it as if it were inside."""
+    if not prefix:
+        return repo_path
+    return repo_path[len(prefix):] if repo_path.startswith(prefix) else None
+
+
 @dataclass
 class Lanes:
     findings_pattern: str
