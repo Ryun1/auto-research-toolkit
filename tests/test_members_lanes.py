@@ -87,3 +87,16 @@ def test_a_domain_at_the_repo_top_is_unchanged(tmp_path):
     config = DomainConfig.load(root)
     assert [(h.kind, h.path) for h in tamper.scan_tree(config, root)] == \
         [("timing", "bin/x.py")]
+
+
+# -- a worktree under domains/ is never a member (#64 final review) -----------
+
+def test_a_worktree_under_the_member_glob_is_not_a_member(git_umbrella):
+    """`ar session create` in a member puts a whole-repo worktree at
+    `domains/a-session-s1`: it has a domain.toml (the umbrella's) and matches
+    `domains/*`, so it read as a member declaring members of its own and
+    every workspace build failed."""
+    from autoresearch import members
+    _git(git_umbrella, "worktree", "add", "-q", "domains/a-session-s1")
+    workspace = members.Workspace.load(git_umbrella)
+    assert list(workspace.members) == ["domains/a", "domains/b"]

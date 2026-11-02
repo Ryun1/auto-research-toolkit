@@ -20,7 +20,8 @@ one-domain workspace, so callers never branch on "is there an umbrella".
 
 What loading refuses, each by name:
 - a glob that matches no directory, and a matched directory with no
-  `domain.toml` (default-deny, like `[lanes]`);
+  `domain.toml` (default-deny, like `[lanes]`); a matched directory holding
+  a `.git` entry -- a worktree or nested repo -- is skipped, never a member;
 - a member outside the umbrella's directory (a glob that reaches the
   umbrella's own directory, `domains/..` say, skips it);
 - nesting: a member that declares members, or a member inside another;
@@ -81,6 +82,12 @@ def _expand(root: pathlib.Path, globs, strict: bool) -> dict[str, pathlib.Path]:
                         f"[domains] member glob {pattern!r} matches {match}, "
                         "which is not inside the umbrella's directory; a "
                         "member lives below its umbrella")
+                continue
+            if (resolved / ".git").exists():
+                # A worktree (`.git` file) or a nested repo (`.git` dir) is a
+                # checkout, never a member: `ar session create` in a member
+                # puts a whole-repo worktree under `domains/`, carrying the
+                # umbrella's own domain.toml.
                 continue
             if not (resolved / CONFIG_NAME).exists():
                 if strict:
