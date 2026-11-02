@@ -211,8 +211,9 @@ def test_reap_id_in_another_member(umbrella, capsys):
     store = _stale(umbrella / "domains" / "b", "C1")
     from autoresearch.config import DomainConfig
     cli._render_views(DomainConfig.load(umbrella / "domains" / "b"))
-    stale_views = lambda: [f for f in (umbrella / "domains" / "b").rglob("*.md")
-                           if "gone" in f.read_text()]
+    def stale_views():
+        return [f for f in (umbrella / "domains" / "b").rglob("*.md")
+                if "gone" in f.read_text()]
     assert stale_views(), "fixture: the claim should show in a rendered view"
     code, out, _ = _run(capsys, "--domain", str(umbrella / "domains" / "a"),
                         "reap", "C1")

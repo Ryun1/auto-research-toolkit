@@ -168,7 +168,7 @@ def _strip_sections(text, drop):
             first -= 1
         for j in range(first, end):
             keep[j] = False
-    return "\n".join(ln for ln, k in zip(lines, keep) if k)
+    return "\n".join(ln for ln, k in zip(lines, keep, strict=True) if k)
 
 
 def member_domain(dest, prefixes=("Q", "H"), name=None, extra="",

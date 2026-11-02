@@ -560,6 +560,7 @@ def _url_target(workspace: Workspace, url: str) -> tuple[DomainConfig, str] | No
     decides which domain's path is expected -- an umbrella's bare
     `<entries dir>/<ID>.yaml` cannot swallow a member's URL."""
     from urllib.parse import urlparse
+
     from .entries import Store
     path = urlparse(url).path if "://" in url else url
     name = path.rsplit("/", 1)[-1]
