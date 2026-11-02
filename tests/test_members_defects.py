@@ -85,14 +85,23 @@ def test_harness_export_same_from_member_and_umbrella(shared, tmp_path, capsys):
     store = Store(umb.paths.entries)
     make_entry(store, "H1", track="harness", core="0.1", repro="r",
                observed="o")
-    bundles = []
+    bundles, streams = [], []
+    capsys.readouterr()
     for root, name in ((shared, "umb.json"), (shared / "domains" / "a", "a.json")):
         out = tmp_path / name
         assert _ar(root, "harness", "export", "--out", str(out)) == 0
         bundle = json.loads(out.read_text())
         bundle.pop("exported_at")
         bundles.append(bundle)
+        streams.append(capsys.readouterr())
     assert bundles[0] == bundles[1]
+    # stdout is byte-for-byte the umbrella's; the member says whose on stderr.
+    assert streams[0].out == streams[1].out.replace(str(tmp_path / "a.json"),
+                                                    str(tmp_path / "umb.json"))
+    assert streams[0].err == ""
+    assert streams[1].err == (
+        "ar: this member declares no defect track; exporting the umbrella's "
+        f"track 'harness' at {shared}\n")
     assert bundles[0]["project"]["name"] == "umb"
     assert [d["id"] for d in bundles[0]["defects"]] == ["H1"]
 

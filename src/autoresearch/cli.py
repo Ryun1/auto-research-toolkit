@@ -1183,6 +1183,13 @@ def cmd_harness_export(args):
     and the scaffold's policy makes the publishing commands human-only.
     """
     config = _load(args)
+    home = defects_mod.defect_home(config)
+    if home is not None and home.shared:
+        # stderr, so the bundle and every stdout line are byte-for-byte what
+        # the umbrella itself exports.
+        print(f"ar: this member declares no defect track; exporting the "
+              f"umbrella's track {home.track.id!r} at {home.config.paths.root}",
+              file=sys.stderr)
     bundle, refused, stats = defects_mod.export_bundle(
         config, all_status=args.all)
     print(f"read {stats['read']} entr(ies) on defect track {stats['track']!r}: "
