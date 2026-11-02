@@ -14,33 +14,7 @@ from autoresearch import cli
 from autoresearch.config import DomainConfig
 from autoresearch.errors import ConfigError
 from autoresearch.members import Workspace
-from conftest import TOY, close, make_entry
-
-
-def _domain(dest, prefixes=("Q", "H"), name=None, extra=""):
-    """A copy of the toy domain at `dest`, its two tracks renamed to
-    `prefixes`, with `extra` appended to its domain.toml."""
-    shutil.copytree(TOY, dest, ignore=shutil.ignore_patterns("__pycache__"))
-    toml = dest / "domain.toml"
-    text = toml.read_text()
-    text = text.replace('prefix = "Q"', f'prefix = "{prefixes[0]}"')
-    text = text.replace('prefix = "H"', f'prefix = "{prefixes[1]}"')
-    if name:
-        text = text.replace('name = "toy"', f'name = "{name}"')
-    toml.write_text(text + "\n" + extra)
-    (dest / "state" / "entries").mkdir(parents=True, exist_ok=True)
-    return dest
-
-
-MEMBERS = '[domains]\nmembers = ["domains/*"]\n'
-
-
-@pytest.fixture
-def umbrella(tmp_path):
-    root = _domain(tmp_path / "umb", name="umb", extra=MEMBERS)
-    _domain(root / "domains" / "a", ("A", "B"), name="a")
-    _domain(root / "domains" / "b", ("C", "D"), name="b")
-    return root
+from conftest import close, make_entry, member_domain
 
 
 def test_an_umbrella_loads_its_members(umbrella):
@@ -74,17 +48,17 @@ def test_a_plain_domain_is_a_workspace_of_one(sandbox):
 
 def test_a_domain_below_a_non_umbrella_is_alone(tmp_path):
     """A domain.toml further up that lists no members is not an umbrella."""
-    outer = _domain(tmp_path / "outer")
-    inner = _domain(outer / "domains" / "x", ("A", "B"))
+    outer = member_domain(tmp_path / "outer")
+    inner = member_domain(outer / "domains" / "x", ("A", "B"))
     ws = Workspace.for_domain(DomainConfig.load(inner))
     assert ws.root == inner and ws.members == {}
 
 
 def test_an_unlisted_directory_is_not_a_member(tmp_path):
-    root = _domain(tmp_path / "umb",
+    root = member_domain(tmp_path / "umb",
                    extra='[domains]\nmembers = ["domains/a"]\n')
-    _domain(root / "domains" / "a", ("A", "B"))
-    stray = _domain(root / "domains" / "z", ("Y", "Z"))
+    member_domain(root / "domains" / "a", ("A", "B"))
+    stray = member_domain(root / "domains" / "z", ("Y", "Z"))
     ws = Workspace.for_domain(DomainConfig.load(stray))
     assert ws.root == stray and ws.members == {}
 
@@ -129,7 +103,7 @@ def test_a_file_the_glob_matches_is_not_a_member(umbrella):
 def test_two_level_nesting_is_refused(umbrella):
     toml = umbrella / "domains" / "a" / "domain.toml"
     toml.write_text(toml.read_text() + '\n[domains]\nmembers = ["sub/*"]\n')
-    _domain(umbrella / "domains" / "a" / "sub" / "x", ("X", "Y"))
+    member_domain(umbrella / "domains" / "a" / "sub" / "x", ("X", "Y"))
     with pytest.raises(ConfigError, match="member domains/a declares members"):
         Workspace.load(umbrella)
     # and from the inner umbrella, walking up finds the outer one and refuses
@@ -141,20 +115,20 @@ def test_a_member_inside_another_member_is_refused(umbrella):
     toml = umbrella / "domain.toml"
     toml.write_text(toml.read_text().replace(
         '"domains/*"', '"domains/*", "domains/a/inner"'))
-    _domain(umbrella / "domains" / "a" / "inner", ("X", "Y"))
+    member_domain(umbrella / "domains" / "a" / "inner", ("X", "Y"))
     with pytest.raises(ConfigError, match="domains/a/inner is inside member domains/a"):
         Workspace.load(umbrella)
 
 
 def test_a_member_outside_the_umbrella_is_refused(tmp_path):
-    root = _domain(tmp_path / "umb", extra='[domains]\nmembers = ["../elsewhere"]\n')
-    _domain(tmp_path / "elsewhere", ("A", "B"))
+    root = member_domain(tmp_path / "umb", extra='[domains]\nmembers = ["../elsewhere"]\n')
+    member_domain(tmp_path / "elsewhere", ("A", "B"))
     with pytest.raises(ConfigError, match="not inside the umbrella"):
         Workspace.load(root)
 
 
 def test_an_absolute_glob_is_refused(tmp_path):
-    root = _domain(tmp_path / "umb", extra=f'[domains]\nmembers = ["{tmp_path}/x"]\n')
+    root = member_domain(tmp_path / "umb", extra=f'[domains]\nmembers = ["{tmp_path}/x"]\n')
     with pytest.raises(ConfigError, match="is absolute"):
         Workspace.load(root)
 
@@ -165,7 +139,7 @@ def test_an_absolute_glob_is_refused(tmp_path):
     ('[domains]\nmembers = []\n', "non-empty list"),
 ])
 def test_a_malformed_domains_table_is_refused_at_load(tmp_path, table, match):
-    root = _domain(tmp_path / "umb", extra=table)
+    root = member_domain(tmp_path / "umb", extra=table)
     with pytest.raises(ConfigError, match=match):
         DomainConfig.load(root)
 
@@ -230,7 +204,7 @@ def test_a_member_validate_reports_a_prefix_clash_with_a_sibling(umbrella):
 
 
 def test_a_prefix_repeated_inside_one_domain_is_left_to_its_own_check(tmp_path):
-    root = _domain(tmp_path / "d", prefixes=("Q", "Q"))
+    root = member_domain(tmp_path / "d", prefixes=("Q", "Q"))
     ws = Workspace.for_domain(DomainConfig.load(root))   # does not raise
     assert ws.members == {}
     assert [p for p in ws.umbrella.check() if "two tracks share" in p]
@@ -296,3 +270,21 @@ def test_a_bad_glob_in_an_umbrella_above_is_named_from_below(umbrella):
     problems = DomainConfig.load(umbrella / "domains" / "a").check()
     assert [p for p in problems
             if p.startswith(f"domains: umbrella at {umbrella}: [domains] member glob")]
+
+
+def test_member_domain_drops_tables(tmp_path):
+    """`drop_tables` takes a table's sub-tables with it, so a fixture can be a
+    domain that never declared `[budgets]` or `[policy]`."""
+    root = member_domain(tmp_path / "d", drop_tables=("budgets", "policy"))
+    text = (root / "domain.toml").read_text()
+    assert "[budgets]" not in text and "policy" not in text
+    config = DomainConfig.load(root)
+    assert config.budgets == {}
+    assert config.policy.human_only == []
+
+
+def test_git_umbrella_is_one_clean_commit(git_umbrella):
+    import subprocess
+    out = subprocess.run(["git", "status", "--porcelain"], cwd=git_umbrella,
+                         capture_output=True, text=True, check=True).stdout
+    assert out == ""

@@ -1,5 +1,7 @@
 import pathlib
+import re
 import shutil
+import subprocess
 
 import pytest
 
@@ -140,3 +142,97 @@ def append_measured(config, path, record):
     pool = config.paths.workspaces.resolve()
     slot = next(p for p in path.parents if p.parent == pool)
     evaluator.write_receipt(config.paths.receipts, record, slot)
+
+
+def _strip_sections(text, drop):
+    """Remove from `text` every TOML section for which `drop(header, body)` is
+    true. A section runs from its header to the next header; only the comment
+    block directly above a dropped header goes with it, since that comment
+    describes the section and a neighbour's comment describes the neighbour.
+    Line-based on purpose: a TOML writer would reformat the whole file, and
+    these fixtures should differ from the toy domain only where they say so."""
+    lines = text.split("\n")
+    header = re.compile(r"^\s*\[\[?([^\]\[]+)\]\]?\s*(#.*)?$")
+    starts = [i for i, ln in enumerate(lines) if header.match(ln)]
+    keep = [True] * len(lines)
+    for n, i in enumerate(starts):
+        end = starts[n + 1] if n + 1 < len(starts) else len(lines)
+        # The next section's own comment block belongs to it, not to this body.
+        while end > i + 1 and lines[end - 1].lstrip().startswith("#") and n + 1 < len(starts):
+            end -= 1
+        name = header.match(lines[i]).group(1).strip()
+        if not drop(name, lines[i + 1:end]):
+            continue
+        first = i
+        while first > 0 and lines[first - 1].lstrip().startswith("#"):
+            first -= 1
+        for j in range(first, end):
+            keep[j] = False
+    return "\n".join(ln for ln, k in zip(lines, keep) if k)
+
+
+def member_domain(dest, prefixes=("Q", "H"), name=None, extra="",
+                  drop_tables=(), drop_tracks=()):
+    """A copy of the toy domain at `dest`, its two tracks renamed to
+    `prefixes`, with `extra` appended to its domain.toml.
+
+    `drop_tables` names top-level tables to remove, each with its sub-tables
+    and arrays (`policy` takes `[[policy.human_only]]` too, `hardware` every
+    `[hardware.*]`, `remote` every `[[remote]]`). `drop_tracks` removes
+    `[[tracks]]` blocks, with their `[tracks.*]` sub-tables, by prefix as
+    renamed -- so it cannot name a track by its toy prefix."""
+    shutil.copytree(TOY, dest, ignore=shutil.ignore_patterns("__pycache__"))
+    toml = dest / "domain.toml"
+    text = toml.read_text()
+    text = text.replace('prefix = "Q"', f'prefix = "{prefixes[0]}"')
+    text = text.replace('prefix = "H"', f'prefix = "{prefixes[1]}"')
+    if name:
+        text = text.replace('name = "toy"', f'name = "{name}"')
+    if drop_tables:
+        text = _strip_sections(text, lambda n, _body: n.split(".")[0] in drop_tables)
+    if drop_tracks:
+        dropping = False
+
+        def drop_track(n, body):
+            nonlocal dropping
+            if n == "tracks":
+                dropping = any(re.match(rf'\s*prefix\s*=\s*"{p}"', ln)
+                               for p in drop_tracks for ln in body)
+            elif not n.startswith("tracks."):
+                dropping = False
+            return dropping
+        text = _strip_sections(text, drop_track)
+    toml.write_text(text + "\n" + extra)
+    (dest / "state" / "entries").mkdir(parents=True, exist_ok=True)
+    return dest
+
+
+MEMBERS = '[domains]\nmembers = ["domains/*"]\n'
+
+
+@pytest.fixture
+def umbrella(tmp_path):
+    """The umbrella shape starks-research runs by hand: the toy domain as the
+    umbrella (Q, H) over two members, `domains/a` (A, B) and `domains/b`
+    (C, D)."""
+    root = member_domain(tmp_path / "umb", name="umb", extra=MEMBERS)
+    member_domain(root / "domains" / "a", ("A", "B"), name="a")
+    member_domain(root / "domains" / "b", ("C", "D"), name="b")
+    return root
+
+
+@pytest.fixture
+def git_umbrella(umbrella):
+    """The umbrella as a git repository with one commit. Identity and signing
+    are set on this throwaway repo only, so a developer's global config (a
+    signing key that wants a passphrase) cannot decide whether a test runs."""
+    def git(*args):
+        subprocess.run(["git", *args], cwd=umbrella, check=True,
+                       capture_output=True)
+    git("init", "-q")
+    git("config", "user.name", "Test Author")
+    git("config", "user.email", "test@example.com")
+    git("config", "commit.gpgsign", "false")
+    git("add", "-A")
+    git("commit", "-q", "-m", "umbrella")
+    return umbrella
