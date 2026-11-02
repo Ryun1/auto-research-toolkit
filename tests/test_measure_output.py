@@ -70,3 +70,25 @@ def test_measure_passes_domain_flags_through_without_a_separator():
                  ["--session", "s", "close", "Q1", "refuted", "--summary",
                   "measure", "--memo", "m"]):
         assert cli._measure_passthrough(argv) == argv
+
+
+def test_measure_keeps_a_claim_token_placed_after_domain_flags():
+    """starks H10 (#61): `measure --entry C9 --k 3 --claim-token T` sent the
+    token past the supplied `--`, and the domain's measure refused it. The
+    unclaimed-row warning teaches appending it, so it must land wherever it
+    sits in the domain's tail."""
+    for tail in (["--claim-token", "T"], ["--claim-token=T"]):
+        for argv in (["measure", "--entry", "C9", "--k", "3", *tail],
+                     ["measure", "--entry", "C9", "--k", "3", *tail, "--j", "1"],
+                     ["--domain", "d", "measure", "--entry", "C9", "--k", "3", *tail]):
+            args = cli.build_parser().parse_args(cli._measure_passthrough(argv))
+            assert args.claim_token == "T", argv
+            assert args.entry == "C9", argv
+            assert args.rest == ["--k", "3", *(["--j", "1"] if "--j" in argv else [])], argv
+    # a `--` the user typed means "the rest is the domain's": a domain that
+    # wants a literal --claim-token still gets one
+    for argv in (["measure", "--entry", "C9", "--", "--claim-token", "T"],
+                 ["measure", "--entry", "C9", "--k", "3", "--", "--claim-token", "T"]):
+        args = cli.build_parser().parse_args(cli._measure_passthrough(argv))
+        assert args.rest[-2:] == ["--claim-token", "T"], argv
+        assert args.claim_token != "T", argv

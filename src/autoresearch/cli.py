@@ -2941,7 +2941,18 @@ def _measure_passthrough(argv):
         else:
             break
     if j < len(argv) and argv[j] not in ("--", "-h", "--help"):
-        return argv[:j] + ["--"] + argv[j:]
+        # The unclaimed-row warning teaches appending --claim-token, which
+        # lands after the domain's flags (starks H10): lift it out of the
+        # tail, up to any `--` the user typed (past that, all is the domain's).
+        own, tail, k = [], [], j
+        while k < len(argv) and argv[k] != "--":
+            if argv[k] == "--claim-token" and k + 1 < len(argv):
+                own += argv[k:k + 2]
+                k += 2
+                continue
+            (own if argv[k].startswith("--claim-token=") else tail).append(argv[k])
+            k += 1
+        return argv[:j] + own + ["--"] + tail + argv[k:]
     return argv
 
 
