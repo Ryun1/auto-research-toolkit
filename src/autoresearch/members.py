@@ -33,9 +33,13 @@ from __future__ import annotations
 import pathlib
 import tomllib
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .config import CONFIG_NAME, DomainConfig
 from .errors import ConfigError
+
+if TYPE_CHECKING:
+    from .entries import Entry
 
 #: how `ar domains` and messages name the umbrella's own directory
 UMBRELLA_PATH = "."
@@ -201,6 +205,29 @@ class Workspace:
         raise ConfigError(f"{config.paths.root} is not in the workspace at "
                           f"{self.root}")
 
+    def owner_of(self, entry_id: str) -> tuple[str, DomainConfig] | None:
+        """The domain whose track prefix `entry_id` carries, with its path;
+        None when no domain owns it. Prefix matching only -- prefixes are
+        unique across the workspace -- so this never touches a store."""
+        for path, config in self.domains():
+            if any(track.is_id(entry_id) for track in config.tracks.values()):
+                return path, config
+        return None
+
+    def entry(self, entry_id: str) -> tuple[DomainConfig, Entry] | None:
+        """The owning domain and the entry, or None when no domain owns the
+        id or the owner has no such file. A file that exists but does not
+        load still raises its `SchemaError`: that is a problem to name."""
+        from .entries import Store
+        owner = self.owner_of(entry_id)
+        if owner is None:
+            return None
+        config = owner[1]
+        store = Store(config.paths.entries)
+        if not store.path(entry_id).exists():
+            return None
+        return config, store.load(entry_id)
+
     # -- construction -----------------------------------------------------
 
     @classmethod
@@ -293,6 +320,33 @@ def _refuse_shared_prefixes(workspace: Workspace) -> None:
                     "unique across the umbrella and its members, so an id "
                     "names one entry -- rename one of the tracks' prefixes")
             owners.setdefault(track.prefix, (path, label))
+
+
+def workspace_or_none(config: DomainConfig) -> Workspace | None:
+    """`Workspace.for_domain(config)`, or None when the umbrella or a sibling
+    is broken. A verb that merely looks across domains must not die on
+    another domain's problem, so callers treat None as "this domain only";
+    `ar validate` is where the breakage is reported."""
+    try:
+        return Workspace.for_domain(config)
+    except ConfigError:
+        return None
+
+
+def resolve(config: DomainConfig, entry_id: str) -> tuple[DomainConfig, Entry]:
+    """The entry `entry_id` names and the domain that owns it, looked up in
+    `config`'s workspace (just `config` when it has none)."""
+    workspace = Workspace.for_domain(config)
+    owner = workspace.owner_of(entry_id)
+    if owner is None:
+        prefixes = [t.prefix for _, c in workspace.domains()
+                    for t in c.tracks.values()]
+        raise ConfigError(
+            f"no domain in this workspace owns entry id {entry_id!r}; "
+            f"prefixes are {prefixes}")
+    from .entries import Store
+    owning = owner[1]
+    return owning, Store(owning.paths.entries).load(entry_id)
 
 
 # -- `ar domains` -------------------------------------------------------------
