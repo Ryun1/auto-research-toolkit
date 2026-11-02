@@ -1672,15 +1672,18 @@ class Coordinator:
             # A defect in the scaffolding is filed against the harness track, not
             # against the research queue -- an agent booting into research work
             # should never read harness debt as a lead on the score.
-            # A member that declares no defect track files on the umbrella's
-            # (#67). A local track named `harness` that does not declare
-            # itself a defect track still takes this domain's debt, as it did
-            # before defect homes existed.
-            home = defects_mod.defect_home(self.config)
+            # A local track with id `harness` takes this domain's debt, as it
+            # always has. Only when there is none does a member that
+            # declares no defect track file on the umbrella's (#67); a domain
+            # with no umbrella drops it exactly as before defect homes.
             local = self.config.tracks.get("harness")
-            if local is not None and (home is None or home.shared):
+            if local is not None:
                 home = defects_mod.DefectHome(local, self.config, self.store,
                                               shared=False)
+            else:
+                home = defects_mod.defect_home(self.config)
+                if home is not None and not home.shared:
+                    home = None
             debts = [d for d in data.get("harness_debt", [])
                      if isinstance(d, dict) and d.get("title")]
             if debts and home is None:
@@ -1691,9 +1694,18 @@ class Coordinator:
                 phase.detail.append(
                     f"harness debt not filed: no 'harness' track "
                     f"({len(debts)} item(s) dropped)")
-            for debt in debts if home else []:
-                entry = self._file({**debt, "track": home.track.id}, home)
-                phase.detail.append(f"filed {entry.id} (harness debt)")
+            filed = []
+            try:
+                for debt in debts if home else []:
+                    entry = self._file({**debt, "track": home.track.id}, home)
+                    filed.append(entry)
+                    phase.detail.append(f"filed {entry.id} (harness debt)")
+            finally:
+                if filed and home.shared:
+                    # This domain's render pass never draws the umbrella's
+                    # views, so without this the umbrella's `validate` reads
+                    # its own records as differing from its views.
+                    render.write_views(home.config, home.store.all())
         except (BudgetExceeded, AutoresearchError, KeyError, TypeError) as exc:
             problems.append(f"qc role skipped: {exc}")
 

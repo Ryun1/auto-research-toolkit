@@ -108,10 +108,9 @@ def test_a_member_with_its_own_defect_track_keeps_it(umbrella, capsys):
     assert _ids(member) == ["B1"] and _ids(umbrella) == []
 
 
-def test_loop_qc_harness_debt_from_a_member_lands_in_the_umbrella(shared):
-    member = DomainConfig.load(shared / "domains" / "a")
-    make_entry(Store(member.paths.entries), "A1", impact=1.0)
-    brain = ScriptedBrain({
+def _qc_brain():
+    """A loop iteration whose QC reports one item of harness debt."""
+    return ScriptedBrain({
         Role.GENERATOR: lambda b: [],
         Role.JUDGE: lambda b: [],
         Role.WORKER: lambda b: {"verdict": "inconclusive", "summary": "n/a",
@@ -122,13 +121,49 @@ def test_loop_qc_harness_debt_from_a_member_lands_in_the_umbrella(shared):
             {"title": "measure command has no timeout",
              "repro": "ar measure  # with a hanging measure",
              "observed": "the iteration never finished"}]}})
-    it = Coordinator(member, brain).run_iteration(1)
+
+
+def test_loop_qc_harness_debt_from_a_member_lands_in_the_umbrella(shared):
+    member = DomainConfig.load(shared / "domains" / "a")
+    make_entry(Store(member.paths.entries), "A1", impact=1.0)
+    it = Coordinator(member, _qc_brain()).run_iteration(1)
     qc = next(p for p in it.phases if p.name == "qc")
     assert "filed H1 (harness debt)" in qc.detail
     assert _ids(shared) == ["H1"]
     assert _ids(shared / "domains" / "a") == ["A1"]
     from autoresearch.skills import core_version
     assert Store(shared / "state" / "entries").load("H1").core == core_version()
+
+
+def test_loop_qc_filing_on_the_umbrella_re_renders_its_views(shared, capsys):
+    """Filing H1 in the umbrella's store without re-rendering its views left
+    the umbrella's `validate` red: the view differed from the records."""
+    member = DomainConfig.load(shared / "domains" / "a")
+    make_entry(Store(member.paths.entries), "A1", impact=1.0)
+    Coordinator(member, _qc_brain()).run_iteration(1)
+    assert _ids(shared) == ["H1"]
+    capsys.readouterr()
+    assert cli.main(["--domain", str(shared), "validate"]) == 0, \
+        capsys.readouterr()
+    assert "H1" in (shared / "docs" / "log" / "Harness Debt.md").read_text()
+
+
+def test_lone_domain_qc_debt_without_a_harness_track_is_dropped_as_before(
+        tmp_path):
+    """No umbrella: exactly as before defect homes existed. A defect track
+    not named `harness` does not take QC debt; it is dropped with the old
+    note (#67 final review)."""
+    lone = member_domain(tmp_path / "lone", name="lone")
+    toml = lone / "domain.toml"
+    toml.write_text(toml.read_text().replace('id     = "harness"',
+                                             'id     = "defects"'))
+    config = DomainConfig.load(lone)
+    make_entry(Store(config.paths.entries), "Q1", impact=1.0)
+    it = Coordinator(config, _qc_brain()).run_iteration(1)
+    qc = next(p for p in it.phases if p.name == "qc")
+    assert ("harness debt not filed: no 'harness' track (1 item(s) dropped)"
+            in qc.detail)
+    assert _ids(lone) == ["Q1"]
 
 
 def test_outside_a_workspace_undeclared_track_message_unchanged(tmp_path, capsys):
