@@ -50,15 +50,26 @@ breaks without it), **behavioural** (it loads, but acts differently), or
 
   To convert starks-research:
 
-  1. Save the baseline first: for each member,
-     `ar domains show domains/<x> --json > /tmp/<x>-before.json`.
+  1. Save the baseline first. Before `[domains]` exists the umbrella does
+     not know its members, so ask each member itself, and keep the copy
+     inside the repo (not `/tmp`): for each member,
+     `mkdir -p .ar && ar --domain domains/<x> domains show --json > .ar/<x>-before.json`.
      Then add `[domains] members = ["domains/*"]` to the umbrella's
      `domain.toml`.
   2. In each member's `domain.toml`, delete the inherited tables
      (`[policy]`, `[budgets]`, `[upstream]`, `[coordinator]`, ... whichever
-     it copies) and keep identity tables only. Diff
-     `ar domains show domains/<x> --json` against the saved copy. Whatever
-     differs is a value the member had set differently from the umbrella.
+     it copies) and keep identity tables only. Compare the effective values
+     only -- `path` and every row's `source` change by design (`.` becomes
+     `domains/<x>`, `member` becomes `umbrella`):
+
+     ```sh
+     norm='[.rows[] | {table, key, value}] | sort_by(.table, .key)'
+     diff <(jq -S "$norm" .ar/<x>-before.json) \
+          <(ar --domain domains/<x> domains show --json | jq -S "$norm")
+     ```
+
+     Whatever differs is a value the member had set differently from the
+     umbrella.
      Keep each deliberate override in the member's own table, e.g. t1's
      `[budgets] iteration_max_spawns = 10` (the umbrella has 30). In a trial
      on starks, t1's only differences were that and `upstream.min_core`
@@ -69,7 +80,10 @@ breaks without it), **behavioural** (it loads, but acts differently), or
      Q93 -> C2 should be listed. Then run `ar domains relink --write`.
   4. Delete the "harness defects go on the PRIMARY domain" comments; a member
      now files `--track harness` on the umbrella's store by itself.
-  5. Run `ar validate --all-domains`; it should be clean. `bin/ar --domain
+  5. Run `ar validate --all-domains`; it should be clean. A session
+     worktree or nested checkout under `domains/` (anything with a `.git`
+     entry) is never taken for a member, so `ar session create` in a member
+     does not break the workspace. `bin/ar --domain
      domains/bounds harness export` should now export the umbrella's H
      entries.
 

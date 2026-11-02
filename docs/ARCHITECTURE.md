@@ -488,16 +488,24 @@ one broken member does not hide the others. It is not `--all` because that
 already means other things (`rank --all` lists every terminal exclusion,
 `entry list --all` includes terminal entries, `harness export --all` includes
 closed defects); one spelling per meaning keeps old scripts working. On a workspace
-with no members the flag says so on stderr and shows the one domain.
+with no members the flag says so on stderr and shows the one domain. With
+`--json` a domain whose verb refused is `{"error": ..., "ok": false}` under
+its path, and a stderr note a section writes is prefixed with its path.
+A worktree or nested repository under a member glob (a `.git` entry) is never
+a member, so `ar session create` in a member does not break the workspace.
 `ar reap --all-domains` lists reapable claims across members, and `ar reap ID`
 frees an id in whichever member owns it. `ar domains` lists the workspace.
 
 **One defect queue.** A member that declares no defect track files
 `--track harness` into the umbrella's store, so the workspace keeps one queue
 and one bundle; `ar harness export` from any member gives the umbrella's
-bundle. A member that declares its own defect track (`requires_defect_evidence
-= true`) keeps it.
+bundle (and says so on stderr). A member that declares its own defect track
+(`requires_defect_evidence = true`) keeps it. The loop's QC debt still goes
+to a local track with id `harness` first, as it always has; only a member
+with none files it on the umbrella's (re-rendering the umbrella's views), and
+a domain with no umbrella and no `harness` track drops it with a note.
 
 **Adding a member.** `ar init --member domains/<name> --prefix P [--name N]`
 scaffolds one under the umbrella named by `--domain`, refusing a prefix or
-name that would break the umbrella's `domain.toml`, and then validates it.
+name that would break the umbrella's `domain.toml` and a directory inside or
+around an existing member, and then validates it.
