@@ -345,3 +345,76 @@ def render_rows(rows_: list[dict]) -> str:
               f"run `ar --domain {r['root']} validate`"
               for r in rows_ if r["unreadable"]]
     return "\n".join(lines) + "\n"
+
+
+def effective_rows(config: DomainConfig) -> list[dict]:
+    """What `ar domains show` prints: every key of every inherited table in
+    `config`'s effective config, with where it came from.
+
+    `source` is `umbrella` or `member` for a key a file sets (a domain with no
+    umbrella sets all of its own: `member`), and `default` for the typed
+    defaults the loader supplies when neither file does -- those carry the
+    loaded value. Values are the merged raw TOML, so the merge is recomputed
+    here rather than stored on the config. `skills.dir` is resolved against
+    this domain's root, the directory the loader actually reads, whichever
+    file named it. A list-valued table (`[[remote]]`) is one row, key `*`; a
+    policy rule that accumulates is one row per rule, `human_only[<pattern>]`.
+    """
+    from . import inherit
+    raw = _read_raw(config.paths.root / CONFIG_NAME) or {}
+    sources: dict[str, str] = {}
+    found = umbrella_raw(config.paths.root)
+    if found is not None:
+        raw, sources = inherit.merge(found[1], raw)
+    root = config.paths.root
+    policy = config.policy
+    defaults = {
+        "coordinator": {
+            "risk": config.risk, "tree_max_depth": config.tree_max_depth,
+            "tree_max_children": config.tree_max_children,
+            "branch_stagnation": config.branch_stagnation,
+            "confirm_runs": config.confirm_runs,
+            "distil_every": config.distil_every, "dispatch": config.dispatch},
+        "upstream": {"url": config.upstream.url, "ref": config.upstream.ref,
+                     "min_core": config.upstream.min_core},
+        "session": {"parent": config.session_parent,
+                    "settle_hours": config.session_settle_hours},
+        "skills": {"dir": config.skills.dir,
+                   "max_lines": config.skills.max_lines},
+        "policy": {"spend_ceiling": policy.spend_ceiling},
+    }
+    out: list[dict] = []
+
+    def add(table, key, value, source):
+        if (table, key) == ("skills", "dir"):
+            value = str(root / value)
+        out.append({"table": table, "key": key, "value": value,
+                    "source": source})
+
+    for table in inherit.INHERITED:
+        value = raw.get(table)
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if (table == "policy" and key in inherit._ACCUMULATED
+                        and isinstance(item, list)):
+                    for rule in item:
+                        pattern = inherit._pattern(rule)
+                        add(table, f"{key}[{pattern}]", rule, sources.get(
+                            f"policy.{key}[{pattern}]", inherit.MEMBER))
+                else:
+                    add(table, key, item,
+                        sources.get(f"{table}.{key}", inherit.MEMBER))
+        elif value is not None:
+            add(table, "*", value, sources.get(table, inherit.MEMBER))
+        for key, item in defaults.get(table, {}).items():
+            if not (isinstance(value, dict) and key in value):
+                add(table, key, item, "default")
+    return out
+
+
+def render_effective(rows_: list[dict]) -> str:
+    """One line per row: `[budgets] iteration_fanout = 9.0    member`."""
+    import json
+    return "".join(
+        f"[{r['table']}] {r['key']} = {json.dumps(r['value'], default=str)}"
+        f"    {r['source']}\n" for r in rows_)

@@ -50,7 +50,7 @@ from . import validate as validate_mod
 from .claims import Claims, claim_state_problems
 from .config import DomainConfig, discover
 from .entries import EVIDENCE_CLASSES, Entry, Event, Result, Store
-from .errors import AutoresearchError, SchemaError
+from .errors import AutoresearchError, ConfigError, SchemaError
 from .states import CLOSURE_KINDS, REOPEN_REASONS
 
 
@@ -190,6 +190,26 @@ def cmd_doctor(args):
     if not problems:
         print("environment consistent with this domain's declarations")
     return 1 if problems else 0
+
+
+def cmd_domains_show(args):
+    """One domain's effective config and where each key came from (#64): the
+    inherited tables, each row sourced `umbrella`, `member` or `default`."""
+    from . import members
+    config = _load(args)
+    workspace = members.Workspace.for_domain(config)
+    path = args.path or workspace.path_of(config)
+    chosen = dict(workspace.domains()).get(path)
+    if chosen is None:
+        raise ConfigError(
+            f"no domain at {path!r} in the workspace at {workspace.root}; "
+            f"known paths: {', '.join(p for p, _ in workspace.domains())}")
+    rows = members.effective_rows(chosen)
+    if args.json:
+        print(json.dumps({"path": path, "rows": rows}, indent=2, default=str))
+    else:
+        sys.stdout.write(members.render_effective(rows))
+    return 0
 
 
 def cmd_domains(args):
@@ -2779,6 +2799,16 @@ def build_parser(plugins_spec: tuple[str, ...] = (), root=None, config=None) -> 
     domsp.add_argument("--json", action="store_true",
                        help="print the rows as JSON")
     domsp.set_defaults(func=cmd_domains)
+    domsub = domsp.add_subparsers(dest="domains_cmd")
+    domshow = domsub.add_parser(
+        "show", help="a domain's effective config, each key sourced umbrella, "
+        "member or default")
+    domshow.add_argument("path", nargs="?", help="workspace path as `ar domains` "
+                         "lists it (`.`, `domains/t1`); default: this domain")
+    # SUPPRESS: `ar domains --json show` must keep the parent's flag
+    domshow.add_argument("--json", action="store_true",
+                         default=argparse.SUPPRESS, help="print the rows as JSON")
+    domshow.set_defaults(func=cmd_domains_show)
 
     kit = sub.add_parser(
         "kit", help="shared measurement code vendored into the domain "

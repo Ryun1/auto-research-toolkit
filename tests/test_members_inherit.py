@@ -242,3 +242,72 @@ def test_an_unparseable_umbrella_is_a_problem_in_the_member(tmp_path):
     assert [p for p in problems
             if p.startswith(f"domains: {umbrella_toml} is not valid TOML")
             and "NOT applied" in p]
+
+
+# -- `ar domains show` -------------------------------------------------------
+
+def _show(args, capsys):
+    code = cli.main(args)
+    return code, capsys.readouterr()
+
+
+def test_domains_show_reports_a_source_for_every_key(tmp_path, capsys):
+    import json
+    member = _workspace(tmp_path, member_drop=("budgets",))
+    code, cap = _show(["--domain", str(member), "domains", "show",
+                       "domains/a", "--json"], capsys)
+    assert code == 0
+    doc = json.loads(cap.out)
+    assert doc["path"] == "domains/a"
+    rows = {(r["table"], r["key"]): r for r in doc["rows"]}
+    assert {r["source"] for r in rows.values()} <= {"umbrella", "member", "default"}
+    assert all(set(r) == {"table", "key", "value", "source"} for r in rows.values())
+    assert rows[("budgets", "domain_max_runs")]["source"] == "umbrella"
+    assert rows[("coordinator", "branch_stagnation")]["source"] == "default"
+    # an inherited skills.dir is shown against the member's root
+    config = DomainConfig.load(member)
+    assert rows[("skills", "dir")]["value"] == str(config.paths.root / config.skills.dir)
+    # accumulated rules are one row each, sourced by rule
+    assert rows[("policy", "human_only[toy publish]")]["source"] == "umbrella"
+
+
+def test_domains_show_a_member_override_is_sourced_member(tmp_path, capsys):
+    import json
+    member = _workspace(tmp_path, member_drop=("budgets",),
+                        member_extra="[budgets]\niteration_fanout = 9\n")
+    _, cap = _show(["--domain", str(member), "domains", "show", "--json"], capsys)
+    rows = {(r["table"], r["key"]): r for r in json.loads(cap.out)["rows"]}
+    assert rows[("budgets", "iteration_fanout")]["value"] == 9
+    assert rows[("budgets", "iteration_fanout")]["source"] == "member"
+
+
+def test_domains_show_prose_line(tmp_path, capsys):
+    member = _workspace(tmp_path, member_drop=("budgets",),
+                        member_extra="[budgets]\niteration_fanout = 9\n")
+    code, cap = _show(["--domain", str(member), "domains", "show"], capsys)
+    assert code == 0
+    assert "[budgets] iteration_fanout = 9    member" in cap.out
+
+
+def test_domains_show_unknown_path_is_refused(umbrella, capsys):
+    code, cap = _show(["--domain", str(umbrella), "domains", "show",
+                       "domains/zz"], capsys)
+    assert code == 2
+    assert "domains/zz" in cap.err
+    for known in (".", "domains/a", "domains/b"):
+        assert known in cap.err
+
+
+def test_domains_show_outside_a_workspace_is_member_or_default(sandbox, capsys):
+    import json
+    _, cap = _show(["--domain", str(sandbox.paths.root), "domains", "show",
+                    "--json"], capsys)
+    rows = json.loads(cap.out)["rows"]
+    assert rows and {r["source"] for r in rows} <= {"member", "default"}
+
+
+def test_bare_domains_still_lists(umbrella, capsys):
+    code, cap = _show(["--domain", str(umbrella), "domains"], capsys)
+    assert code == 0
+    assert cap.out.splitlines()[0] == f"umbrella: {umbrella}"
+    assert "* . (umbrella)" in cap.out
